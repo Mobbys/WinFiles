@@ -4,9 +4,12 @@
 
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2};
+use std::collections::HashMap;
+use std::path::Path;
 use winfiles_geom::{area_m2, format_area, format_size};
-use winfiles_layout::Sheet;
-use winfiles_model::{PageInfo, Project};
+
+use winfiles_layout::{Header, Sheet};
+use winfiles_model::{PageInfo, Project, Totals};
 
 use crate::captions::{
     CAPTION_PAD, FOLDER_NOTE_INSET, INFO_RATIO, MM_PER_PT, NOTE_GAP, NOTE_INK, Slot, line_mm, note_job,
@@ -22,7 +25,15 @@ pub const MAX_ZOOM: f32 = 8.0;
 /// Colori della carta stampata (non dell'interfaccia): testo quasi nero, grigi di servizio.
 const INK: Color32 = Color32::from_rgb(20, 20, 20);
 const INK_SOFT: Color32 = Color32::from_rgb(85, 85, 85);
-const HEADER_FILL: Color32 = Color32::from_rgb(234, 234, 234);
+/// Colori delle etichette delle cartelle, dal livello più alto al più basso, come le "briciole"
+/// colorate della 4.9 ma scuri abbastanza da leggerci il bianco anche stampati.
+const CRUMB_COLORS: [Color32; 5] = [
+    Color32::from_rgb(0x2f, 0x6f, 0xd0),
+    Color32::from_rgb(0x0e, 0x80, 0x6c),
+    Color32::from_rgb(0xb8, 0x5c, 0x00),
+    Color32::from_rgb(0x8e, 0x24, 0xaa),
+    Color32::from_rgb(0x55, 0x2b, 0xc4),
+];
 const FRAME: Color32 = Color32::from_rgb(190, 190, 190);
 
 /// Ingrandimento che fa stare il foglio intero nello spazio `avail` (punti per millimetro).
@@ -119,51 +130,33 @@ pub fn draw(
     let print = &project.print;
     let font = |pt: f64| (pt * MM_PER_PT) as f32 * scale;
     let (name_pt, info_pt) = (print.caption_text, print.caption_text * INFO_RATIO);
-    let header_px = mm(3.4);
+    // Per ogni intestazione: totali e nota della sua cartella.
+    let labels = project.folder_labels();
+    let totals = project.folder_totals();
+    let folders: HashMap<&str, (&Path, Totals)> = labels
+        .iter()
+        .filter_map(|(path, label)| Some((label.as_str(), (*path, *totals.get(path)?))))
+        .collect();
     for header in &sheet.headers {
+        let folder = folders.get(header.folder.as_str());
         let r = map(header.rect);
         let title = Rect::from_min_size(r.min, Vec2::new(r.width(), mm(print.header)));
-        painter.rect_filled(title, 0.0, HEADER_FILL);
-        painter.line_segment(
-            [title.left_bottom(), title.right_bottom()],
-            Stroke::new(mm(0.3).max(0.5), INK_SOFT),
-        );
-        if header_px >= 4.0 {
-            let label = if header.continued {
-                format!("{} (continua)", header.folder)
-            } else {
-                header.folder.clone()
-            };
-            let mut job = one_line(label, semibold(header_px), INK, title.width() - mm(4.0));
-            job.halign = egui::Align::LEFT;
-            let galley = painter.layout_job(job);
-            painter.galley(
-                pos2(title.left() + mm(2.0), title.center().y - galley.size().y / 2.0),
-                galley,
-                INK,
-            );
-        }
+        draw_header(&painter, title, header, folder.map(|f| &f.1), scale);
         if let Some(note) = header.note
             && font(print.note_text) >= 4.0
+            && let Some(text) = folder.and_then(|f| project.folder_notes.get(f.0))
         {
             let note_rect = map(note);
-            let folder_note = slots
-                .iter()
-                .filter_map(|s| project.files.get(s.file))
-                .find(|f| project.folder_labels().get(f.folder()) == Some(&header.folder))
-                .and_then(|f| project.folder_notes.get(f.folder()));
-            if let Some(text) = folder_note {
-                let width = note.w - 2.0 * FOLDER_NOTE_INSET;
-                let galley = painter.layout_job(note_job(text, print.note_text, width, scale));
-                painter.with_clip_rect(note_rect).galley(
-                    pos2(
-                        note_rect.left() + mm(FOLDER_NOTE_INSET),
-                        note_rect.top() + mm(CAPTION_PAD),
-                    ),
-                    galley,
-                    NOTE_INK,
-                );
-            }
+            let width = note.w - 2.0 * FOLDER_NOTE_INSET;
+            let galley = painter.layout_job(note_job(text, print.note_text, width, scale));
+            painter.with_clip_rect(note_rect).galley(
+                pos2(
+                    note_rect.left() + mm(FOLDER_NOTE_INSET),
+                    note_rect.top() + mm(CAPTION_PAD),
+                ),
+                galley,
+                NOTE_INK,
+            );
         }
     }
 
@@ -296,4 +289,80 @@ pub fn draw(
         }
     }
     out
+}
+
+/// L'intestazione di una cartella: le cartelle come etichette colorate, una linea sottile e i
+/// totali a destra. Nessun riquadro grigio.
+fn draw_header(painter: &egui::Painter, title: Rect, header: &Header, totals: Option<&Totals>, scale: f32) {
+    let mm = |v: f32| v * scale;
+    let px = mm(3.2);
+    if px < 4.0 {
+        painter.line_segment(
+            [title.left_center(), title.right_center()],
+            Stroke::new(1.0, FRAME),
+        );
+        return;
+    }
+    let cy = title.center().y;
+    let pad = Vec2::new(mm(1.6), mm(0.7));
+    let mut x = title.left();
+    let crumbs: Vec<&str> = header.folder.split(" › ").collect();
+    for (i, crumb) in crumbs.iter().enumerate() {
+        let color = CRUMB_COLORS
+            .get(i % CRUMB_COLORS.len())
+            .copied()
+            .unwrap_or(INK_SOFT);
+        let galley = painter.layout_no_wrap((*crumb).to_string(), semibold(px), Color32::WHITE);
+        let size = galley.size() + pad * 2.0;
+        // Le cartelle che non stanno si fermano prima dei totali.
+        if x + size.x > title.right() - mm(30.0) && i > 0 {
+            break;
+        }
+        let pill = Rect::from_min_size(pos2(x, cy - size.y / 2.0), size);
+        painter.rect_filled(pill, mm(1.2), color);
+        painter.galley(pill.min + pad, galley, Color32::WHITE);
+        x = pill.right();
+        if i + 1 < crumbs.len() {
+            let sep = painter.layout_no_wrap("›".to_string(), semibold(px), INK_SOFT);
+            painter.galley(pos2(x + mm(1.0), cy - sep.size().y / 2.0), sep.clone(), INK_SOFT);
+            x += sep.size().x + mm(2.0);
+        }
+    }
+    if header.continued {
+        let more = painter.layout_no_wrap(
+            "(continua)".to_string(),
+            FontId::proportional(px * 0.85),
+            INK_SOFT,
+        );
+        painter.galley(
+            pos2(x + mm(2.0), cy - more.size().y / 2.0),
+            more.clone(),
+            INK_SOFT,
+        );
+        x += more.size().x + mm(2.0);
+    }
+    let mut line_end = title.right();
+    if let Some(t) = totals {
+        let mut text = format!(
+            "{} file · {} pagine · {}",
+            t.files,
+            t.pages,
+            format_area(t.area_m2)
+        );
+        if t.unmeasured > 0 {
+            text = format!("{text} (da misurare: {})", t.unmeasured);
+        }
+        let galley = painter.layout_no_wrap(text, FontId::proportional(px * 0.82), INK_SOFT);
+        let pos = pos2(title.right() - galley.size().x, cy - galley.size().y / 2.0);
+        if pos.x > x + mm(6.0) {
+            line_end = pos.x - mm(2.5);
+            painter.galley(pos, galley, INK_SOFT);
+        }
+    }
+    if line_end > x + mm(4.0) {
+        painter.line_segment(
+            [pos2(x + mm(2.5), cy), pos2(line_end, cy)],
+            Stroke::new(mm(0.25).max(1.0), FRAME),
+        );
+    }
 }
