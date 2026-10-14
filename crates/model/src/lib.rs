@@ -12,6 +12,8 @@ use winfiles_geom::{Margins, Orientation, Paper, Size, Unit, area_m2};
 
 /// Versione del formato del file di progetto. Si alza a ogni modifica incompatibile.
 pub const FORMAT_VERSION: u32 = 1;
+/// Estensione dei file di progetto.
+pub const EXTENSION: &str = "winfiles";
 
 /// Dimensione massima accettata per un file di progetto (64 MiB): oltre è sicuramente danneggiato.
 const MAX_PROJECT_BYTES: u64 = 64 * 1024 * 1024;
@@ -378,6 +380,17 @@ mod tests {
         p.folder_notes
             .insert(PathBuf::from("/lavori/cliente"), "Consegna entro venerdì".into());
         p
+    }
+
+    #[test]
+    fn le_misure_tornano_identiche_dal_json() {
+        // Le misure lette dai PDF hanno decimali qualsiasi: dopo salvataggio e riapertura devono
+        // essere identiche, o un progetto appena aperto risulterebbe già modificato.
+        let mut p = sample();
+        p.files[0].pages[0].size = Size::new(215.900_000_000_000_03, 279.4 / 3.0);
+        p.print.gap = 0.1 + 0.2;
+        let back = Project::from_json(&p.to_json().unwrap()).unwrap();
+        assert_eq!(back, p);
     }
 
     #[test]

@@ -77,9 +77,11 @@ fn two_lines(
 }
 
 /// Le misure di un file per l'elenco: formato finito, m² e pagine.
-fn file_info(f: &FileEntry, unit: Unit, error: bool, assumed: bool) -> String {
+fn file_info(f: &FileEntry, unit: Unit, error: Option<&String>, assumed: bool) -> String {
     let Some(first) = f.pages.first() else {
-        return if error {
+        return if error.is_some_and(|e| e == crate::document::MISSING) {
+            "file non trovato".into()
+        } else if error.is_some() {
             "misure non leggibili".into()
         } else {
             "lettura delle misure…".into()
@@ -327,7 +329,7 @@ impl WinFilesApp {
                                 t.text_dim
                             };
                             let name_color = if selected { t.text_strong } else { t.text };
-                            let info = file_info(f, unit, error.is_some(), assumed);
+                            let info = file_info(f, unit, error, assumed);
                             two_lines(
                                 ui,
                                 rect.with_min_x(rect.left() + 42.0)

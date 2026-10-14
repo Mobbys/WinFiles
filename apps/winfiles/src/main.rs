@@ -9,6 +9,7 @@ mod app;
 mod canvas;
 mod captions;
 mod dock;
+mod document;
 mod icons;
 mod measure;
 mod panels;

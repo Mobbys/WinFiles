@@ -63,6 +63,10 @@ pub struct Tokens {
     pub accent: Color32,
     /// Testo e bordi su `selection` (voci scelte, campo attivo).
     pub accent_text: Color32,
+    /// Fondo dei pulsanti principali (Salva, e poi Stampa): blu pieno, in entrambi i temi.
+    pub primary: Color32,
+    /// Testo sui pulsanti principali.
+    pub on_primary: Color32,
     pub selection: Color32,
     pub pasteboard: Color32,
     pub button: Color32,
@@ -98,6 +102,8 @@ pub const DARK: Tokens = Tokens {
     pressed: hex(0x3e3e45),
     accent: hex(0x3b82f6),
     accent_text: hex(0xbfdbfe),
+    primary: hex(0x2563eb),
+    on_primary: hex(0xffffff),
     selection: hex(0x1e3a5f),
     pasteboard: hex(0x1b1b1e),
     button: hex(0x2f2f34),
@@ -127,6 +133,8 @@ pub const LIGHT: Tokens = Tokens {
     pressed: hex(0xe0e3e8),
     accent: hex(0x2563eb),
     accent_text: hex(0x1d4ed8),
+    primary: hex(0x2563eb),
+    on_primary: hex(0xffffff),
     selection: hex(0xdbe7fd),
     pasteboard: hex(0xe4e6eb),
     button: hex(0xf3f4f7),
@@ -339,6 +347,11 @@ mod tests {
                     );
                 }
             }
+            assert!(
+                contrast(t.on_primary, t.primary) >= 4.5,
+                "on_primary (scuro: {})",
+                t.dark
+            );
             assert!(
                 contrast(t.accent_text, t.selection) >= 4.5,
                 "accent_text (scuro: {})",

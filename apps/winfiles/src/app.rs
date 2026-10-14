@@ -12,6 +12,7 @@ use winfiles_model::{Project, Totals};
 
 use crate::captions::{self, Slot};
 use crate::dock::{self, PanelId};
+use crate::document::{self, Then};
 use crate::icons;
 use crate::measure::Measurer;
 use crate::theme::{self, ThemeChoice, Tokens, semibold};
@@ -29,7 +30,7 @@ pub struct WinFilesApp {
     /// Tutti i file scelti (Ctrl e Maiusc aggiungono), per eliminarli insieme.
     pub(crate) marked: BTreeSet<usize>,
     /// Il file da cui parte una scelta con Maiusc.
-    anchor: Option<usize>,
+    pub(crate) anchor: Option<usize>,
     pub(crate) sheet: usize,
     /// Ingrandimento in punti per millimetro; `None` adatta il foglio alla finestra.
     pub(crate) zoom: Option<f32>,
@@ -40,13 +41,23 @@ pub struct WinFilesApp {
     pub(crate) theme: ThemeChoice,
     applied: Option<Tokens>,
     dock: Layout<PanelId>,
-    measurer: Measurer,
+    pub(crate) measurer: Measurer,
     pub(crate) thumbs: Thumbnails,
     /// Le miniature sul foglio, una per pagina, ricalcolate a ogni fotogramma.
     slots: Vec<Slot>,
     /// Cartella di cui si sta rinominando l'intestazione nell'elenco, con il testo in modifica.
     pub(crate) renaming: Option<(PathBuf, String)>,
     pub(crate) status: String,
+    /// Il file del lavoro, se è stato salvato o aperto.
+    pub(crate) path: Option<PathBuf>,
+    /// Il lavoro com'era all'ultimo salvataggio, per sapere se ci sono modifiche.
+    pub(crate) saved: Project,
+    /// La domanda "salvare le modifiche?" aperta, con cosa fare dopo.
+    pub(crate) asking: Option<Then>,
+    /// La chiusura è già stata confermata.
+    pub(crate) closing: bool,
+    /// L'ultimo titolo dato alla finestra.
+    shown_title: String,
 }
 
 impl WinFilesApp {
@@ -55,6 +66,11 @@ impl WinFilesApp {
         let wake2 = ctx.clone();
         let mut app = Self {
             project: Project::new("Senza titolo"),
+            saved: Project::new("Senza titolo"),
+            path: None,
+            asking: None,
+            closing: false,
+            shown_title: String::new(),
             selected: None,
             marked: BTreeSet::new(),
             anchor: None,
@@ -71,8 +87,15 @@ impl WinFilesApp {
             renaming: None,
             status: String::new(),
         };
-        if !paths.is_empty() {
-            app.add_paths(paths);
+        // Un file .winfiles sulla riga di comando (doppio clic in Esplora file) apre il lavoro;
+        // gli altri file e cartelle si aggiungono all'elenco.
+        let (projects, files): (Vec<PathBuf>, Vec<PathBuf>) =
+            paths.into_iter().partition(|p| document::is_project(p));
+        if let Some(p) = projects.first() {
+            app.open_path(p);
+        }
+        if !files.is_empty() {
+            app.add_paths(files);
         }
         app
     }
@@ -108,10 +131,25 @@ impl WinFilesApp {
         self.status = "Elenco svuotato".into();
     }
 
-    fn unselect(&mut self) {
+    pub(crate) fn unselect(&mut self) {
         self.selected = None;
         self.marked.clear();
         self.anchor = None;
+    }
+
+    /// Ctrl+N, Ctrl+O, Ctrl+S e Ctrl+Maiusc+S, come in ogni programma.
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let pressed = |mods, key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(mods, key)));
+        if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::S) {
+            self.save(true);
+        } else if pressed(Modifiers::COMMAND, Key::S) {
+            self.save(false);
+        } else if pressed(Modifiers::COMMAND, Key::O) {
+            self.guard(ctx, Then::Open(None));
+        } else if pressed(Modifiers::COMMAND, Key::N) {
+            self.guard(ctx, Then::New);
+        }
     }
 
     /// Sceglie un file con un clic: da solo, oppure con Ctrl lo aggiunge o lo toglie e con Maiusc
@@ -239,6 +277,27 @@ impl WinFilesApp {
                     ui.add_space(10.0);
                     egui::MenuBar::new().ui(ui, |ui| {
                         ui.menu_button("File", |ui| {
+                            let ctx = ui.ctx().clone();
+                            let item = |ui: &mut egui::Ui, text: &str, keys: &str| {
+                                ui.add(egui::Button::new(text).shortcut_text(keys)).clicked()
+                            };
+                            if item(ui, "Nuovo lavoro", "Ctrl+N") {
+                                ui.close();
+                                self.guard(&ctx, Then::New);
+                            }
+                            if item(ui, "Apri…", "Ctrl+O") {
+                                ui.close();
+                                self.guard(&ctx, Then::Open(None));
+                            }
+                            if item(ui, "Salva", "Ctrl+S") {
+                                ui.close();
+                                self.save(false);
+                            }
+                            if item(ui, "Salva con nome…", "Ctrl+Maiusc+S") {
+                                ui.close();
+                                self.save(true);
+                            }
+                            ui.separator();
                             if ui
                                 .add_enabled(
                                     !self.project.files.is_empty(),
@@ -841,6 +900,7 @@ impl DockContent<PanelId> for Content<'_> {
 
 impl eframe::App for WinFilesApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         let dropped: Vec<PathBuf> = ui.ctx().input(|i| {
             i.raw
                 .dropped_files
@@ -848,8 +908,24 @@ impl eframe::App for WinFilesApp {
                 .map(|f| f.path().to_path_buf())
                 .collect()
         });
+        let (projects, dropped): (Vec<PathBuf>, Vec<PathBuf>) =
+            dropped.into_iter().partition(|p| document::is_project(p));
         if !dropped.is_empty() {
             self.add_paths(dropped);
+        }
+        if let Some(p) = projects.into_iter().next() {
+            self.guard(&ctx, Then::Open(Some(p)));
+        }
+        self.shortcuts(&ctx);
+        // Chiudere la finestra con modifiche non salvate chiede prima di perderle.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.closing && self.is_dirty() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.asking = Some(Then::Close);
+        }
+        let title = self.window_title();
+        if title != self.shown_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.shown_title = title;
         }
         // Canc toglie dall'elenco i file scelti, se non si sta scrivendo in un campo.
         if !self.marked.is_empty()
@@ -918,5 +994,6 @@ impl eframe::App for WinFilesApp {
                 self.apply_dock(action);
             }
         });
+        self.unsaved_dialog(&ctx);
     }
 }

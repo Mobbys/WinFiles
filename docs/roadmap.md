@@ -6,7 +6,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 | Fase | Contenuto | Criterio per passare oltre | Stato |
 |---|---|---|---|
 | 0 | Base del progetto, CI, CLAUDE.md, corpus; prototipi di craft-ui, hayro, EPS e craft-print | Stack confermato o ripieghi decisi | In corso: base, pannelli e misure pronti; prototipi da fare |
-| 1 | Scansione ricorsiva, metadati, file di progetto, note salvate | Progetto da 10.000 file aperto e salvato | Da fare |
+| 1 | Scansione ricorsiva, metadati, file di progetto, note salvate | Progetto da 10.000 file aperto e salvato | In corso: apri e salva pronti |
 | 2 | Decodificatori in processo separato, profili ICC, cache su disco | Corpus completo senza crash | Da fare |
 | 3 | Griglia, elenco e nesting su A4 e A3, intestazioni cartella, export PDF | Parità con la stampa attuale, ±0,5 mm | Da fare (griglia iniziale pronta) |
 | 4 | Pannelli agganciabili, anteprima, note, ordine a trascinamento, filtri | Un lavoro vero fatto solo con la nuova app | Da fare |
@@ -30,3 +30,12 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [ ] Prototipo EPS con il crate di VectorCraft
 - [ ] Prototipo stampa con `craft-print` e pagina di calibrazione
 - [ ] Corpus di file di prova difficili
+
+## Fase 1 in dettaglio
+- [x] Apri, salva e salva con nome un lavoro `.winfiles` con note, titoli e impaginazione ([ADR 0007](adr/0007-file-di-lavoro.md))
+- [x] "Salvare le modifiche?" prima di chiudere, aprire o creare un lavoro
+- [x] File mancanti segnati all'apertura, misure rilette in background
+- [x] Togliere file dall'elenco, con scelta multipla
+- [ ] Scansione in background con annullamento (crate `scan`)
+- [ ] Prova con un lavoro da 10.000 file: tempi di apertura e salvataggio
+- [ ] Lavori recenti nel menu File
