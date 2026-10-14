@@ -87,9 +87,12 @@ fn file_info(f: &FileEntry, unit: Unit, error: bool, assumed: bool) -> String {
     };
     let mut out = format!(
         "{}  ·  {}",
-        format_size(first.finished(), unit),
-        format_area(f.area_m2())
+        format_size(first.size, unit),
+        format_area(f.area_full_m2())
     );
+    if let Some(trim) = first.trim.filter(|t| *t != first.size) {
+        out.push_str(&format!("  ·  al vivo {}", format_size(trim, unit)));
+    }
     if f.pages.len() > 1 {
         out.push_str(&format!("  ·  {} pagine", f.pages.len()));
     }
@@ -97,6 +100,11 @@ fn file_info(f: &FileEntry, unit: Unit, error: bool, assumed: bool) -> String {
         out.push_str("  ·  96 DPI presunti");
     }
     out
+}
+
+/// L'area di un gruppo di file, con quella al vivo quando è diversa.
+pub(crate) fn areas(t: &Totals) -> String {
+    crate::captions::area_text(t.area_full_m2, t.area_m2, true, true).unwrap_or_default()
 }
 
 /// Una riga etichetta/valore nelle proprietà.
@@ -114,6 +122,16 @@ fn section(ui: &mut egui::Ui, title: &str) {
             .color(Tokens::get(ui.ctx()).text_strong),
     );
     ui.add_space(2.0);
+}
+
+/// Cosa fare dei file dal menu del tasto destro.
+enum FileAction {
+    /// Toglie dall'elenco i file scelti.
+    RemoveMarked,
+    /// Toglie dall'elenco tutti i file di una cartella.
+    RemoveFolder(std::path::PathBuf),
+    Open(std::path::PathBuf),
+    Reveal(std::path::PathBuf),
 }
 
 /// Cosa fare dell'intestazione di una cartella nell'elenco.
@@ -158,6 +176,10 @@ impl WinFilesApp {
         }
         let unit = self.project.unit;
         let mut clicked = None;
+        let mut menu_on = None;
+        let mut action = None;
+        let marked = self.marked.len();
+        let mods = ui.input(|i| i.modifiers);
         let mut rename = None;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
@@ -174,14 +196,9 @@ impl WinFilesApp {
                                 Vec2::splat(16.0),
                             );
                             icons::paint(ui, "folder-open", icon, t.icon);
-                            let mut info = format!("{} file · {}", tot.files, format_area(tot.area_m2));
+                            let mut info = format!("{} file · {}", tot.files, areas(tot));
                             if tot.pages > tot.files {
-                                info = format!(
-                                    "{} file · {} pagine · {}",
-                                    tot.files,
-                                    tot.pages,
-                                    format_area(tot.area_m2)
-                                );
+                                info = format!("{} file · {} pagine · {}", tot.files, tot.pages, areas(tot));
                             }
                             let editing = matches!(&self.renaming, Some((p, _)) if p.as_path() == *path);
                             if editing {
@@ -250,6 +267,21 @@ impl WinFilesApp {
                                         rename = Some(Rename::Reset(path.to_path_buf()));
                                         ui.close();
                                     }
+                                    ui.separator();
+                                    if ui.button("Mostra la cartella").clicked() {
+                                        action = Some(FileAction::Open(path.to_path_buf()));
+                                        ui.close();
+                                    }
+                                    if ui
+                                        .button(format!(
+                                            "Togli dall'elenco i {} file della cartella",
+                                            tot.files
+                                        ))
+                                        .clicked()
+                                    {
+                                        action = Some(FileAction::RemoveFolder(path.to_path_buf()));
+                                        ui.close();
+                                    }
                                 });
                             }
                         }
@@ -257,7 +289,7 @@ impl WinFilesApp {
                             let Some(f) = self.project.files.get(*i) else {
                                 continue;
                             };
-                            let selected = self.selected == Some(*i);
+                            let selected = self.marked.contains(i);
                             if selected {
                                 ui.painter().rect_filled(rect, t.radius, t.selection);
                             } else if resp.hovered() {
@@ -313,12 +345,72 @@ impl WinFilesApp {
                             if resp.clicked() {
                                 clicked = Some(*i);
                             }
+                            if resp.secondary_clicked() {
+                                menu_on = Some(*i);
+                            }
+                            let path = &f.path;
+                            resp.context_menu(|ui| {
+                                // Il clic destro su un file non scelto lo sceglie da solo.
+                                let count = if selected { marked.max(1) } else { 1 };
+                                if ui.button("Apri con il programma predefinito").clicked() {
+                                    action = Some(FileAction::Open(path.clone()));
+                                    ui.close();
+                                }
+                                if ui.button("Mostra nella cartella").clicked() {
+                                    action = Some(FileAction::Reveal(path.clone()));
+                                    ui.close();
+                                }
+                                ui.separator();
+                                let label = match count {
+                                    1 => "Togli dall'elenco".to_string(),
+                                    n => format!("Togli dall'elenco i {n} file scelti"),
+                                };
+                                if ui
+                                    .button(label)
+                                    .on_hover_text("Il file resta sul disco. Tasto Canc.")
+                                    .clicked()
+                                {
+                                    action = Some(FileAction::RemoveMarked);
+                                    ui.close();
+                                }
+                            });
                         }
                     }
                 }
             });
-        if clicked.is_some() {
-            self.selected = clicked;
+        if let Some(i) = clicked {
+            self.pick(i, mods);
+        }
+        if let Some(i) = menu_on {
+            self.pick_for_menu(i);
+        }
+        match action {
+            Some(FileAction::RemoveMarked) => {
+                let marked = std::mem::take(&mut self.marked);
+                self.remove_files(&marked);
+            }
+            Some(FileAction::RemoveFolder(folder)) => {
+                let set = self
+                    .project
+                    .files
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| f.folder() == folder)
+                    .map(|(i, _)| i)
+                    .collect();
+                self.remove_files(&set);
+            }
+            Some(FileAction::Open(path)) => {
+                if let Err(e) = crate::shell::open(&path) {
+                    self.status = format!("Non riesco ad aprire {}: {e}", path.display());
+                }
+            }
+            Some(FileAction::Reveal(path)) => {
+                if let Err(e) = crate::shell::reveal(&path) {
+                    self.status = format!("Non riesco a mostrare {}: {e}", path.display());
+                }
+            }
+            None => {}
         }
         match rename {
             Some(Rename::Start(path, label)) => self.renaming = Some((path, label)),
@@ -401,16 +493,19 @@ impl WinFilesApp {
                         prop(ui, "Pagine", f.pages.len().to_string());
                     }
                     if same {
-                        prop(ui, "Formato", format_size(first.size, unit));
-                        if let Some(trim) = first.trim {
-                            prop(ui, "Formato finito", format_size(trim, unit));
+                        prop(ui, "Formato pagina", format_size(first.size, unit));
+                        if let Some(trim) = first.trim.filter(|t| *t != first.size) {
+                            prop(ui, "Al vivo", format_size(trim, unit));
                             let bleed = (first.size.w - trim.w) / 2.0;
                             if bleed > 0.05 {
                                 prop(ui, "Abbondanza", format!("{} per lato", format_length(bleed, unit)));
                             }
                         }
                     }
-                    prop(ui, "Area", format_area(f.area_m2()));
+                    prop(ui, "Area", format_area(f.area_full_m2()));
+                    if (f.area_full_m2() - f.area_m2()).abs() > 1e-6 {
+                        prop(ui, "Area al vivo", format_area(f.area_m2()));
+                    }
                 }
                 if let Some(img) = f.image {
                     prop(ui, "Pixel", format!("{} × {} px", format_number(f64::from(img.width_px), 0, true), format_number(f64::from(img.height_px), 0, true)));
@@ -437,7 +532,7 @@ impl WinFilesApp {
                     for (n, p) in f.pages.iter().enumerate().take(500) {
                         dim_label(ui, &format!("{}", n + 1));
                         let text = match p.trim {
-                            Some(trim) => format!("{} (finito {})", format_size(p.size, unit), format_size(trim, unit)),
+                            Some(trim) => format!("{} (al vivo {})", format_size(p.size, unit), format_size(trim, unit)),
                             None => format_size(p.size, unit),
                         };
                         ui.label(text);
@@ -463,7 +558,7 @@ impl WinFilesApp {
             } else {
                 String::new()
             };
-            format!("{} file{pages} · {}", tot.files, format_area(tot.area_m2))
+            format!("{} file{pages} · {}", tot.files, areas(tot))
         };
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             for (folder, tot) in self.project.folder_totals() {
@@ -589,6 +684,10 @@ impl WinFilesApp {
                     ui.end_row();
                 });
             ui.add_space(6.0);
+            ui.checkbox(&mut print.show_sizes, "Misure con abbondanza e crocini")
+                .on_hover_text("Il formato pagina del file e la sua area, sotto ogni miniatura");
+            ui.checkbox(&mut print.show_trim, "Misure al vivo")
+                .on_hover_text("In rosso, il formato finito (TrimBox) quando è diverso dalla pagina");
             ui.checkbox(
                 &mut print.page_break_per_folder,
                 "Ogni cartella su un foglio nuovo",
@@ -620,8 +719,8 @@ fn mm_field(value: &mut f64, max: f64) -> egui::DragValue<'_> {
 }
 
 /// Corpo minimo e massimo del testo delle didascalie, in punti.
-pub(crate) const MIN_CAPTION_PT: f64 = 4.0;
-pub(crate) const MAX_CAPTION_PT: f64 = 16.0;
+pub(crate) const MIN_CAPTION_PT: f64 = 6.0;
+pub(crate) const MAX_CAPTION_PT: f64 = 24.0;
 /// Corpo minimo e massimo del testo delle note, in punti (come gli 8-40 px della 4.9).
 pub(crate) const MIN_NOTE_PT: f64 = 6.0;
 /// Corpo minimo e massimo delle intestazioni di cartella e del titolo, in punti.

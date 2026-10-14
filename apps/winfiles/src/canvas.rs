@@ -6,14 +6,12 @@ use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2};
 use std::collections::HashMap;
 use std::path::Path;
-use winfiles_geom::{area_m2, format_area, format_size};
-
 use winfiles_layout::{Header, Sheet};
-use winfiles_model::{PageInfo, Project, Totals};
+use winfiles_model::{PageInfo, PrintSettings, Project, Totals};
 
 use crate::captions::{
     CAPTION_PAD, FOLDER_NOTE_INSET, INFO_RATIO, MM_PER_PT, NOTE_GAP, NOTE_INK, Slot, TITLE_PAD_X,
-    TITLE_PAD_Y, line_mm, note_job, title_job,
+    TITLE_PAD_Y, area_text, info_lines, line_mm, note_job, title_job,
 };
 use crate::theme::{Tokens, semibold};
 use crate::thumbs::{ThumbState, Thumbnails};
@@ -91,14 +89,14 @@ fn trim_uv(page: Option<&PageInfo>) -> Rect {
 }
 
 /// Disegna `sheet` a `scale` punti per millimetro nello spazio disponibile. `slots` dice a quale
-/// pagina di quale file corrisponde ogni elemento; `selected` è il file scelto.
+/// pagina di quale file corrisponde ogni elemento; `selected` sono i file scelti.
 pub fn draw(
     ui: &mut egui::Ui,
     sheet: &Sheet,
     project: &Project,
     slots: &[Slot],
     thumbs: &mut Thumbnails,
-    selected: Option<usize>,
+    selected: &std::collections::BTreeSet<usize>,
     scale: f32,
 ) -> CanvasOutput {
     let t = Tokens::get(ui.ctx());
@@ -173,7 +171,7 @@ pub fn draw(
             title,
             header,
             custom,
-            folder.map(|f| &f.1),
+            folder.map(|f| totals_text(&f.1, print)).as_deref(),
             font(print.header_text),
             scale,
         );
@@ -274,26 +272,23 @@ pub fn draw(
             clip.galley(pos2(caption.center().x, y), galley, INK);
         }
         y += mm(line_mm(name_pt));
-        if let Some(page) = page_info {
-            let finished = page.finished();
-            let mut area = format_area(area_m2(finished));
-            if slot.pages > 1 {
-                area = format!("{area} · pagina {} di {}", slot.page + 1, slot.pages);
-            }
-            for line in [format_size(finished, project.unit), area] {
-                if font(info_pt) >= 4.0 {
-                    let galley = clip.layout_job(one_line(
-                        line,
-                        FontId::proportional(font(info_pt)),
-                        INK_SOFT,
-                        caption.width(),
-                    ));
-                    clip.galley(pos2(caption.center().x, y), galley, INK_SOFT);
+        match page_info {
+            Some(page) => {
+                for line in info_lines(page, project.unit, print) {
+                    let ink = if line.trim { NOTE_INK } else { INK_SOFT };
+                    if font(info_pt) >= 4.0 {
+                        let galley = clip.layout_job(one_line(
+                            line.text,
+                            FontId::proportional(font(info_pt)),
+                            ink,
+                            caption.width(),
+                        ));
+                        clip.galley(pos2(caption.center().x, y), galley, ink);
+                    }
+                    y += mm(line_mm(info_pt));
                 }
-                y += mm(line_mm(info_pt));
             }
-        } else {
-            y += 2.0 * mm(line_mm(info_pt));
+            None => y += mm(line_mm(info_pt)),
         }
         if !file.note.trim().is_empty() && font(print.note_text) >= 4.0 {
             y += mm(NOTE_GAP);
@@ -303,7 +298,7 @@ pub fn draw(
             clip.galley(pos2(caption.center().x, y), galley, NOTE_INK);
         }
 
-        if selected == Some(slot.file) {
+        if selected.contains(&slot.file) {
             painter.rect_stroke(
                 cell.expand(3.0),
                 3.0,
@@ -326,6 +321,19 @@ pub fn draw(
     out
 }
 
+/// I totali di una cartella a destra della sua intestazione: file, pagine e area, con le misure
+/// che le caselle dell'impaginazione lasciano vedere.
+fn totals_text(t: &Totals, print: &PrintSettings) -> String {
+    let mut text = format!("{} file · {} pagine", t.files, t.pages);
+    if let Some(area) = area_text(t.area_full_m2, t.area_m2, print.show_sizes, print.show_trim) {
+        text = format!("{text} · {area}");
+    }
+    if t.unmeasured > 0 {
+        text = format!("{text} (da misurare: {})", t.unmeasured);
+    }
+    text
+}
+
 /// L'intestazione di una cartella: le cartelle come etichette colorate, una linea sottile e i
 /// totali a destra. Nessun riquadro grigio.
 fn draw_header(
@@ -333,7 +341,7 @@ fn draw_header(
     title: Rect,
     header: &Header,
     custom: Option<&str>,
-    totals: Option<&Totals>,
+    totals: Option<&str>,
     px: f32,
     scale: f32,
 ) {
@@ -388,17 +396,8 @@ fn draw_header(
         x += more.size().x + mm(2.0);
     }
     let mut line_end = title.right();
-    if let Some(t) = totals {
-        let mut text = format!(
-            "{} file · {} pagine · {}",
-            t.files,
-            t.pages,
-            format_area(t.area_m2)
-        );
-        if t.unmeasured > 0 {
-            text = format!("{text} (da misurare: {})", t.unmeasured);
-        }
-        let galley = painter.layout_no_wrap(text, FontId::proportional(px * 0.82), INK_SOFT);
+    if let Some(text) = totals {
+        let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(px * 0.82), INK_SOFT);
         let pos = pos2(title.right() - galley.size().x, cy - galley.size().y / 2.0);
         if pos.x > x + mm(6.0) {
             line_end = pos.x - mm(2.5);

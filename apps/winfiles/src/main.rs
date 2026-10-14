@@ -13,6 +13,7 @@ mod icons;
 mod measure;
 mod panels;
 mod scan;
+mod shell;
 mod theme;
 mod thumbs;
 

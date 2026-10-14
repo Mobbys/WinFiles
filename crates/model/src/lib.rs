@@ -136,6 +136,11 @@ impl FileEntry {
     pub fn area_m2(&self) -> f64 {
         self.pages.iter().map(|p| area_m2(p.finished())).sum()
     }
+
+    /// Metri quadrati di tutte le pagine al formato pagina, cioè con abbondanza e crocini.
+    pub fn area_full_m2(&self) -> f64 {
+        self.pages.iter().map(|p| area_m2(p.size)).sum()
+    }
 }
 
 /// Somme di un gruppo di file: numero di file, di pagine e metri quadrati.
@@ -143,7 +148,10 @@ impl FileEntry {
 pub struct Totals {
     pub files: usize,
     pub pages: usize,
+    /// Metri quadrati al formato finito (al vivo).
     pub area_m2: f64,
+    /// Metri quadrati al formato pagina, con abbondanza e crocini.
+    pub area_full_m2: f64,
     /// File di cui non si conoscono ancora (o non si possono leggere) le misure.
     pub unmeasured: usize,
 }
@@ -153,6 +161,7 @@ impl Totals {
         self.files += 1;
         self.pages += file.pages.len();
         self.area_m2 += file.area_m2();
+        self.area_full_m2 += file.area_full_m2();
         if file.pages.is_empty() {
             self.unmeasured += 1;
         }
@@ -165,6 +174,11 @@ impl Totals {
             t.add(f);
         }
         t
+    }
+
+    /// Vero se le pagine hanno abbondanza: l'area al vivo è diversa da quella della pagina.
+    pub fn has_bleed(&self) -> bool {
+        (self.area_full_m2 - self.area_m2).abs() > 1e-6
     }
 }
 
@@ -193,6 +207,10 @@ pub struct PrintSettings {
     pub page_break_per_folder: bool,
     /// Titolo scritto in cima a ogni foglio (per esempio il cliente o l'ordine); vuoto = nessuno.
     pub title: String,
+    /// Mostra sul foglio le misure della pagina, con abbondanza e crocini.
+    pub show_sizes: bool,
+    /// Mostra sul foglio le misure al vivo (TrimBox), in rosso, quando sono diverse.
+    pub show_trim: bool,
 }
 
 impl Default for PrintSettings {
@@ -210,6 +228,8 @@ impl Default for PrintSettings {
             header: 10.0,
             page_break_per_folder: false,
             title: String::new(),
+            show_sizes: true,
+            show_trim: true,
         }
     }
 }
@@ -377,6 +397,9 @@ mod tests {
         let mut p = sample();
         // Il PDF di prova ha un TrimBox 200 × 287: conta quello, non il MediaBox.
         assert!((p.files[0].area_m2() - 0.0574).abs() < 1e-9);
+        // Con abbondanza e crocini conta il formato pagina.
+        assert!((p.files[0].area_full_m2() - 0.06237).abs() < 1e-9);
+        assert!(Totals::of(&p.files).has_bleed());
         let mut foto = FileEntry::new(PathBuf::from("/lavori/foto/a.jpg"), FileKind::Image);
         foto.pages.push(PageInfo {
             size: Size::new(1000.0, 500.0),
@@ -391,6 +414,8 @@ mod tests {
         let foto = per_folder[Path::new("/lavori/foto")];
         assert_eq!((foto.files, foto.pages, foto.unmeasured), (2, 1, 1));
         assert!((foto.area_m2 - 0.5).abs() < 1e-9);
+        // Le immagini non hanno abbondanza: le due aree coincidono.
+        assert!(!foto.has_bleed());
         let all = Totals::of(&p.files);
         assert_eq!(all.files, 3);
         assert!((all.area_m2 - 0.5574).abs() < 1e-9);

@@ -1,12 +1,12 @@
 //! Stato dell'applicazione e cornice della finestra: barra dei menu, barra di stampa, pannelli
 //! agganciabili su schede arrotondate e barra di stato.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use craft_ui::docking::{Action, DockArea, DockContent, Layout, PanelLimits};
 use egui::{Align, Color32, Rect, Sense, Stroke, Vec2, vec2};
-use winfiles_geom::{Orientation, Paper, Unit, format_area};
+use winfiles_geom::{Orientation, Paper, Unit};
 use winfiles_layout::{LayoutError, MAX_COLUMNS, Sheet, grid_with_title};
 use winfiles_model::{Project, Totals};
 
@@ -24,7 +24,12 @@ const ZOOM_STOPS: [f32; 10] = [25.0, 33.0, 50.0, 66.7, 100.0, 150.0, 200.0, 300.
 
 pub struct WinFilesApp {
     pub(crate) project: Project,
+    /// Il file di cui le proprietà e le note mostrano i dati: l'ultimo scelto.
     pub(crate) selected: Option<usize>,
+    /// Tutti i file scelti (Ctrl e Maiusc aggiungono), per eliminarli insieme.
+    pub(crate) marked: BTreeSet<usize>,
+    /// Il file da cui parte una scelta con Maiusc.
+    anchor: Option<usize>,
     pub(crate) sheet: usize,
     /// Ingrandimento in punti per millimetro; `None` adatta il foglio alla finestra.
     pub(crate) zoom: Option<f32>,
@@ -41,7 +46,7 @@ pub struct WinFilesApp {
     slots: Vec<Slot>,
     /// Cartella di cui si sta rinominando l'intestazione nell'elenco, con il testo in modifica.
     pub(crate) renaming: Option<(PathBuf, String)>,
-    status: String,
+    pub(crate) status: String,
 }
 
 impl WinFilesApp {
@@ -51,6 +56,8 @@ impl WinFilesApp {
         let mut app = Self {
             project: Project::new("Senza titolo"),
             selected: None,
+            marked: BTreeSet::new(),
+            anchor: None,
             sheet: 0,
             zoom: None,
             shown_zoom: 1.0,
@@ -84,7 +91,7 @@ impl WinFilesApp {
         }
         let added = files.len().saturating_sub(before);
         self.project.files = files;
-        self.selected = None;
+        self.unselect();
         self.status = match added {
             0 => "Nessun file nuovo: immagini, PDF, AI ed EPS".into(),
             1 => "Aggiunto 1 file".into(),
@@ -96,9 +103,71 @@ impl WinFilesApp {
         self.project.files.clear();
         self.errors.clear();
         self.thumbs.clear();
-        self.selected = None;
+        self.unselect();
         self.sheet = 0;
         self.status = "Elenco svuotato".into();
+    }
+
+    fn unselect(&mut self) {
+        self.selected = None;
+        self.marked.clear();
+        self.anchor = None;
+    }
+
+    /// Sceglie un file con un clic: da solo, oppure con Ctrl lo aggiunge o lo toglie e con Maiusc
+    /// prende tutti quelli tra il primo scelto e questo, come in Esplora file.
+    pub(crate) fn pick(&mut self, i: usize, mods: egui::Modifiers) {
+        if mods.shift
+            && let Some(a) = self.anchor
+        {
+            if !mods.command {
+                self.marked.clear();
+            }
+            self.marked.extend(a.min(i)..=a.max(i));
+            self.selected = Some(i);
+        } else if mods.command {
+            if !self.marked.remove(&i) {
+                self.marked.insert(i);
+            }
+            self.selected = self
+                .marked
+                .contains(&i)
+                .then_some(i)
+                .or_else(|| self.marked.last().copied());
+            self.anchor = Some(i);
+        } else {
+            self.marked.clear();
+            self.marked.insert(i);
+            self.selected = Some(i);
+            self.anchor = Some(i);
+        }
+    }
+
+    /// Il tasto destro su un file non scelto lo sceglie da solo; su uno già scelto tiene la scelta.
+    pub(crate) fn pick_for_menu(&mut self, i: usize) {
+        if !self.marked.contains(&i) {
+            self.pick(i, egui::Modifiers::NONE);
+        }
+    }
+
+    /// Toglie dall'elenco i file indicati (solo dal lavoro, mai dal disco).
+    pub(crate) fn remove_files(&mut self, remove: &BTreeSet<usize>) {
+        if remove.is_empty() {
+            return;
+        }
+        let before = self.project.files.len();
+        let mut i = 0;
+        self.project.files.retain(|_| {
+            let keep = !remove.contains(&i);
+            i += 1;
+            keep
+        });
+        let gone = before - self.project.files.len();
+        self.unselect();
+        self.status = match gone {
+            1 => "Tolto 1 file dall'elenco".into(),
+            n => format!("Tolti {n} file dall'elenco"),
+        };
     }
 
     /// Porta nel progetto le misure arrivate dal thread di lettura.
@@ -315,7 +384,7 @@ impl WinFilesApp {
                         "{} file  ·  {} pagine  ·  {}",
                         totals.files,
                         totals.pages,
-                        format_area(totals.area_m2)
+                        crate::panels::areas(&totals)
                     );
                     ui.label(egui::RichText::new(text).font(semibold(12.5)).color(t.text));
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
@@ -460,13 +529,14 @@ impl WinFilesApp {
                     &self.project,
                     &self.slots,
                     &mut self.thumbs,
-                    self.selected,
+                    &self.marked,
                     scale,
                 )
             })
             .inner;
         if let Some(id) = out.clicked {
-            self.selected = Some(id);
+            let mods = ui.input(|i| i.modifiers);
+            self.pick(id, mods);
         }
         if let Some(by) = out.zoom_by {
             self.zoom = Some((scale * by).clamp(canvas::MIN_ZOOM, canvas::MAX_ZOOM));
@@ -780,6 +850,14 @@ impl eframe::App for WinFilesApp {
         });
         if !dropped.is_empty() {
             self.add_paths(dropped);
+        }
+        // Canc toglie dall'elenco i file scelti, se non si sta scrivendo in un campo.
+        if !self.marked.is_empty()
+            && !ui.ctx().egui_wants_keyboard_input()
+            && ui.input(|i| i.key_pressed(egui::Key::Delete))
+        {
+            let marked = std::mem::take(&mut self.marked);
+            self.remove_files(&marked);
         }
         self.sync_theme(ui.ctx());
         self.receive_measures();

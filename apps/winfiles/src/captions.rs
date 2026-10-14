@@ -6,9 +6,9 @@
 
 use egui::Color32;
 use egui::text::{LayoutJob, TextFormat};
-use winfiles_geom::Size;
+use winfiles_geom::{Size, Unit, area_m2, format_area, format_size};
 use winfiles_layout::{Item, cell_width};
-use winfiles_model::{FileKind, Project};
+use winfiles_model::{FileKind, PageInfo, PrintSettings, Project};
 
 /// Millimetri per punto tipografico.
 pub const MM_PER_PT: f64 = 25.4 / 72.0;
@@ -141,10 +141,66 @@ pub fn note_rows(ctx: &egui::Context, text: &str, pt: f64, width_mm: f64) -> usi
     ctx.fonts_mut(|f| f.layout_job(job)).rows.len()
 }
 
-/// Altezza della didascalia (nome, misura, area e nota), in mm.
-pub fn caption_height(ctx: &egui::Context, note: &str, caption_pt: f64, note_pt: f64, width: f64) -> f64 {
+/// Una riga di misure sotto la miniatura.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InfoLine {
+    pub text: String,
+    /// Misura al vivo, scritta in rosso come nella 4.9.
+    pub trim: bool,
+}
+
+/// Le righe di misure di una pagina: il formato pagina (con abbondanza e crocini) e, se è
+/// diverso, il formato al vivo. Le due caselle dell'impaginazione decidono quali si vedono.
+pub fn info_lines(page: &PageInfo, unit: Unit, print: &PrintSettings) -> Vec<InfoLine> {
+    let mut out = Vec::with_capacity(2);
+    if print.show_sizes {
+        out.push(InfoLine {
+            text: format!(
+                "{}  ·  {}",
+                format_size(page.size, unit),
+                format_area(area_m2(page.size))
+            ),
+            trim: false,
+        });
+    }
+    if print.show_trim
+        && let Some(trim) = page.trim.filter(|t| *t != page.size)
+    {
+        out.push(InfoLine {
+            text: format!(
+                "Al vivo: {}  ·  {}",
+                format_size(trim, unit),
+                format_area(area_m2(trim))
+            ),
+            trim: true,
+        });
+    }
+    out
+}
+
+/// L'area di un gruppo di file per le intestazioni: con abbondanza e, tra parentesi, al vivo
+/// quando è diversa, come nella 4.9. `None` se le caselle nascondono entrambe le misure.
+pub fn area_text(full: f64, trim: f64, show_sizes: bool, show_trim: bool) -> Option<String> {
+    let bleed = (full - trim).abs() > 1e-6;
+    match (show_sizes, show_trim && bleed) {
+        (true, true) => Some(format!("{} (al vivo {})", format_area(full), format_area(trim))),
+        (true, false) => Some(format_area(full)),
+        (false, true) => Some(format!("al vivo {}", format_area(trim))),
+        (false, false) => show_trim.then(|| format_area(trim)),
+    }
+}
+
+/// Altezza della didascalia (nome, `lines` righe di misure e nota), in mm.
+pub fn caption_height(
+    ctx: &egui::Context,
+    note: &str,
+    lines: usize,
+    caption_pt: f64,
+    note_pt: f64,
+    width: f64,
+) -> f64 {
     let info = line_mm(caption_pt * INFO_RATIO);
-    let mut h = CAPTION_PAD * 2.0 + line_mm(caption_pt) + 2.0 * info;
+    let mut h = CAPTION_PAD * 2.0 + line_mm(caption_pt) + lines as f64 * info;
     let rows = note_rows(ctx, note, note_pt, width);
     if rows > 0 {
         h += NOTE_GAP + rows as f64 * line_mm(note_pt);
@@ -183,6 +239,13 @@ pub fn items(ctx: &egui::Context, project: &Project, slots: &[Slot]) -> Vec<Item
         .filter_map(|(id, slot)| {
             let f = project.files.get(slot.file)?;
             let folder_note = project.folder_notes.get(f.folder()).map_or("", String::as_str);
+            // Un file non ancora misurato tiene il posto di una riga.
+            let lines = f
+                .pages
+                .get(slot.page)
+                .map_or(usize::from(print.show_sizes || print.show_trim), |p| {
+                    info_lines(p, project.unit, print).len()
+                });
             Some(Item {
                 id,
                 content: f
@@ -194,7 +257,7 @@ pub fn items(ctx: &egui::Context, project: &Project, slots: &[Slot]) -> Vec<Item
                     .get(f.folder())
                     .cloned()
                     .unwrap_or_else(|| f.folder().display().to_string()),
-                caption: caption_height(ctx, &f.note, print.caption_text, print.note_text, width),
+                caption: caption_height(ctx, &f.note, lines, print.caption_text, print.note_text, width),
                 folder_note: folder_note_height(ctx, folder_note, print.note_text, sheet_width),
             })
         })
@@ -243,16 +306,52 @@ mod tests {
     }
 
     #[test]
+    fn misure_con_abbondanza_e_al_vivo() {
+        let page = PageInfo {
+            size: Size::new(216.0, 303.0),
+            trim: Some(Size::new(210.0, 297.0)),
+        };
+        let mut print = PrintSettings::default();
+        let lines = info_lines(&page, Unit::Cm, &print);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].text.starts_with("21,6 × 30,3 cm") && !lines[0].trim);
+        assert!(lines[1].text.starts_with("Al vivo: 21 × 29,7 cm") && lines[1].trim);
+        // Senza TrimBox (o uguale alla pagina) c'è solo la prima riga.
+        let plain = PageInfo {
+            size: Size::new(210.0, 297.0),
+            trim: Some(Size::new(210.0, 297.0)),
+        };
+        assert_eq!(info_lines(&plain, Unit::Cm, &print).len(), 1);
+        // Le caselle tolgono le righe.
+        print.show_sizes = false;
+        assert_eq!(info_lines(&page, Unit::Cm, &print).len(), 1);
+        print.show_trim = false;
+        assert!(info_lines(&page, Unit::Cm, &print).is_empty());
+
+        assert_eq!(
+            area_text(0.0654, 0.0624, true, true).as_deref(),
+            Some("0,065 m² (al vivo 0,062 m²)")
+        );
+        assert_eq!(area_text(0.5, 0.5, true, true).as_deref(), Some("0,500 m²"));
+        assert_eq!(
+            area_text(0.0654, 0.0624, false, true).as_deref(),
+            Some("al vivo 0,062 m²")
+        );
+        assert_eq!(area_text(0.0654, 0.0624, false, false), None);
+    }
+
+    #[test]
     fn la_nota_allunga_la_didascalia() {
         let ctx = egui::Context::default();
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             let ctx = ui.ctx();
-            let empty = caption_height(ctx, "", 7.0, 8.0, 44.5);
-            let short = caption_height(ctx, "Controllare il nero", 7.0, 8.0, 44.5);
-            let long = caption_height(ctx, &"parola ".repeat(40), 7.0, 8.0, 44.5);
+            let empty = caption_height(ctx, "", 2, 7.0, 8.0, 44.5);
+            let short = caption_height(ctx, "Controllare il nero", 2, 7.0, 8.0, 44.5);
+            let long = caption_height(ctx, &"parola ".repeat(40), 2, 7.0, 8.0, 44.5);
             assert!(short > empty && long > short);
-            // Testo più grande, didascalia più alta.
-            assert!(caption_height(ctx, "", 10.0, 8.0, 44.5) > empty);
+            // Testo più grande, didascalia più alta; meno righe di misure, più bassa.
+            assert!(caption_height(ctx, "", 2, 10.0, 8.0, 44.5) > empty);
+            assert!(caption_height(ctx, "", 1, 7.0, 8.0, 44.5) < empty);
             assert_eq!(folder_note_height(ctx, "  ", 8.0, 190.0), 0.0);
         });
         out.textures_delta.clear();
