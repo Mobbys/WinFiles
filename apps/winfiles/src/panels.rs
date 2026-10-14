@@ -183,7 +183,7 @@ impl WinFilesApp {
                             };
                             let selected = self.selected == Some(*i);
                             if selected {
-                                ui.painter().rect_filled(rect, t.radius, t.row_selected);
+                                ui.painter().rect_filled(rect, t.radius, t.selection);
                             } else if resp.hovered() {
                                 ui.painter().rect_filled(rect, t.radius, t.hover);
                             }
@@ -408,7 +408,8 @@ impl WinFilesApp {
             ui.add(
                 egui::TextEdit::multiline(&mut file.note)
                     .desired_rows(3)
-                    .desired_width(f32::INFINITY)
+                    .desired_width(ui.available_width() - 8.0)
+                    .margin(egui::Margin::symmetric(10, 8))
                     .hint_text("Per esempio: verificare il colore"),
             );
             let folder = file.folder().to_path_buf();
@@ -417,7 +418,8 @@ impl WinFilesApp {
             ui.add(
                 egui::TextEdit::multiline(note)
                     .desired_rows(3)
-                    .desired_width(f32::INFINITY)
+                    .desired_width(ui.available_width() - 8.0)
+                    .margin(egui::Margin::symmetric(10, 8))
                     .hint_text("Vale per tutti i file della cartella"),
             );
         });
@@ -425,33 +427,20 @@ impl WinFilesApp {
 
     pub(crate) fn layout_panel(&mut self, ui: &mut egui::Ui) {
         let print = &mut self.project.print;
-        let mm = |ui: &mut egui::Ui, value: &mut f64, max: f64| {
-            ui.add(
-                egui::DragValue::new(value)
-                    .range(0.0..=max)
-                    .speed(0.5)
-                    .suffix(" mm"),
-            );
-        };
+        let mm = |ui: &mut egui::Ui, value: &mut f64, max: f64| ui.add(mm_field(value, max));
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            dim_label(ui, "Colonne");
+            // Il cursore occupa la larghezza del pannello, lasciando posto al numero.
+            ui.spacing_mut().slider_width = (ui.available_width() - 64.0).max(60.0);
+            ui.add(egui::Slider::new(&mut print.columns, 1..=10));
+            ui.add_space(10.0);
             egui::Grid::new("impaginazione")
                 .num_columns(2)
-                .spacing([12.0, 7.0])
+                .spacing([12.0, 10.0])
                 .show(ui, |ui| {
-                    dim_label(ui, "Colonne");
-                    ui.add(egui::Slider::new(&mut print.columns, 1..=10));
-                    ui.end_row();
                     dim_label(ui, "Margini");
                     let mut margin = print.margins.top;
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut margin)
-                                .range(0.0..=50.0)
-                                .speed(0.5)
-                                .suffix(" mm"),
-                        )
-                        .changed()
-                    {
+                    if mm(ui, &mut margin, 50.0).changed() {
                         print.margins = Margins::uniform(margin);
                     }
                     ui.end_row();
@@ -482,4 +471,16 @@ impl WinFilesApp {
             );
         });
     }
+}
+
+/// Un campo numerico in millimetri con la virgola decimale, come si scrive in italiano.
+fn mm_field(value: &mut f64, max: f64) -> egui::DragValue<'_> {
+    egui::DragValue::new(value)
+        .range(0.0..=max)
+        .speed(0.5)
+        .custom_formatter(|v, _| format!("{} mm", format_number(v, 1, false)))
+        .custom_parser(|text| {
+            let clean = text.trim().trim_end_matches("mm").trim().replace(',', ".");
+            clean.parse::<f64>().ok()
+        })
 }

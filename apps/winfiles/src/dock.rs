@@ -81,20 +81,21 @@ pub fn default_layout() -> Layout<PanelId> {
     }
 }
 
-/// Lo stile delle linguette e dei bordi, con le etichette dei comandi in italiano.
+/// Lo stile delle linguette: titoli sopra le schede, senza riquadri, con le etichette dei
+/// comandi in italiano. Il fondo delle schede lo disegna il contenuto (vedi `app::card`).
 pub fn style(ui: &egui::Ui) -> DockStyle {
     let t = Tokens::get(ui.ctx());
     let mut style = DockStyle::from_ui(ui);
-    style.tab_height = 30.0;
-    style.gap = 2.0;
-    style.background = t.panel;
-    style.tab_background = t.tab_strip;
-    style.active_background = t.panel;
+    style.tab_height = 34.0;
+    style.gap = 10.0;
+    style.background = egui::Color32::TRANSPARENT;
+    style.tab_background = egui::Color32::TRANSPARENT;
+    style.active_background = egui::Color32::TRANSPARENT;
     style.text = t.text_strong;
     style.inactive_text = t.text_dim;
-    style.border = egui::Stroke::new(1.0, t.border);
+    style.border = egui::Stroke::NONE;
     style.accent = t.accent;
-    style.font = semibold(12.0);
+    style.font = semibold(13.5);
     style.float_label = "Stacca il pannello".into();
     style.close_label = "Chiudi il pannello".into();
     style.move_label = "Raggruppa con".into();

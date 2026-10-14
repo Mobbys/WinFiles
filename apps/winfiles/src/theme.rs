@@ -1,6 +1,7 @@
-//! Colori, font e stile di egui, con un tema scuro e uno chiaro sul modello di VectorCraft.
-//! Nessun widget scrive un colore a mano: li prende tutti da [`Tokens::get`]. Un test controlla il
-//! contrasto di ogni testo sui suoi sfondi (WCAG), così un testo illeggibile non passa la CI.
+//! Colori, font e stile di egui: un tema scuro e uno chiaro moderni, con schede arrotondate,
+//! comandi alti e bordi leggeri. Nessun widget scrive un colore a mano: li prende tutti da
+//! [`Tokens::get`]. Un test controlla il contrasto di ogni testo sui suoi sfondi (WCAG), così un
+//! testo illeggibile non passa la CI.
 
 use std::sync::Arc;
 
@@ -38,14 +39,16 @@ impl ThemeChoice {
     }
 }
 
-/// Tutti i colori dell'interfaccia.
+/// Tutti i colori e i raggi dell'interfaccia.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {
     pub dark: bool,
+    /// Fondo della finestra, dietro le schede dei pannelli.
     pub app_bar: Color32,
+    /// Fondo delle schede (pannelli).
     pub panel: Color32,
+    /// Righe di gruppo e superfici secondarie dentro le schede.
     pub panel_darker: Color32,
-    pub tab_strip: Color32,
     pub input: Color32,
     pub input_border: Color32,
     pub border: Color32,
@@ -58,73 +61,80 @@ pub struct Tokens {
     pub hover: Color32,
     pub pressed: Color32,
     pub accent: Color32,
-    pub row_selected: Color32,
+    /// Testo e bordi su `selection` (voci scelte, campo attivo).
+    pub accent_text: Color32,
+    pub selection: Color32,
     pub pasteboard: Color32,
     pub button: Color32,
     pub button_border: Color32,
     pub warning: Color32,
     pub error: Color32,
+    /// Raggio degli angoli dei comandi.
     pub radius: u8,
+    /// Raggio degli angoli delle schede.
+    pub card_radius: u8,
 }
 
 const fn hex(v: u32) -> Color32 {
     Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
 }
 
-/// Tema scuro (il "Scuro" di VectorCraft, con testi più chiari per il contrasto).
+/// Tema scuro: fondo quasi nero, schede grigio antracite, accento blu.
 pub const DARK: Tokens = Tokens {
     dark: true,
-    app_bar: hex(0x2b2b2b),
-    panel: hex(0x323232),
-    panel_darker: hex(0x282828),
-    tab_strip: hex(0x262626),
-    input: hex(0x1f1f1f),
-    input_border: hex(0x4a4a4a),
-    border: hex(0x1b1b1b),
-    divider: hex(0x3f3f3f),
-    text: hex(0xe6e6e6),
+    app_bar: hex(0x18181b),
+    panel: hex(0x232326),
+    panel_darker: hex(0x2c2c30),
+    input: hex(0x1b1b1e),
+    input_border: hex(0x5c5c66),
+    border: hex(0x33333a),
+    divider: hex(0x34343a),
+    text: hex(0xe8e8ea),
     text_strong: hex(0xffffff),
-    text_dim: hex(0xb4b4b4),
-    text_disabled: hex(0x8a8a8a),
-    icon: hex(0xd0d0d0),
-    hover: hex(0x454545),
-    pressed: hex(0x1d1d1d),
-    accent: hex(0x378ef0),
-    row_selected: hex(0x2d4f73),
-    pasteboard: hex(0x3a3a3a),
-    button: hex(0x3a3a3a),
-    button_border: hex(0x6a6a6a),
-    warning: hex(0xffb84d),
-    error: hex(0xff6b6b),
-    radius: 2,
+    text_dim: hex(0xa9a9b0),
+    text_disabled: hex(0x8a8a92),
+    icon: hex(0xcfcfd4),
+    hover: hex(0x34343a),
+    pressed: hex(0x3e3e45),
+    accent: hex(0x3b82f6),
+    accent_text: hex(0xbfdbfe),
+    selection: hex(0x1e3a5f),
+    pasteboard: hex(0x1b1b1e),
+    button: hex(0x2f2f34),
+    button_border: hex(0x5c5c66),
+    warning: hex(0xffb547),
+    error: hex(0xff7a7a),
+    radius: 6,
+    card_radius: 10,
 };
 
-/// Tema chiaro (il "Chiaro" di VectorCraft).
+/// Tema chiaro: fondo grigio perla, schede bianche, accento blu.
 pub const LIGHT: Tokens = Tokens {
     dark: false,
-    app_bar: hex(0xe8e8e8),
-    panel: hex(0xf3f3f3),
-    panel_darker: hex(0xe6e6e6),
-    tab_strip: hex(0xdedede),
+    app_bar: hex(0xeceef2),
+    panel: hex(0xffffff),
+    panel_darker: hex(0xf3f4f7),
     input: hex(0xffffff),
-    input_border: hex(0xb0b0b0),
-    border: hex(0xc8c8c8),
-    divider: hex(0xd6d6d6),
-    text: hex(0x1f1f1f),
+    input_border: hex(0xa3a9b3),
+    border: hex(0xdfe2e7),
+    divider: hex(0xe4e6ea),
+    text: hex(0x1d1f23),
     text_strong: hex(0x000000),
-    text_dim: hex(0x555555),
-    text_disabled: hex(0x7a7a7a),
-    icon: hex(0x333333),
-    hover: hex(0xdcdcdc),
-    pressed: hex(0xc8c8c8),
-    accent: hex(0x1473e6),
-    row_selected: hex(0xc8daf7),
-    pasteboard: hex(0xc4c4c4),
-    button: hex(0xfafafa),
-    button_border: hex(0x9a9a9a),
-    warning: hex(0x8a4b00),
-    error: hex(0xb3261e),
-    radius: 2,
+    text_dim: hex(0x5b616c),
+    text_disabled: hex(0x7b818b),
+    icon: hex(0x353a42),
+    hover: hex(0xeceef2),
+    pressed: hex(0xe0e3e8),
+    accent: hex(0x2563eb),
+    accent_text: hex(0x1d4ed8),
+    selection: hex(0xdbe7fd),
+    pasteboard: hex(0xe4e6eb),
+    button: hex(0xf3f4f7),
+    button_border: hex(0xa3a9b3),
+    warning: hex(0x955700),
+    error: hex(0xc62828),
+    radius: 6,
+    card_radius: 10,
 };
 
 impl Tokens {
@@ -171,7 +181,8 @@ pub fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// Applica i colori e le spaziature allo stile globale di egui.
+/// Applica colori e misure allo stile globale di egui: comandi alti 30 punti, angoli arrotondati,
+/// bordi leggeri, cursori con la parte riempita in blu e maniglia tonda.
 pub fn apply(ctx: &egui::Context, t: Tokens) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, t));
     let cr = CornerRadius::same(t.radius);
@@ -183,25 +194,28 @@ pub fn apply(ctx: &egui::Context, t: Tokens) {
     v.faint_bg_color = t.panel_darker;
     v.code_bg_color = t.panel_darker;
     v.window_stroke = Stroke::new(1.0, t.border);
-    v.window_corner_radius = CornerRadius::same(6);
-    v.menu_corner_radius = CornerRadius::same(6);
-    v.selection.bg_fill = t.accent.gamma_multiply(0.45);
-    v.selection.stroke = Stroke::new(1.0, t.text_strong);
+    v.window_corner_radius = CornerRadius::same(t.card_radius);
+    v.menu_corner_radius = CornerRadius::same(t.card_radius);
+    v.selection.bg_fill = t.selection;
+    v.selection.stroke = Stroke::new(1.5, t.accent_text);
     v.hyperlink_color = t.accent;
     v.override_text_color = Some(t.text);
     v.weak_text_color = Some(t.text_dim);
     v.warn_fg_color = t.warning;
     v.error_fg_color = t.error;
-    let alpha = if t.dark { 120 } else { 50 };
+    v.slider_trailing_fill = true;
+    v.handle_shape = egui::style::HandleShape::Circle;
+    v.striped = false;
+    let alpha = if t.dark { 140 } else { 40 };
     v.popup_shadow = egui::epaint::Shadow {
-        offset: [0, 4],
-        blur: 14,
+        offset: [0, 6],
+        blur: 20,
         spread: 0,
         color: Color32::from_black_alpha(alpha),
     };
     v.window_shadow = egui::epaint::Shadow {
-        offset: [0, 8],
-        blur: 28,
+        offset: [0, 10],
+        blur: 32,
         spread: 0,
         color: Color32::from_black_alpha(alpha),
     };
@@ -214,35 +228,53 @@ pub fn apply(ctx: &egui::Context, t: Tokens) {
         open: t.hover,
     }
     .apply_to(w, cr, Stroke::new(1.0, t.text));
-    // Tutti gli stati dei widget scrivono il testo con colori leggibili sul loro sfondo.
+    for state in [
+        &mut w.noninteractive,
+        &mut w.inactive,
+        &mut w.hovered,
+        &mut w.active,
+        &mut w.open,
+    ] {
+        state.corner_radius = cr;
+        state.expansion = 0.0;
+    }
+    // Ogni stato scrive il testo con un colore leggibile sul suo sfondo.
     w.noninteractive.fg_stroke = Stroke::new(1.0, t.text);
     w.inactive.fg_stroke = Stroke::new(1.0, t.text);
-    w.hovered.fg_stroke = Stroke::new(1.5, t.text_strong);
-    w.active.fg_stroke = Stroke::new(1.5, t.text_strong);
+    w.hovered.fg_stroke = Stroke::new(1.0, t.text_strong);
+    w.active.fg_stroke = Stroke::new(1.0, t.text_strong);
     w.open.fg_stroke = Stroke::new(1.0, t.text_strong);
     w.noninteractive.bg_stroke = Stroke::new(1.0, t.divider);
     w.inactive.bg_stroke = Stroke::new(1.0, t.button_border);
     w.inactive.bg_fill = t.button;
     w.inactive.weak_bg_fill = t.button;
+    w.hovered.bg_fill = t.hover;
+    w.hovered.weak_bg_fill = t.hover;
     w.hovered.bg_stroke = Stroke::new(1.0, t.input_border);
     w.active.bg_stroke = Stroke::new(1.0, t.accent);
+    w.open.bg_stroke = Stroke::new(1.0, t.input_border);
     ctx.set_visuals(v);
     ctx.global_style_mut(|s| {
-        s.spacing.item_spacing = egui::vec2(6.0, 5.0);
-        s.spacing.button_padding = egui::vec2(8.0, 2.0);
-        s.spacing.interact_size = egui::vec2(24.0, 22.0);
-        s.spacing.menu_margin = egui::Margin::same(6);
-        s.spacing.slider_width = 110.0;
+        s.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        s.spacing.button_padding = egui::vec2(12.0, 5.0);
+        s.spacing.interact_size = egui::vec2(32.0, 30.0);
+        s.spacing.icon_width = 16.0;
+        s.spacing.icon_width_inner = 9.0;
+        s.spacing.icon_spacing = 8.0;
+        s.spacing.menu_margin = egui::Margin::same(8);
+        s.spacing.window_margin = egui::Margin::same(12);
+        s.spacing.slider_width = 150.0;
         s.spacing.slider_rail_height = 4.0;
+        s.spacing.combo_width = 120.0;
         s.text_styles = [
-            (TextStyle::Small, FontId::proportional(10.5)),
-            (TextStyle::Body, FontId::proportional(12.5)),
-            (TextStyle::Button, FontId::proportional(12.5)),
-            (TextStyle::Heading, semibold(14.0)),
-            (TextStyle::Monospace, FontId::monospace(11.5)),
+            (TextStyle::Small, FontId::proportional(11.5)),
+            (TextStyle::Body, FontId::proportional(13.5)),
+            (TextStyle::Button, FontId::proportional(13.5)),
+            (TextStyle::Heading, semibold(15.0)),
+            (TextStyle::Monospace, FontId::monospace(12.5)),
         ]
         .into();
-        s.animation_time = 0.08;
+        s.animation_time = 0.1;
     });
 }
 
@@ -267,22 +299,22 @@ mod tests {
         (x.max(y) + 0.05) / (x.min(y) + 0.05)
     }
 
-    /// Ogni testo deve leggersi su ogni sfondo su cui compare: 4,5:1 per testi e avvisi
+    /// Ogni testo deve leggersi su ogni sfondo su cui compare: 4,5:1 per testi, avvisi e icone
     /// (WCAG AA), 3:1 per i comandi disattivati.
     #[test]
     fn every_text_is_readable_on_its_backgrounds() {
         for t in [DARK, LIGHT] {
-            let surfaces = [
+            let all = [
                 t.app_bar,
                 t.panel,
                 t.panel_darker,
-                t.tab_strip,
                 t.input,
                 t.hover,
-                t.row_selected,
+                t.pressed,
+                t.selection,
                 t.button,
             ];
-            for bg in surfaces {
+            for bg in all {
                 for (name, fg) in [("text", t.text), ("text_strong", t.text_strong)] {
                     assert!(
                         contrast(fg, bg) >= 4.5,
@@ -291,13 +323,14 @@ mod tests {
                     );
                 }
             }
-            for bg in [t.app_bar, t.panel, t.panel_darker, t.tab_strip, t.input] {
+            let main = [t.app_bar, t.panel, t.panel_darker, t.input, t.hover, t.button];
+            for bg in main {
                 for (name, fg, min) in [
                     ("text_dim", t.text_dim, 4.5),
                     ("warning", t.warning, 4.5),
                     ("error", t.error, 4.5),
-                    ("text_disabled", t.text_disabled, 3.0),
                     ("icon", t.icon, 4.5),
+                    ("text_disabled", t.text_disabled, 3.0),
                 ] {
                     assert!(
                         contrast(fg, bg) >= min,
@@ -306,10 +339,15 @@ mod tests {
                     );
                 }
             }
-            // La guida del cursore e i bordi dei campi si distinguono dal pannello.
             assert!(
-                contrast(t.button_border, t.panel) >= 2.0,
-                "button_border (scuro: {})",
+                contrast(t.accent_text, t.selection) >= 4.5,
+                "accent_text (scuro: {})",
+                t.dark
+            );
+            // I bordi dei campi si vedono sul pannello (WCAG 1.4.11: 3:1 per i componenti).
+            assert!(
+                contrast(t.input_border, t.panel) >= 2.0,
+                "input_border (scuro: {})",
                 t.dark
             );
         }
