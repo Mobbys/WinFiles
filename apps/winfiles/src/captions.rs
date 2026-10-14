@@ -101,12 +101,13 @@ pub fn note_job(text: &str, pt: f64, width_mm: f64, px_per_mm: f32) -> LayoutJob
     job
 }
 
-/// Corpo del titolo in cima ai fogli, in punti.
-pub const TITLE_PT: f64 = 14.0;
+/// Spazio tra il riquadro del titolo e il suo testo, in mm.
+pub const TITLE_PAD_X: f64 = 3.0;
+pub const TITLE_PAD_Y: f64 = 1.8;
 
 /// Il titolo in cima ai fogli, impostato come le note ma in nero e in neretto.
-pub fn title_job(text: &str, width_mm: f32, px_per_mm: f32) -> LayoutJob {
-    let mut job = note_job(text, TITLE_PT, f64::from(width_mm), px_per_mm);
+pub fn title_job(text: &str, pt: f64, width_mm: f32, px_per_mm: f32) -> LayoutJob {
+    let mut job = note_job(text, pt, f64::from(width_mm), px_per_mm);
     for section in &mut job.sections {
         section.format.font_id = crate::theme::semibold(section.format.font_id.size);
         section.format.color = Color32::from_rgb(20, 20, 20);
@@ -114,14 +115,21 @@ pub fn title_job(text: &str, width_mm: f32, px_per_mm: f32) -> LayoutJob {
     job
 }
 
-/// Altezza del titolo in cima ai fogli, in mm (0 se non c'è titolo).
-pub fn title_height(ctx: &egui::Context, text: &str, width_mm: f64) -> f64 {
+/// Altezza del riquadro del titolo in cima ai fogli, in mm (0 se non c'è titolo).
+pub fn title_height(ctx: &egui::Context, text: &str, pt: f64, width_mm: f64) -> f64 {
     if text.trim().is_empty() {
         return 0.0;
     }
-    let job = title_job(text, width_mm as f32, MEASURE_PX_PER_MM as f32);
+    let inner = (width_mm - 2.0 * TITLE_PAD_X).max(1.0);
+    let job = title_job(text, pt, inner as f32, MEASURE_PX_PER_MM as f32);
     let rows = ctx.fonts_mut(|f| f.layout_job(job)).rows.len();
-    rows as f64 * line_mm(TITLE_PT)
+    rows as f64 * line_mm(pt) + 2.0 * TITLE_PAD_Y
+}
+
+/// Altezza della riga di intestazione di una cartella con il testo di corpo `pt`, in mm:
+/// l'etichetta colorata più un po' d'aria sopra e sotto.
+pub fn header_height(pt: f64) -> f64 {
+    line_mm(pt) + pt * MM_PER_PT * 0.5 + 1.5
 }
 
 /// Quante righe occupa una nota larga `width_mm`.

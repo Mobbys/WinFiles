@@ -12,8 +12,8 @@ use winfiles_layout::{Header, Sheet};
 use winfiles_model::{PageInfo, Project, Totals};
 
 use crate::captions::{
-    CAPTION_PAD, FOLDER_NOTE_INSET, INFO_RATIO, MM_PER_PT, NOTE_GAP, NOTE_INK, Slot, TITLE_PT, line_mm,
-    note_job, title_job,
+    CAPTION_PAD, FOLDER_NOTE_INSET, INFO_RATIO, MM_PER_PT, NOTE_GAP, NOTE_INK, Slot, TITLE_PAD_X,
+    TITLE_PAD_Y, line_mm, note_job, title_job,
 };
 use crate::theme::{Tokens, semibold};
 use crate::thumbs::{ThumbState, Thumbnails};
@@ -35,6 +35,7 @@ const CRUMB_COLORS: [Color32; 5] = [
     Color32::from_rgb(0x8e, 0x24, 0xaa),
     Color32::from_rgb(0x55, 0x2b, 0xc4),
 ];
+const TITLE_FILL: Color32 = Color32::from_rgb(246, 247, 249);
 const FRAME: Color32 = Color32::from_rgb(190, 190, 190);
 
 /// Ingrandimento che fa stare il foglio intero nello spazio `avail` (punti per millimetro).
@@ -138,22 +139,44 @@ pub fn draw(
         .iter()
         .filter_map(|(path, label)| Some((label.as_str(), (*path, *totals.get(path)?))))
         .collect();
-    if let Some(r) = sheet.title
-        && font(TITLE_PT) >= 4.0
-    {
-        let r = map(r);
-        let galley = painter.layout_job(title_job(&print.title, r.width() / scale, scale));
-        painter.with_clip_rect(r).galley(r.min, galley, INK);
+    if let Some(title) = sheet.title {
+        // Il titolo in un riquadro dagli angoli arrotondati, con un fondo appena grigio.
+        let r = map(title);
+        painter.rect(
+            r,
+            mm(1.8),
+            TITLE_FILL,
+            Stroke::new(mm(0.35).max(1.0), INK_SOFT),
+            StrokeKind::Inside,
+        );
+        if font(print.title_text) >= 4.0 {
+            let inner = (title.w - 2.0 * TITLE_PAD_X) as f32;
+            let galley = painter.layout_job(title_job(&print.title, print.title_text, inner, scale));
+            painter.with_clip_rect(r).galley(
+                r.min + Vec2::new(mm(TITLE_PAD_X), mm(TITLE_PAD_Y)),
+                galley,
+                INK,
+            );
+        }
     }
     for header in &sheet.headers {
         let folder = folders.get(header.folder.as_str());
         let r = map(header.rect);
-        let title = Rect::from_min_size(r.min, Vec2::new(r.width(), mm(print.header)));
+        let note_h = header.note.map_or(0.0, |n| n.h);
+        let title = Rect::from_min_size(r.min, Vec2::new(r.width(), mm(header.rect.h - note_h)));
         let custom = folder
             .and_then(|f| project.folder_titles.get(f.0))
             .map(|t| t.trim())
             .filter(|t| !t.is_empty());
-        draw_header(&painter, title, header, custom, folder.map(|f| &f.1), scale);
+        draw_header(
+            &painter,
+            title,
+            header,
+            custom,
+            folder.map(|f| &f.1),
+            font(print.header_text),
+            scale,
+        );
         if let Some(note) = header.note
             && font(print.note_text) >= 4.0
             && let Some(text) = folder.and_then(|f| project.folder_notes.get(f.0))
@@ -311,10 +334,10 @@ fn draw_header(
     header: &Header,
     custom: Option<&str>,
     totals: Option<&Totals>,
+    px: f32,
     scale: f32,
 ) {
     let mm = |v: f32| v * scale;
-    let px = mm(3.2);
     if px < 4.0 {
         painter.line_segment(
             [title.left_center(), title.right_center()],
@@ -323,7 +346,7 @@ fn draw_header(
         return;
     }
     let cy = title.center().y;
-    let pad = Vec2::new(mm(1.6), mm(0.7));
+    let pad = Vec2::new(px * 0.5, px * 0.22);
     let mut x = title.left();
     // Un'intestazione scelta dall'utente è un'unica etichetta; altrimenti una per cartella.
     let crumbs: Vec<&str> = match custom {

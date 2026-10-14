@@ -553,6 +553,9 @@ impl WinFilesApp {
                     .hint_text("Per esempio: Cliente Rossi, ordine 124"),
             );
             ui.add_space(8.0);
+            dim_label(ui, "Testo del titolo");
+            ui.add(text_slider(&mut print.title_text, MIN_TITLE_PT..=MAX_TITLE_PT));
+            ui.add_space(8.0);
             dim_label(ui, "Colonne");
             // Il cursore occupa la larghezza del pannello, lasciando posto al numero.
             ui.spacing_mut().slider_width = (ui.available_width() - 64.0).max(60.0);
@@ -563,6 +566,9 @@ impl WinFilesApp {
                 &mut print.caption_text,
                 MIN_CAPTION_PT..=MAX_CAPTION_PT,
             ));
+            ui.add_space(8.0);
+            dim_label(ui, "Testo delle intestazioni");
+            ui.add(text_slider(&mut print.header_text, MIN_HEADER_PT..=MAX_HEADER_PT));
             ui.add_space(8.0);
             dim_label(ui, "Testo delle note");
             ui.add(text_slider(&mut print.note_text, MIN_NOTE_PT..=MAX_NOTE_PT));
@@ -579,9 +585,7 @@ impl WinFilesApp {
                     ui.end_row();
                     dim_label(ui, "Spazio tra miniature");
                     mm(ui, &mut print.gap, 20.0);
-                    ui.end_row();
-                    dim_label(ui, "Intestazione cartella");
-                    mm(ui, &mut print.header, 30.0);
+
                     ui.end_row();
                 });
             ui.add_space(6.0);
@@ -620,6 +624,11 @@ pub(crate) const MIN_CAPTION_PT: f64 = 4.0;
 pub(crate) const MAX_CAPTION_PT: f64 = 16.0;
 /// Corpo minimo e massimo del testo delle note, in punti (come gli 8-40 px della 4.9).
 pub(crate) const MIN_NOTE_PT: f64 = 6.0;
+/// Corpo minimo e massimo delle intestazioni di cartella e del titolo, in punti.
+pub(crate) const MIN_HEADER_PT: f64 = 6.0;
+pub(crate) const MAX_HEADER_PT: f64 = 24.0;
+pub(crate) const MIN_TITLE_PT: f64 = 8.0;
+pub(crate) const MAX_TITLE_PT: f64 = 40.0;
 pub(crate) const MAX_NOTE_PT: f64 = 30.0;
 
 /// Un cursore per il corpo di un testo, in punti tipografici con la virgola decimale.

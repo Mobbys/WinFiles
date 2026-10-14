@@ -786,13 +786,15 @@ impl eframe::App for WinFilesApp {
         self.thumbs.receive(ui.ctx());
 
         self.slots = captions::slots(&self.project);
-        let print = &self.project.print;
+        // L'altezza delle intestazioni segue il corpo del loro testo.
+        let mut print = self.project.print.clone();
+        print.header = captions::header_height(print.header_text);
         let width = winfiles_geom::sheet_size(print.paper, print.orientation).w
             - print.margins.left
             - print.margins.right;
-        let title = captions::title_height(ui.ctx(), &print.title, width);
+        let title = captions::title_height(ui.ctx(), &print.title, print.title_text, width);
         let sheets = grid_with_title(
-            print,
+            &print,
             &captions::items(ui.ctx(), &self.project, &self.slots),
             title,
         );

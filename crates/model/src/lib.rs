@@ -183,6 +183,10 @@ pub struct PrintSettings {
     pub caption_text: f64,
     /// Corpo del testo delle note di file e cartelle, in punti tipografici.
     pub note_text: f64,
+    /// Corpo del testo delle intestazioni di cartella, in punti.
+    pub header_text: f64,
+    /// Corpo del titolo in cima ai fogli, in punti.
+    pub title_text: f64,
     /// Altezza dell'intestazione di cartella, in mm.
     pub header: f64,
     /// Ogni cartella inizia su un foglio nuovo.
@@ -201,6 +205,8 @@ impl Default for PrintSettings {
             gap: 4.0,
             caption_text: 7.0,
             note_text: 8.0,
+            header_text: 9.0,
+            title_text: 14.0,
             header: 10.0,
             page_break_per_folder: false,
             title: String::new(),
