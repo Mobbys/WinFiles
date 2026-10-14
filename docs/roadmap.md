@@ -25,6 +25,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Pannelli agganciabili con `craft-ui` e tema "Medio scuro" di VectorCraft (font Inter, icone Lucide)
 - [x] Misure dei file: pixel e DPI delle immagini, pagine, formato e TrimBox di PDF e AI, BoundingBox degli EPS ([ADR 0005](adr/0005-misure-dei-file.md))
 - [x] Misure in mm o cm e m² per file, cartella e totale
+- [x] Miniature vere di immagini, PDF/AI ed EPS con anteprima; tema scuro, chiaro e automatico con test del contrasto ([ADR 0006](adr/0006-miniature-e-temi.md))
 - [ ] Prototipo rendering PDF/AI con `hayro`, misura dei tempi sul corpus
 - [ ] Prototipo EPS con il crate di VectorCraft
 - [ ] Prototipo stampa con `craft-print` e pagina di calibrazione

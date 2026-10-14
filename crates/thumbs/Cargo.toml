@@ -1,0 +1,17 @@
+[package]
+name = "winfiles-thumbs"
+description = "Miniature di immagini, PDF, AI ed EPS per l'anteprima."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+winfiles-model.workspace = true
+thiserror.workspace = true
+image.workspace = true
+hayro.workspace = true
+
+[lints]
+workspace = true

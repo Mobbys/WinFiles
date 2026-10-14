@@ -2,15 +2,17 @@
 
 use std::path::Path;
 
-use egui::{Rect, Sense, Vec2, pos2, vec2};
+use egui::text::{LayoutJob, TextFormat, TextWrapping};
+use egui::{Color32, Rect, Sense, Vec2, pos2, vec2};
 use winfiles_geom::{Margins, Size, Unit, format_area, format_length, format_number, format_size};
 use winfiles_model::{FileEntry, FileKind, Totals};
 
 use crate::app::{WinFilesApp, dim_label};
 use crate::icons;
-use crate::theme::{TOKENS, semibold};
+use crate::theme::{Tokens, semibold};
+use crate::thumbs::ThumbState;
 
-const ROW: f32 = 22.0;
+const ROW: f32 = 38.0;
 
 enum Row<'a> {
     Folder(&'a Path, String, Totals),
@@ -30,15 +32,6 @@ fn folder_name(p: &Path) -> String {
         .unwrap_or_else(|| p.display().to_string())
 }
 
-/// La misura breve di un file per l'elenco: formato finito della prima pagina.
-fn short_size(f: &FileEntry, unit: Unit, error: bool) -> String {
-    match f.pages.first() {
-        Some(p) => format_size(p.finished(), unit),
-        None if error => "illeggibile".into(),
-        None => "…".into(),
-    }
-}
-
 fn kind_icon(kind: FileKind) -> &'static str {
     match kind {
         FileKind::Image => "image",
@@ -46,34 +39,64 @@ fn kind_icon(kind: FileKind) -> &'static str {
     }
 }
 
-/// Testo a sinistra e a destra in una riga, con il sinistro tagliato se non c'è posto.
-fn row_text(
+/// Due righe: il nome sopra, le misure sotto, tagliati con "…" se non c'è posto.
+fn two_lines(
     ui: &egui::Ui,
     rect: Rect,
-    left: &str,
-    left_font: egui::FontId,
-    left_color: egui::Color32,
-    right: &str,
-    right_color: egui::Color32,
+    top: &str,
+    top_font: egui::FontId,
+    top_color: Color32,
+    bottom: &str,
+    bottom_color: Color32,
 ) {
     let p = ui.painter();
-    let right_galley = p.layout_no_wrap(right.to_string(), egui::FontId::proportional(11.5), right_color);
-    let right_w = right_galley.size().x;
-    p.galley(
-        pos2(
-            rect.right() - right_w,
-            rect.center().y - right_galley.size().y / 2.0,
-        ),
-        right_galley,
-        right_color,
+    let width = (rect.width() - 8.0).max(1.0);
+    let line = |text: &str, font: egui::FontId, color: Color32| {
+        let mut job = LayoutJob::single_section(
+            text.to_string(),
+            TextFormat {
+                font_id: font,
+                color,
+                ..Default::default()
+            },
+        );
+        job.wrap = TextWrapping {
+            max_width: width,
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('…'),
+        };
+        p.layout_job(job)
+    };
+    let a = line(top, top_font, top_color);
+    let b = line(bottom, egui::FontId::proportional(11.5), bottom_color);
+    let total = a.size().y + b.size().y;
+    let y = rect.center().y - total / 2.0;
+    p.galley(pos2(rect.left(), y), a.clone(), top_color);
+    p.galley(pos2(rect.left(), y + a.size().y), b, bottom_color);
+}
+
+/// Le misure di un file per l'elenco: formato finito, m² e pagine.
+fn file_info(f: &FileEntry, unit: Unit, error: bool, assumed: bool) -> String {
+    let Some(first) = f.pages.first() else {
+        return if error {
+            "misure non leggibili".into()
+        } else {
+            "lettura delle misure…".into()
+        };
+    };
+    let mut out = format!(
+        "{}  ·  {}",
+        format_size(first.finished(), unit),
+        format_area(f.area_m2())
     );
-    let clip = Rect::from_min_max(rect.min, pos2(rect.right() - right_w - 8.0, rect.bottom()));
-    let galley = p.layout_no_wrap(left.to_string(), left_font, left_color);
-    p.with_clip_rect(clip).galley(
-        pos2(rect.left(), rect.center().y - galley.size().y / 2.0),
-        galley,
-        left_color,
-    );
+    if f.pages.len() > 1 {
+        out.push_str(&format!("  ·  {} pagine", f.pages.len()));
+    }
+    if assumed {
+        out.push_str("  ·  96 DPI presunti");
+    }
+    out
 }
 
 /// Una riga etichetta/valore nelle proprietà.
@@ -88,14 +111,14 @@ fn section(ui: &mut egui::Ui, title: &str) {
     ui.label(
         egui::RichText::new(title)
             .font(semibold(12.5))
-            .color(TOKENS.text_strong),
+            .color(Tokens::get(ui.ctx()).text_strong),
     );
     ui.add_space(2.0);
 }
 
 impl WinFilesApp {
     pub(crate) fn files_panel(&mut self, ui: &mut egui::Ui) {
-        let t = TOKENS;
+        let t = Tokens::get(ui.ctx());
         if self.project.files.is_empty() {
             dim_label(ui, "Nessun file. Trascina file o cartelle nella finestra.");
             return;
@@ -127,24 +150,29 @@ impl WinFilesApp {
                         ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
                     match row {
                         Row::Folder(path, label, tot) => {
-                            ui.painter().rect_filled(rect, 0.0, t.panel_darker);
-                            icons::paint(
-                                ui,
-                                "folder-open",
-                                Rect::from_center_size(
-                                    rect.left_center() + vec2(10.0, 0.0),
-                                    Vec2::splat(14.0),
-                                ),
-                                t.icon,
+                            ui.painter()
+                                .rect_filled(rect.shrink2(vec2(0.0, 1.0)), t.radius, t.panel_darker);
+                            let icon = Rect::from_center_size(
+                                rect.left_center() + vec2(12.0, 0.0),
+                                Vec2::splat(16.0),
                             );
-                            let right = format!("{} file · {}", tot.files, format_area(tot.area_m2));
-                            row_text(
+                            icons::paint(ui, "folder-open", icon, t.icon);
+                            let mut info = format!("{} file · {}", tot.files, format_area(tot.area_m2));
+                            if tot.pages > tot.files {
+                                info = format!(
+                                    "{} file · {} pagine · {}",
+                                    tot.files,
+                                    tot.pages,
+                                    format_area(tot.area_m2)
+                                );
+                            }
+                            two_lines(
                                 ui,
-                                rect.with_min_x(rect.left() + 22.0).with_max_x(rect.right() - 4.0),
+                                rect.with_min_x(rect.left() + 26.0),
                                 label,
-                                semibold(12.0),
+                                semibold(12.5),
                                 t.text_strong,
-                                &right,
+                                &info,
                                 t.text_dim,
                             );
                             resp.on_hover_text(path.display().to_string());
@@ -155,45 +183,44 @@ impl WinFilesApp {
                             };
                             let selected = self.selected == Some(*i);
                             if selected {
-                                ui.painter().rect_filled(rect, 0.0, t.row_selected);
+                                ui.painter().rect_filled(rect, t.radius, t.row_selected);
                             } else if resp.hovered() {
-                                ui.painter().rect_filled(rect, 0.0, t.hover.gamma_multiply(0.5));
+                                ui.painter().rect_filled(rect, t.radius, t.hover);
                             }
                             let error = self.errors.get(&f.path);
                             let tint = if error.is_some() { t.warning } else { t.icon };
-                            icons::paint(
-                                ui,
-                                kind_icon(f.kind),
-                                Rect::from_center_size(
-                                    rect.left_center() + vec2(24.0, 0.0),
-                                    Vec2::splat(13.0),
-                                ),
-                                tint,
+                            let icon = Rect::from_center_size(
+                                rect.left_center() + vec2(26.0, 0.0),
+                                Vec2::splat(15.0),
                             );
+                            icons::paint(ui, kind_icon(f.kind), icon, tint);
                             let mut name = file_name(f);
                             if !f.note.is_empty() {
                                 name.push_str("  ✎");
                             }
-                            let color = if selected { t.text_strong } else { t.text };
                             // Misure calcolate con la risoluzione presunta: in arancione, da verificare.
                             let assumed = f.image.is_some_and(|i| !i.dpi_from_file);
-                            let size_color = if assumed || error.is_some() {
+                            let info_color = if (assumed || error.is_some()) && !selected {
                                 t.warning
+                            } else if selected {
+                                t.text_strong
                             } else {
                                 t.text_dim
                             };
-                            row_text(
+                            let name_color = if selected { t.text_strong } else { t.text };
+                            let info = file_info(f, unit, error.is_some(), assumed);
+                            two_lines(
                                 ui,
-                                rect.with_min_x(rect.left() + 36.0).with_max_x(rect.right() - 4.0),
+                                rect.with_min_x(rect.left() + 42.0),
                                 &name,
-                                egui::FontId::proportional(12.0),
-                                color,
-                                &short_size(f, unit, error.is_some()),
-                                size_color,
+                                egui::FontId::proportional(12.5),
+                                name_color,
+                                &info,
+                                info_color,
                             );
                             let resp = match error {
                                 Some(e) => resp.on_hover_text(e.as_str()),
-                                None => resp,
+                                None => resp.on_hover_text(f.path.display().to_string()),
                             };
                             if resp.clicked() {
                                 clicked = Some(*i);
@@ -216,20 +243,45 @@ impl WinFilesApp {
         ui.label(
             egui::RichText::new(file_name(f))
                 .font(semibold(13.0))
-                .color(TOKENS.text_strong),
+                .color(Tokens::get(ui.ctx()).text_strong),
         );
         ui.label(
             egui::RichText::new(f.folder().display().to_string())
                 .size(11.0)
-                .color(TOKENS.text_dim),
+                .color(Tokens::get(ui.ctx()).text_dim),
         );
         ui.add_space(4.0);
+        let thumbs = &mut self.thumbs;
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            // L'anteprima grande del file scelto.
+            let t = Tokens::get(ui.ctx());
+            let box_size = vec2(ui.available_width(), 170.0);
+            let (area, _) = ui.allocate_exact_size(box_size, Sense::hover());
+            ui.painter().rect_filled(area, t.radius, t.pasteboard);
+            match thumbs.get(&f.path, f.kind) {
+                ThumbState::Ready(tex) => {
+                    let size = tex.size_vec2();
+                    let k = ((area.width() - 16.0) / size.x).min((area.height() - 16.0) / size.y).min(1.0);
+                    let r = Rect::from_center_size(area.center(), size * k);
+                    ui.painter().image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                }
+                ThumbState::Loading => {
+                    ui.painter().text(area.center(), egui::Align2::CENTER_CENTER, "Preparo l'anteprima…", egui::FontId::proportional(12.0), t.text);
+                }
+                ThumbState::Failed(e) => {
+                    let mut job = LayoutJob::single_section(format!("Anteprima non disponibile: {e}"), TextFormat { font_id: egui::FontId::proportional(12.0), color: t.text, ..Default::default() });
+                    job.wrap.max_width = area.width() - 24.0;
+                    job.halign = egui::Align::Center;
+                    let g = ui.painter().layout_job(job);
+                    ui.painter().galley(pos2(area.center().x, area.center().y - g.size().y / 2.0), g, t.text);
+                }
+            }
+            ui.add_space(6.0);
             egui::Grid::new("proprieta").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                 prop(ui, "Tipo", f.kind.label());
                 if let Some(e) = self.errors.get(&f.path) {
                     dim_label(ui, "Misure");
-                    ui.colored_label(TOKENS.warning, e.as_str());
+                    ui.colored_label(Tokens::get(ui.ctx()).warning, e.as_str());
                     ui.end_row();
                 }
                 if f.pages.is_empty() && !self.errors.contains_key(&f.path) {
@@ -263,7 +315,7 @@ impl WinFilesApp {
                         prop(ui, "Risoluzione", dpi);
                     } else {
                         dim_label(ui, "Risoluzione");
-                        ui.colored_label(TOKENS.warning, format!("{dpi} (non dichiarata)"))
+                        ui.colored_label(Tokens::get(ui.ctx()).warning, format!("{dpi} (non dichiarata)"))
                             .on_hover_text("Il file non dice la sua risoluzione: le misure in mm e m² usano 96 DPI, come la versione 4.9.");
                         ui.end_row();
                     }
@@ -295,26 +347,46 @@ impl WinFilesApp {
             return;
         }
         section(ui, "Riepilogo per cartella");
+        let t = Tokens::get(ui.ctx());
+        let labels = self.project.folder_labels();
+        let unit_info = |tot: &Totals| {
+            let pages = if tot.pages > tot.files {
+                format!(" · {} pagine", tot.pages)
+            } else {
+                String::new()
+            };
+            format!("{} file{pages} · {}", tot.files, format_area(tot.area_m2))
+        };
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            egui::Grid::new("riepilogo")
-                .num_columns(3)
-                .spacing([10.0, 5.0])
-                .striped(true)
-                .show(ui, |ui| {
-                    let labels = self.project.folder_labels();
-                    for (folder, tot) in self.project.folder_totals() {
-                        let label = labels.get(folder).cloned().unwrap_or_else(|| folder_name(folder));
-                        ui.label(label).on_hover_text(folder.display().to_string());
-                        ui.label(format!("{} file", tot.files));
-                        ui.label(format_area(tot.area_m2));
-                        ui.end_row();
-                    }
-                    let all = Totals::of(&self.project.files);
-                    ui.label(egui::RichText::new("Totale").font(semibold(12.5)));
-                    ui.label(egui::RichText::new(format!("{} file", all.files)).font(semibold(12.5)));
-                    ui.label(egui::RichText::new(format_area(all.area_m2)).font(semibold(12.5)));
-                    ui.end_row();
-                });
+            for (folder, tot) in self.project.folder_totals() {
+                let label = labels.get(folder).cloned().unwrap_or_else(|| folder_name(folder));
+                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
+                two_lines(
+                    ui,
+                    rect,
+                    &label,
+                    egui::FontId::proportional(12.5),
+                    t.text,
+                    &unit_info(&tot),
+                    t.text_dim,
+                );
+                resp.on_hover_text(folder.display().to_string());
+            }
+            let all = Totals::of(&self.project.files);
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
+            ui.painter().line_segment(
+                [rect.left_top(), rect.right_top()],
+                egui::Stroke::new(1.0, t.divider),
+            );
+            two_lines(
+                ui,
+                rect,
+                "Totale",
+                semibold(12.5),
+                t.text_strong,
+                &unit_info(&all),
+                t.text,
+            );
             ui.add_space(6.0);
             dim_label(
                 ui,

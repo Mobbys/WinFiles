@@ -13,7 +13,8 @@ use winfiles_model::{FileKind, Project, Totals};
 use crate::dock::{self, PanelId};
 use crate::icons;
 use crate::measure::Measurer;
-use crate::theme::{TOKENS, semibold};
+use crate::theme::{self, ThemeChoice, Tokens, semibold};
+use crate::thumbs::Thumbnails;
 use crate::{canvas, scan};
 
 /// Punti schermo per millimetro al 100% (egui lavora a 96 punti per pollice).
@@ -30,8 +31,11 @@ pub struct WinFilesApp {
     pub(crate) shown_zoom: f32,
     /// Errori di lettura per file.
     pub(crate) errors: HashMap<PathBuf, String>,
+    pub(crate) theme: ThemeChoice,
+    applied: Option<Tokens>,
     dock: Layout<PanelId>,
     measurer: Measurer,
+    pub(crate) thumbs: Thumbnails,
     status: String,
 }
 
@@ -68,6 +72,7 @@ fn items(project: &Project) -> Vec<Item> {
 impl WinFilesApp {
     pub fn new(ctx: &egui::Context, paths: Vec<PathBuf>) -> Self {
         let wake = ctx.clone();
+        let wake2 = ctx.clone();
         let mut app = Self {
             project: Project::new("Senza titolo"),
             selected: None,
@@ -75,8 +80,11 @@ impl WinFilesApp {
             zoom: None,
             shown_zoom: 1.0,
             errors: HashMap::new(),
+            theme: ThemeChoice::System,
+            applied: None,
             dock: dock::default_layout(),
             measurer: Measurer::start(move || wake.request_repaint()),
+            thumbs: Thumbnails::start(move || wake2.request_repaint()),
             status: String::new(),
         };
         if !paths.is_empty() {
@@ -110,6 +118,7 @@ impl WinFilesApp {
     fn clear(&mut self) {
         self.project.files.clear();
         self.errors.clear();
+        self.thumbs.clear();
         self.selected = None;
         self.sheet = 0;
         self.status = "Elenco svuotato".into();
@@ -138,6 +147,15 @@ impl WinFilesApp {
         }
     }
 
+    /// Applica il tema scelto (o quello di Windows) quando cambia.
+    fn sync_theme(&mut self, ctx: &egui::Context) {
+        let tokens = self.theme.resolve(ctx.system_theme());
+        if self.applied != Some(tokens) {
+            theme::apply(ctx, tokens);
+            self.applied = Some(tokens);
+        }
+    }
+
     fn apply_dock(&mut self, action: Action<PanelId>) {
         if let Err(e) = self.dock.apply_with_permissions(action, |p| p.permissions()) {
             self.status = format!("Pannelli: {e}");
@@ -158,7 +176,7 @@ impl WinFilesApp {
     }
 
     fn app_bar(&mut self, ui: &mut egui::Ui) {
-        let t = TOKENS;
+        let t = Tokens::get(ui.ctx());
         let frame = egui::Frame::NONE
             .fill(t.app_bar)
             .inner_margin(egui::Margin::symmetric(10, 0))
@@ -195,6 +213,14 @@ impl WinFilesApp {
                             if ui.button("Dimensioni reali (100%)").clicked() {
                                 self.zoom = Some(POINTS_PER_MM);
                                 ui.close();
+                            }
+                            ui.separator();
+                            for choice in ThemeChoice::ALL {
+                                let label = format!("Tema: {}", choice.label().to_lowercase());
+                                if ui.radio(self.theme == choice, label).clicked() {
+                                    self.theme = choice;
+                                    ui.close();
+                                }
                             }
                             ui.separator();
                             for unit in Unit::ALL {
@@ -240,7 +266,7 @@ impl WinFilesApp {
 
     /// La barra di controllo sotto i menu: le scelte di stampa che si cambiano più spesso.
     fn control_bar(&mut self, ui: &mut egui::Ui) {
-        let t = TOKENS;
+        let t = Tokens::get(ui.ctx());
         let frame = egui::Frame::NONE
             .fill(t.panel)
             .inner_margin(egui::Margin::symmetric(10, 0))
@@ -295,6 +321,18 @@ impl WinFilesApp {
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         segmented(
                             ui,
+                            "tema",
+                            &mut self.theme,
+                            &[
+                                (ThemeChoice::Light, "Chiaro"),
+                                (ThemeChoice::Dark, "Scuro"),
+                                (ThemeChoice::System, "Auto"),
+                            ],
+                        );
+                        dim_label(ui, "Tema");
+                        bar_divider(ui);
+                        segmented(
+                            ui,
                             "unita",
                             &mut self.project.unit,
                             &[(Unit::Cm, "cm"), (Unit::Mm, "mm")],
@@ -306,7 +344,7 @@ impl WinFilesApp {
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui, sheets: usize) {
-        let t = TOKENS;
+        let t = Tokens::get(ui.ctx());
         let frame = egui::Frame::NONE
             .fill(t.panel)
             .inner_margin(egui::Margin::symmetric(8, 0))
@@ -431,7 +469,7 @@ impl WinFilesApp {
         sheets: &Result<Vec<Sheet>, LayoutError>,
         title: &str,
     ) {
-        let t = TOKENS;
+        let t = Tokens::get(ui.ctx());
         doc_tab(ui, title);
         let rect = ui.available_rect_before_wrap();
         ui.painter().rect_filled(rect, 0.0, t.pasteboard);
@@ -460,7 +498,7 @@ impl WinFilesApp {
         let out = egui::ScrollArea::both()
             .auto_shrink(false)
             .show(ui, |ui| {
-                canvas::draw(ui, sheet, &self.project, self.selected, scale)
+                canvas::draw(ui, sheet, &self.project, &mut self.thumbs, self.selected, scale)
             })
             .inner;
         if let Some(id) = out.clicked {
@@ -474,7 +512,7 @@ impl WinFilesApp {
 
 /// La linguetta del documento sopra l'anteprima, come in VectorCraft.
 fn doc_tab(ui: &mut egui::Ui, title: &str) {
-    let t = TOKENS;
+    let t = Tokens::get(ui.ctx());
     let (strip, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
     ui.painter().rect_filled(strip, 0.0, t.tab_strip);
     ui.painter().line_segment(
@@ -498,7 +536,7 @@ fn doc_tab(ui: &mut egui::Ui, title: &str) {
 
 /// Avviso al centro dell'anteprima vuota.
 fn empty_hint(ui: &egui::Ui, rect: Rect) {
-    let t = TOKENS;
+    let t = Tokens::get(ui.ctx());
     let c = rect.center();
     icons::paint(
         ui,
@@ -524,13 +562,13 @@ fn empty_hint(ui: &egui::Ui, rect: Rect) {
 }
 
 pub(crate) fn dim_label(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text).color(TOKENS.text_dim));
+    ui.label(egui::RichText::new(text).color(Tokens::get(ui.ctx()).text_dim));
 }
 
 fn bar_divider(ui: &mut egui::Ui) {
     ui.add_space(4.0);
     let (r, _) = ui.allocate_exact_size(vec2(1.0, 18.0), Sense::hover());
-    ui.painter().rect_filled(r, 0.0, TOKENS.divider);
+    ui.painter().rect_filled(r, 0.0, Tokens::get(ui.ctx()).divider);
     ui.add_space(4.0);
 }
 
@@ -541,7 +579,7 @@ pub(crate) fn segmented<T: PartialEq + Copy>(
     value: &mut T,
     options: &[(T, &str)],
 ) {
-    let t = TOKENS;
+    let t = Tokens::get(ui.ctx());
     let font = egui::FontId::proportional(12.0);
     let widths: Vec<f32> = options
         .iter()
@@ -627,7 +665,9 @@ impl eframe::App for WinFilesApp {
         if !dropped.is_empty() {
             self.add_paths(dropped);
         }
+        self.sync_theme(ui.ctx());
         self.receive_measures();
+        self.thumbs.receive(ui.ctx());
 
         let sheets = grid(&self.project.print, &items(&self.project));
         let count = sheets.as_ref().map_or(0, Vec::len);
@@ -635,7 +675,7 @@ impl eframe::App for WinFilesApp {
         self.control_bar(ui);
         self.status_bar(ui, count);
         let title = self.canvas_title(count);
-        let frame = egui::Frame::NONE.fill(TOKENS.border);
+        let frame = egui::Frame::NONE.fill(Tokens::get(ui.ctx()).border);
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             let layout = self.dock.clone();
             let style = dock::style(ui);

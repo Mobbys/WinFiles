@@ -13,6 +13,7 @@ mod measure;
 mod panels;
 mod scan;
 mod theme;
+mod thumbs;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -31,7 +32,6 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             theme::install_fonts(&cc.egui_ctx);
-            theme::apply(&cc.egui_ctx);
             egui_extras::install_image_loaders(&cc.egui_ctx);
             Ok(Box::new(app::WinFilesApp::new(&cc.egui_ctx, paths)))
         }),

@@ -20,6 +20,7 @@ winfiles-geom.workspace = true
 winfiles-model.workspace = true
 winfiles-layout.workspace = true
 winfiles-formats.workspace = true
+winfiles-thumbs.workspace = true
 eframe.workspace = true
 egui.workspace = true
 egui_extras.workspace = true

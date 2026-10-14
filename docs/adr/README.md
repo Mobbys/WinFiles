@@ -10,3 +10,4 @@ Una decisione si cambia con un nuovo ADR che sostituisce il precedente, mai risc
 | [0003](0003-layout-in-millimetri.md) | Un solo layout in millimetri per anteprima, PDF e stampa | Accettata |
 | [0004](0004-repository-separato.md) | Repository separato da WinFile 4.9 | Accettata |
 | [0005](0005-misure-dei-file.md) | Misure dei file dalle intestazioni, aree al formato finito | Accettata |
+| [0006](0006-miniature-e-temi.md) | Miniature per l'anteprima, temi con contrasto verificato | Accettata |

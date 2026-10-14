@@ -5,7 +5,7 @@
 use craft_ui::docking::{DockStyle, Layout, Node, Permissions, Placement, Zone};
 use craft_ui::layout::{SplitAxis, SplitSize};
 
-use crate::theme::{TOKENS, semibold};
+use crate::theme::{Tokens, semibold};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PanelId {
@@ -83,7 +83,7 @@ pub fn default_layout() -> Layout<PanelId> {
 
 /// Lo stile delle linguette e dei bordi, con le etichette dei comandi in italiano.
 pub fn style(ui: &egui::Ui) -> DockStyle {
-    let t = TOKENS;
+    let t = Tokens::get(ui.ctx());
     let mut style = DockStyle::from_ui(ui);
     style.tab_height = 30.0;
     style.gap = 2.0;

@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use craft_ui::icons::{SvgIconSet, SvgStyle};
 use egui::{Color32, Rect, Response, Sense, Ui, Vec2};
 
-use crate::theme::TOKENS;
+use crate::theme::Tokens;
 
 macro_rules! icons {
     ($($name:literal),* $(,)?) => {
@@ -66,7 +66,7 @@ pub fn button(ui: &mut Ui, name: &str, tip: &str, selected: bool, enabled: bool,
         Vec2::splat(size),
         if enabled { Sense::click() } else { Sense::hover() },
     );
-    let t = TOKENS;
+    let t = Tokens::get(ui.ctx());
     if selected {
         ui.painter().rect_filled(rect, t.radius, t.pressed);
     } else if enabled && resp.hovered() {
