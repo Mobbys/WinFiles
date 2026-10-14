@@ -22,8 +22,8 @@ pub const CAPTION_PAD: f64 = 1.0;
 pub const NOTE_GAP: f64 = 0.8;
 /// Rientro della nota della cartella dai bordi, in mm.
 pub const FOLDER_NOTE_INSET: f64 = 2.0;
-/// Pixel per millimetro con cui si misurano i testi: abbastanza da non arrotondare i caratteri.
-const MEASURE_PX_PER_MM: f64 = 10.0;
+/// Pixel per millimetro con cui si misurano i testi: gli stessi con cui si compone la scena.
+const MEASURE_PX_PER_MM: f64 = crate::sketch::PX_PER_MM as f64;
 
 /// Colori che distinguono i file con più pagine: la stessa etichetta "Pag. 2/4" ha lo stesso
 /// colore in tutte le pagine dello stesso file. Sono colori di stampa, scuri abbastanza da

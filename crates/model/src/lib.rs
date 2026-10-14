@@ -35,7 +35,7 @@ pub enum ModelError {
 }
 
 /// Tipo di file riconosciuto.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FileKind {
     Image,
     Pdf,

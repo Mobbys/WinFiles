@@ -54,6 +54,20 @@ pub struct WinFilesApp {
     pub(crate) recent: Vec<PathBuf>,
     /// Ricerche di file in corso.
     scans: Vec<scan::Scan>,
+    /// L'esportazione in PDF in corso.
+    export: Option<crate::export::Export>,
+    /// Esportare al prossimo fotogramma, quando i fogli sono pronti.
+    want_export: bool,
+    /// La rotella sull'anteprima: il foglio era già al bordo alto/basso nel fotogramma prima, e
+    /// quando ha cambiato foglio l'ultima volta.
+    wheel_edges: (bool, bool),
+    last_flip: f64,
+    /// Dove portare lo scorrimento del foglio appena cambiato con la rotella.
+    flip_to: Option<f32>,
+    /// `--pdf` sulla riga di comando: esportare qui appena i file sono letti, poi chiudere.
+    batch_pdf: Option<PathBuf>,
+    /// L'esportazione in corso è quella di `--pdf`.
+    batch_running: bool,
     /// Per svegliare l'interfaccia dai thread.
     ctx: egui::Context,
     /// Il file del lavoro, se è stato salvato o aperto.
@@ -69,7 +83,7 @@ pub struct WinFilesApp {
 }
 
 impl WinFilesApp {
-    pub fn new(ctx: &egui::Context, paths: Vec<PathBuf>) -> Self {
+    pub fn new(ctx: &egui::Context, paths: Vec<PathBuf>, batch_pdf: Option<PathBuf>) -> Self {
         let wake = ctx.clone();
         let wake2 = ctx.clone();
         let mut app = Self {
@@ -96,6 +110,13 @@ impl WinFilesApp {
             renaming: None,
             status: String::new(),
             scans: Vec::new(),
+            export: None,
+            want_export: false,
+            batch_pdf,
+            batch_running: false,
+            wheel_edges: (true, true),
+            last_flip: 0.0,
+            flip_to: None,
             recent: crate::recent::load(),
             ctx: ctx.clone(),
         };
@@ -110,6 +131,87 @@ impl WinFilesApp {
             app.add_paths(files);
         }
         app
+    }
+
+    /// Chiede dove salvare e scrive tutti i fogli in un PDF, in un thread a parte; la fine arriva
+    /// con [`Self::receive_export`].
+    fn export_pdf(&mut self, ctx: &egui::Context, sheets: &Pages, to: Option<PathBuf>) {
+        if self.export.is_some() {
+            return;
+        }
+        if self.project.files.is_empty() {
+            self.status = "Non ci sono file da esportare".into();
+            return;
+        }
+        // Con file ancora da misurare il PDF avrebbe miniature provvisorie.
+        if !self.scans.is_empty() || self.measurer.pending() > 0 {
+            self.status = "Aspetta che finisca la lettura dei file, poi esporta".into();
+            return;
+        }
+        let sheets = match sheets {
+            Ok(s) => s,
+            Err(e) => {
+                self.status = format!("Non riesco a impaginare: {e}");
+                return;
+            }
+        };
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter("PDF", &["pdf"])
+            .set_title("Esporta i fogli in PDF")
+            .set_file_name(format!("{}.pdf", self.document_name()));
+        if let Some(dir) = self.path.as_deref().and_then(std::path::Path::parent) {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(mut path) = to.or_else(|| dialog.save_file()) else {
+            return;
+        };
+        if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+            path.as_mut_os_string().push(".pdf");
+        }
+        let mut pages = Vec::with_capacity(sheets.len());
+        if let Some(summary) = &sheets.summary {
+            pages.extend(
+                summary
+                    .sheets
+                    .iter()
+                    .map(|s| crate::summary::compose(ctx, s, summary, &self.project)),
+            );
+        }
+        pages.extend(
+            sheets
+                .grid
+                .iter()
+                .map(|s| canvas::compose(ctx, s, &self.project, &self.slots)),
+        );
+        let wake = self.ctx.clone();
+        match crate::export::Export::start(pages, path, move || wake.request_repaint()) {
+            Ok(job) => self.export = Some(job),
+            Err(e) => self.status = format!("Non riesco a esportare: {e}"),
+        }
+    }
+
+    /// A esportazione finita: il messaggio nella barra di stato e il PDF aperto.
+    fn receive_export(&mut self) {
+        let Some(job) = &self.export else {
+            return;
+        };
+        let Some(result) = job.poll() else {
+            return;
+        };
+        self.status = crate::export::outcome(&job.path, &result);
+        if self.batch_running {
+            eprintln!("{}", self.status);
+            self.export = None;
+            self.closing = true;
+            self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        if result.is_ok()
+            && let Err(e) = crate::shell::open(&job.path)
+        {
+            self.status = format!("{}; non riesco ad aprirlo: {e}", self.status);
+        }
+        self.export = None;
     }
 
     /// Cerca i file nei percorsi dati in un thread a parte; arrivano con [`Self::receive_scans`].
@@ -199,6 +301,8 @@ impl WinFilesApp {
             self.save(true);
         } else if pressed(Modifiers::COMMAND, Key::S) {
             self.save(false);
+        } else if pressed(Modifiers::COMMAND, Key::E) {
+            self.want_export = true;
         } else if pressed(Modifiers::COMMAND, Key::O) {
             self.guard(ctx, Then::Open(None));
         } else if pressed(Modifiers::COMMAND, Key::N) {
@@ -382,6 +486,18 @@ impl WinFilesApp {
                                 self.save(true);
                             }
                             ui.separator();
+                            let can_export = !self.project.files.is_empty() && self.export.is_none();
+                            if ui
+                                .add_enabled(
+                                    can_export,
+                                    egui::Button::new("Esporta PDF…").shortcut_text("Ctrl+E"),
+                                )
+                                .clicked()
+                            {
+                                ui.close();
+                                self.want_export = true;
+                            }
+                            ui.separator();
                             if ui
                                 .add_enabled(
                                     !self.project.files.is_empty(),
@@ -507,6 +623,22 @@ impl WinFilesApp {
                         &mut print.page_break_per_folder,
                         "Ogni cartella su un foglio nuovo",
                     );
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        let enabled = !self.project.files.is_empty() && self.export.is_none();
+                        let tint = if enabled { t.text_strong } else { t.text_disabled };
+                        let button = egui::Button::image_and_text(
+                            icons::image("file-down", 17.0, tint),
+                            egui::RichText::new("Esporta PDF").color(tint),
+                        )
+                        .min_size(vec2(0.0, 32.0));
+                        if ui
+                            .add_enabled(enabled, button)
+                            .on_hover_text("Salva tutti i fogli in un PDF, alla misura vera (Ctrl+E)")
+                            .clicked()
+                        {
+                            self.want_export = true;
+                        }
+                    });
                 });
             });
     }
@@ -532,7 +664,14 @@ impl WinFilesApp {
                     ui.label(egui::RichText::new(text).font(semibold(12.5)).color(t.text));
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         let pending = self.measurer.pending();
-                        if !self.scans.is_empty() {
+                        if let Some(job) = &self.export {
+                            if ui.button("Annulla").clicked() {
+                                job.cancel();
+                            }
+                            let text = format!("Esporto il PDF… foglio {} di {}", job.done(), job.total);
+                            ui.label(egui::RichText::new(text).size(12.0));
+                            ui.add(egui::Spinner::new().size(13.0).color(t.accent));
+                        } else if !self.scans.is_empty() {
                             let found: usize = self.scans.iter().map(scan::Scan::found).sum();
                             if ui.button("Annulla").clicked() {
                                 for s in &self.scans {
@@ -681,13 +820,13 @@ impl WinFilesApp {
                 .zoom
                 .unwrap_or_else(|| canvas::fit_zoom(sheet.size, board.size()));
             self.shown_zoom = scale;
-            let clicked = egui::ScrollArea::both()
-                .auto_shrink(false)
-                .show(ui, |ui| {
-                    crate::summary::draw(ui, sheet, summary, &self.project, &self.marked, scale)
-                })
-                .inner;
-            if let Some(file) = clicked {
+            let scene = crate::summary::compose(ui.ctx(), sheet, summary, &self.project);
+            let flip_to = self.flip_to.take();
+            let scrolled = scroll_area(flip_to).show(ui, |ui| {
+                crate::summary::draw(ui, sheet, &scene, summary, &mut self.thumbs, &self.marked, scale)
+            });
+            self.wheel(ui, board, count, &scrolled);
+            if let Some(file) = scrolled.inner {
                 let mods = ui.input(|i| i.modifiers);
                 self.pick(file, mods);
             }
@@ -700,23 +839,24 @@ impl WinFilesApp {
             .zoom
             .unwrap_or_else(|| canvas::fit_zoom(sheet.size, board.size()));
         self.shown_zoom = scale;
-        let out = egui::ScrollArea::both()
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                canvas::draw(
-                    ui,
-                    sheet,
-                    &self.project,
-                    &self.slots,
-                    &mut self.thumbs,
-                    canvas::Selection {
-                        marked: &self.marked,
-                        focus: self.selected.map(|f| (f, self.selected_page)),
-                    },
-                    scale,
-                )
-            })
-            .inner;
+        let scene = canvas::compose(ui.ctx(), sheet, &self.project, &self.slots);
+        let flip_to = self.flip_to.take();
+        let scrolled = scroll_area(flip_to).show(ui, |ui| {
+            canvas::draw(
+                ui,
+                sheet,
+                &scene,
+                &self.slots,
+                &mut self.thumbs,
+                canvas::Selection {
+                    marked: &self.marked,
+                    focus: self.selected.map(|f| (f, self.selected_page)),
+                },
+                scale,
+            )
+        });
+        self.wheel(ui, board, count, &scrolled);
+        let out = scrolled.inner;
         if let Some((file, page)) = out.clicked {
             let mods = ui.input(|i| i.modifiers);
             self.pick(file, mods);
@@ -725,6 +865,63 @@ impl WinFilesApp {
         if let Some(by) = out.zoom_by {
             self.zoom = Some((scale * by).clamp(canvas::MIN_ZOOM, canvas::MAX_ZOOM));
         }
+    }
+}
+
+impl WinFilesApp {
+    /// La rotella sull'anteprima scorre il foglio e, arrivati al bordo, passa al foglio dopo o a
+    /// quello prima. Serve una girata di rotella in più quando si arriva al bordo, così chi
+    /// scorre un foglio ingrandito non salta al successivo senza volerlo.
+    fn wheel<R>(
+        &mut self,
+        ui: &egui::Ui,
+        board: Rect,
+        count: usize,
+        out: &egui::scroll_area::ScrollAreaOutput<R>,
+    ) {
+        let (offset, view, content) = (out.state.offset.y, out.inner_rect.height(), out.content_size.y);
+        // Qualche punto di tolleranza: il foglio intero sporge appena dalla finestra (l'ombra e il
+        // margine), e quei pochi punti non devono costare una girata di rotella.
+        const SLACK: f32 = 16.0;
+        let edges = (offset <= SLACK, offset + view >= content - SLACK);
+        let (was_top, was_bottom) = std::mem::replace(&mut self.wheel_edges, edges);
+        let (delta, ctrl, now) = ui.input(|i| {
+            let delta: f32 = i
+                .raw
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::MouseWheel { delta, .. } => Some(delta.y),
+                    _ => None,
+                })
+                .sum();
+            (delta, i.modifiers.command, i.time)
+        });
+        if delta == 0.0 || ctrl || !ui.rect_contains_pointer(board) || now - self.last_flip < 0.35 {
+            return;
+        }
+        // Rotella in giù: delta negativo.
+        if delta < 0.0 && was_bottom && self.sheet + 1 < count {
+            self.sheet += 1;
+            self.flip_to = Some(0.0);
+        } else if delta > 0.0 && was_top && self.sheet > 0 {
+            self.sheet -= 1;
+            self.flip_to = Some(f32::MAX);
+        } else {
+            return;
+        }
+        self.last_flip = now;
+        self.wheel_edges = (true, true);
+        ui.ctx().request_repaint();
+    }
+}
+
+/// Lo spazio in cui scorre il foglio, portato a `offset` dopo un cambio di foglio con la rotella.
+fn scroll_area(offset: Option<f32>) -> egui::ScrollArea {
+    let area = egui::ScrollArea::both().auto_shrink(false).id_salt("foglio");
+    match offset {
+        Some(y) => area.vertical_scroll_offset(y),
+        None => area,
     }
 }
 
@@ -1100,6 +1297,19 @@ impl eframe::App for WinFilesApp {
             };
             Ok(Sheets { summary, grid })
         });
+        if std::mem::take(&mut self.want_export) {
+            self.export_pdf(&ctx, &sheets, None);
+        }
+        if self.batch_pdf.is_some() && self.scans.is_empty() && self.measurer.pending() == 0 {
+            let path = self.batch_pdf.take();
+            self.batch_running = path.is_some();
+            self.export_pdf(&ctx, &sheets, path);
+            if self.export.is_none() {
+                eprintln!("{}", self.status);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+        self.receive_export();
         self.app_bar(ui);
         self.control_bar(ui);
         self.status_bar(ui);

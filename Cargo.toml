@@ -17,6 +17,8 @@ winfiles-model = { path = "crates/model", version = "0.1.0" }
 winfiles-layout = { path = "crates/layout", version = "0.1.0" }
 winfiles-formats = { path = "crates/formats", version = "0.1.0" }
 winfiles-thumbs = { path = "crates/thumbs", version = "0.1.0" }
+winfiles-scene = { path = "crates/scene", version = "0.1.0" }
+winfiles-pdf-out = { path = "crates/pdf_out", version = "0.1.0" }
 
 # base
 serde = { version = "1", features = ["derive"] }
@@ -29,6 +31,10 @@ hayro-syntax = { version = "0.8", default-features = false, features = ["std"] }
 # miniature (vedi docs/adr/0006-miniature.md)
 hayro = "0.8"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "gif", "bmp", "webp"] }
+
+# PDF in uscita (vedi docs/adr/0008-esportazione-pdf.md): testi con i font incorporati, immagini
+# e pagine dei PDF originali incorporate come vettori.
+krilla = { version = "0.8", default-features = false, features = ["raster-images", "simple-text", "pdf"] }
 
 # interfaccia
 eframe = "0.36"

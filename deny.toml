@@ -11,6 +11,10 @@ ignore = [
     # ttf-parser arriva solo su Linux, tramite le decorazioni Wayland di winit (sctk-adwaita).
     # Non entra nell'eseguibile Windows; da rivedere quando winit lo sostituisce.
     { id = "RUSTSEC-2026-0192", reason = "solo Linux, dipendenza indiretta di winit" },
+    # rustybuzz non è più mantenuto (avviso, non una falla nota). Arriva con krilla 0.8, l'ultima
+    # versione, e legge solo Inter incorporato nell'app, mai font presi dai file dei clienti.
+    # Da togliere quando krilla passa a harfrust (vedi ADR 0008).
+    { id = "RUSTSEC-2026-0206", reason = "non mantenuto; usato da krilla solo con Inter incorporato" },
 ]
 
 [licenses]

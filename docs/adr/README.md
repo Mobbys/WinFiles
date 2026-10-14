@@ -12,3 +12,4 @@ Una decisione si cambia con un nuovo ADR che sostituisce il precedente, mai risc
 | [0005](0005-misure-dei-file.md) | Misure dei file dalle intestazioni, aree al formato finito | Accettata |
 | [0006](0006-miniature-e-temi.md) | Miniature per l'anteprima, temi con contrasto verificato | Accettata |
 | [0007](0007-file-di-lavoro.md) | Il lavoro salvato in un file `.winfiles` | Accettata |
+| [0008](0008-esportazione-pdf.md) | Esportazione in PDF da una scena condivisa con l'anteprima | Accettata |

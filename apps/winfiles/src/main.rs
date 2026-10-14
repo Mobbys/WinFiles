@@ -10,12 +10,15 @@ mod canvas;
 mod captions;
 mod dock;
 mod document;
+mod export;
 mod icons;
 mod measure;
+mod paint;
 mod panels;
 mod recent;
 mod scan;
 mod shell;
+mod sketch;
 mod summary;
 mod theme;
 mod thumbs;
@@ -31,14 +34,24 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     // File e cartelle passati sulla riga di comando (anche "Apri con" di Windows) si caricano subito.
-    let paths: Vec<std::path::PathBuf> = std::env::args_os().skip(1).map(Into::into).collect();
+    // `--pdf uscita.pdf` esporta i fogli in quel file e chiude: per gli script e per le prove.
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    let mut pdf = None;
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--pdf" {
+            pdf = args.next().map(Into::into);
+        } else {
+            paths.push(arg.into());
+        }
+    }
     eframe::run_native(
         "WinFiles",
         options,
         Box::new(|cc| {
             theme::install_fonts(&cc.egui_ctx);
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            Ok(Box::new(app::WinFilesApp::new(&cc.egui_ctx, paths)))
+            Ok(Box::new(app::WinFilesApp::new(&cc.egui_ctx, paths, pdf)))
         }),
     )
 }

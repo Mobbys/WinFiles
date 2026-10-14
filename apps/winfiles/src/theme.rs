@@ -154,6 +154,10 @@ impl Tokens {
 
 pub const FONT_SEMIBOLD: &str = "ui-semibold";
 
+/// Inter, lo stesso carattere nell'interfaccia, nell'anteprima e nei PDF.
+pub const INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
+pub const INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
+
 pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(FONT_SEMIBOLD.into()))
 }
@@ -161,17 +165,12 @@ pub fn semibold(size: f32) -> FontId {
 /// Inter (OFL) per tutta l'interfaccia, con i font di egui come riserva per i simboli mancanti.
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
-    fonts.font_data.insert(
-        "Inter".into(),
-        Arc::new(FontData::from_static(include_bytes!(
-            "../assets/fonts/Inter-Regular.ttf"
-        ))),
-    );
+    fonts
+        .font_data
+        .insert("Inter".into(), Arc::new(FontData::from_static(INTER_REGULAR)));
     fonts.font_data.insert(
         "Inter-SemiBold".into(),
-        Arc::new(FontData::from_static(include_bytes!(
-            "../assets/fonts/Inter-SemiBold.ttf"
-        ))),
+        Arc::new(FontData::from_static(INTER_SEMIBOLD)),
     );
     let fallback = fonts
         .families

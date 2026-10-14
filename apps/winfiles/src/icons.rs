@@ -19,6 +19,7 @@ static ICONS: &[(&str, &[u8])] = icons![
     "chevron-right",
     "chevrons-left",
     "chevrons-right",
+    "file-down",
     "file-plus",
     "folder-open",
     "image",
@@ -58,6 +59,13 @@ pub fn paint(ui: &Ui, name: &str, rect: Rect, tint: Color32) {
         .tint(tint)
         .fit_to_exact_size(rect.size())
         .paint_at(ui, rect);
+}
+
+/// L'icona `name` come immagine di egui, per metterla in un pulsante con testo.
+pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
+    egui::Image::new(table().source(name))
+        .tint(tint)
+        .fit_to_exact_size(Vec2::splat(size))
 }
 
 /// Pulsante quadrato con icona, come nelle barre di VectorCraft.

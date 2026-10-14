@@ -120,3 +120,9 @@ fn pages_beyond_the_last_are_errors_not_crashes() {
         Err(ThumbError::NoPage(4))
     ));
 }
+
+#[test]
+fn un_file_mancante_si_dice_in_italiano() {
+    let e = render(std::path::Path::new("/non/esiste/x.jpg"), FileKind::Image, 0, 64).unwrap_err();
+    assert_eq!(e.to_string(), "file non trovato");
+}

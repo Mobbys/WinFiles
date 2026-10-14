@@ -1,18 +1,20 @@
 //! Il foglio di riepilogo in cima al lavoro: cartelle e file in una tabella con pagine, formato,
 //! misure al vivo, metri quadrati e note, e i totali in testa. Il motore di layout decide dove va
-//! ogni riga (`winfiles_layout::summary`); qui si preparano i testi, si misurano e si disegnano.
+//! ogni riga (`winfiles_layout::summary`); qui si preparano i testi, si misurano e si compone la
+//! scena del foglio.
 
 use std::path::PathBuf;
 
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
-use egui::{Align, Color32, FontId, Pos2, Rect, Stroke, Vec2, pos2};
-use winfiles_geom::{Unit, area_m2, format_area, format_size};
+use egui::{Align, Color32, Stroke};
+use winfiles_geom::{Rect as MmRect, Unit, area_m2, format_area, format_size};
 use winfiles_layout::{Header, LayoutError, Line, SummaryBlocks, SummarySheet};
 use winfiles_model::{FileEntry, PrintSettings, Project, Totals};
+use winfiles_scene::{Page, Weight};
 
 use crate::canvas::{FRAME, INK, INK_SOFT, draw_header, draw_title, paper, to_screen, totals_text};
-use crate::captions::{MM_PER_PT, NOTE_INK, area_text, header_height, line_mm, note_rows};
-use crate::theme::semibold;
+use crate::captions::{MM_PER_PT, NOTE_INK, area_text, header_height, line_mm, note_job, note_rows};
+use crate::sketch::{self, PX_PER_MM, Sketch};
 
 /// Spazio sopra e sotto il testo di ogni riga di file, in mm.
 const ROW_PAD: f64 = 1.1;
@@ -234,17 +236,18 @@ pub fn layout(ctx: &egui::Context, project: &Project, title: f64) -> Result<Summ
     Ok(Summary { rows, sheets })
 }
 
-fn text_job(text: &str, font: FontId, color: Color32, width: f32, align: Align) -> LayoutJob {
+/// Una riga che si tronca con "…", allineata a sinistra o a destra (`width` in mm).
+fn text_job(text: &str, size: f64, weight: Weight, width: f64, align: Align) -> LayoutJob {
     let mut job = LayoutJob::single_section(
         text.to_string(),
         TextFormat {
-            font_id: font,
-            color,
+            font_id: sketch::font(size, weight),
+            color: INK,
             ..Default::default()
         },
     );
     job.wrap = TextWrapping {
-        max_width: width.max(1.0),
+        max_width: (width as f32 * PX_PER_MM).max(1.0),
         max_rows: 1,
         break_anywhere: true,
         overflow_character: Some('…'),
@@ -253,111 +256,81 @@ fn text_job(text: &str, font: FontId, color: Color32, width: f32, align: Align) 
     job
 }
 
-/// Disegna un foglio del riepilogo. Restituisce il file cliccato, se c'è.
-pub fn draw(
-    ui: &mut egui::Ui,
-    sheet: &SummarySheet,
-    summary: &Summary,
-    project: &Project,
-    selected: &std::collections::BTreeSet<usize>,
-    scale: f32,
-) -> Option<usize> {
-    let t = crate::theme::Tokens::get(ui.ctx());
+/// La scena di un foglio del riepilogo.
+pub fn compose(ctx: &egui::Context, sheet: &SummarySheet, summary: &Summary, project: &Project) -> Page {
+    let mut sk = Sketch::new(ctx, sheet.size);
     let print = &project.print;
     let unit = project.unit;
     let pt = body_pt(print);
-    let (response, painter, origin) = paper(ui, sheet.size, scale);
-    let map = |r: winfiles_geom::Rect| to_screen(origin, r, scale);
-    let mm = |v: f64| v as f32 * scale;
-    let font = |pt: f64| (pt * MM_PER_PT) as f32 * scale;
-    let readable = |pt: f64| font(pt) >= 3.5;
+    let em = |pt: f64| pt * MM_PER_PT;
     let cols = columns(print, sheet.area.w);
 
     if let Some(title) = sheet.title {
-        draw_title(&painter, map(title), title.w, print, scale);
+        draw_title(&mut sk, title, print);
     }
     if let Some(h) = sheet.heading {
-        let r = map(h);
-        if readable(pt) {
-            painter.text(
-                r.min,
-                egui::Align2::LEFT_TOP,
-                "Riepilogo del lavoro",
-                semibold(font(pt * 1.7)),
-                INK,
-            );
-            let all = Totals::of(&project.files);
-            let folders = project.folder_totals().len();
-            let mut text = format!(
-                "{folders} {}  ·  {} file  ·  {} pagine",
-                if folders == 1 { "cartella" } else { "cartelle" },
-                all.files,
-                all.pages
-            );
-            if let Some(area) = area_text(all.area_full_m2, all.area_m2, print.show_sizes, print.show_trim) {
-                text = format!("{text}  ·  {area}");
-            }
-            painter.text(
-                r.min + Vec2::new(0.0, mm(line_mm(pt * 1.7) + 0.5)),
-                egui::Align2::LEFT_TOP,
-                text,
-                FontId::proportional(font(pt)),
-                INK_SOFT,
-            );
+        let big = em(pt * 1.7);
+        let galley = sk.layout_line("Riepilogo del lavoro", big, Weight::SemiBold);
+        sk.text((h.x, h.y), &galley, big, Weight::SemiBold, INK, None);
+        let all = Totals::of(&project.files);
+        let folders = project.folder_totals().len();
+        let mut text = format!(
+            "{folders} {}  ·  {} file  ·  {} pagine",
+            if folders == 1 { "cartella" } else { "cartelle" },
+            all.files,
+            all.pages
+        );
+        if let Some(area) = area_text(all.area_full_m2, all.area_m2, print.show_sizes, print.show_trim) {
+            text = format!("{text}  ·  {area}");
         }
+        let galley = sk.layout_line(&text, em(pt), Weight::Regular);
+        sk.text(
+            (h.x, h.y + line_mm(pt * 1.7) + 0.5),
+            &galley,
+            em(pt),
+            Weight::Regular,
+            INK_SOFT,
+            None,
+        );
     }
     if let Some(c) = sheet.columns {
-        let r = map(c);
-        if readable(pt * 0.85) {
-            for col in &cols {
-                let cell = Rect::from_min_size(
-                    pos2(r.left() + mm(col.x), r.top()),
-                    Vec2::new(mm(col.w), r.height()),
-                );
-                let first = col.x == 0.0;
-                let job = text_job(
-                    col.title,
-                    semibold(font(pt * 0.85)),
-                    INK_SOFT,
-                    cell.width() - mm(INDENT),
-                    if first { Align::LEFT } else { Align::RIGHT },
-                );
-                let galley = painter.layout_job(job);
-                let x = if first {
-                    cell.left() + mm(INDENT)
-                } else {
-                    cell.right() - mm(INDENT) * 0.5
-                };
-                painter.galley(pos2(x, cell.top() + mm(0.6)), galley, INK_SOFT);
-            }
+        let small = em(pt * 0.85);
+        for col in &cols {
+            let first = col.x == 0.0;
+            let galley = sk.layout(text_job(
+                col.title,
+                small,
+                Weight::SemiBold,
+                col.w - INDENT,
+                if first { Align::LEFT } else { Align::RIGHT },
+            ));
+            let x = if first {
+                c.x + col.x + INDENT
+            } else {
+                c.x + col.x + col.w - INDENT * 0.5
+            };
+            sk.text((x, c.y + 0.6), &galley, small, Weight::SemiBold, INK_SOFT, None);
         }
-        painter.line_segment(
-            [r.left_bottom(), r.right_bottom()],
-            Stroke::new(mm(0.3).max(1.0), FRAME),
-        );
+        sk.line((c.x, c.bottom()), (c.right(), c.bottom()), FRAME, 0.3);
     }
 
     let labels = project.folder_labels();
     let totals = project.folder_totals();
-    let pointer = response.interact_pointer_pos();
-    let mut clicked = None;
+    let note_em = em(print.note_text);
     for placed in &sheet.lines {
         let Some(row) = summary.rows.get(placed.line) else {
             continue;
         };
-        let r = map(placed.rect);
+        let r = placed.rect;
         match &row.kind {
             Kind::Folder(path) => {
-                let head = Rect::from_min_size(
-                    r.min + Vec2::new(0.0, mm(GROUP_SPACE)),
-                    Vec2::new(r.width(), mm(header_height(print.header_text))),
-                );
+                let head = MmRect::new(r.x, r.y + GROUP_SPACE, r.w, header_height(print.header_text));
                 let header = Header {
                     folder: labels
                         .get(path.as_path())
                         .cloned()
                         .unwrap_or_else(|| path.display().to_string()),
-                    rect: placed.rect,
+                    rect: r,
                     note: None,
                     continued: placed.continued,
                 };
@@ -368,25 +341,24 @@ pub fn draw(
                     .filter(|t| !t.is_empty());
                 let tot = totals.get(path.as_path()).map(|t| totals_text(t, print));
                 draw_header(
-                    &painter,
+                    &mut sk,
                     head,
                     &header,
                     custom,
                     tot.as_deref(),
-                    font(print.header_text),
-                    scale,
+                    em(print.header_text),
                 );
                 if !placed.continued
-                    && readable(print.note_text)
                     && let Some(note) = project.folder_notes.get(path).filter(|n| !n.trim().is_empty())
                 {
-                    let job =
-                        crate::captions::note_job(note, print.note_text, placed.rect.w - 2.0 * INDENT, scale);
-                    let galley = painter.layout_job(job);
-                    painter.with_clip_rect(r).galley(
-                        pos2(r.left() + mm(INDENT), head.bottom() + mm(ROW_PAD)),
-                        galley,
+                    let galley = sk.layout(note_job(note, print.note_text, r.w - 2.0 * INDENT, PX_PER_MM));
+                    sk.text(
+                        (r.x + INDENT, head.bottom() + ROW_PAD),
+                        &galley,
+                        note_em,
+                        Weight::Regular,
                         NOTE_INK,
+                        Some(r.bottom()),
                     );
                 }
             }
@@ -395,75 +367,94 @@ pub fn draw(
                     continue;
                 };
                 if *odd {
-                    painter.rect_filled(r, 0.0, ZEBRA);
+                    sk.rect(r, 0.0, Some(ZEBRA), None);
                 }
-                if selected.contains(file) {
-                    painter.rect_stroke(r, 0.0, Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
-                }
-                let y = r.top() + mm(ROW_PAD);
-                let line_h = mm(line_mm(pt));
-                if readable(pt) {
-                    let name = if page.is_none_or(|p| p == 0) {
-                        f.path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default()
+                let y = r.y + ROW_PAD;
+                let name = if page.is_none_or(|p| p == 0) {
+                    f.path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                let values = cells(f, *page, print, unit);
+                for (i, col) in cols.iter().enumerate() {
+                    let text = if i == 0 {
+                        name.as_str()
                     } else {
-                        String::new()
+                        values.get(i - 1).map_or("", String::as_str)
                     };
-                    let values = cells(f, *page, print, unit);
-                    for (i, col) in cols.iter().enumerate() {
-                        let text = if i == 0 {
-                            name.as_str()
-                        } else {
-                            values.get(i - 1).map_or("", String::as_str)
-                        };
-                        let first = i == 0;
-                        let trim = col.title == "Al vivo" && text != "—";
-                        let color = if trim { NOTE_INK } else { INK };
-                        let job = text_job(
-                            text,
-                            if first {
-                                semibold(font(pt))
-                            } else {
-                                FontId::proportional(font(pt))
-                            },
-                            color,
-                            mm(col.w - 1.5 * INDENT),
-                            if first { Align::LEFT } else { Align::RIGHT },
-                        );
-                        let galley = painter.layout_job(job);
-                        let x = if first {
-                            r.left() + mm(col.x + INDENT)
-                        } else {
-                            r.left() + mm(col.x + col.w) - mm(INDENT) * 0.5
-                        };
-                        painter.galley(Pos2::new(x, y), galley, color);
+                    if text.is_empty() {
+                        continue;
                     }
+                    let first = i == 0;
+                    let trim = col.title == "Al vivo" && text != "—";
+                    let color = if trim { NOTE_INK } else { INK };
+                    let weight = if first { Weight::SemiBold } else { Weight::Regular };
+                    let galley = sk.layout(text_job(
+                        text,
+                        em(pt),
+                        weight,
+                        col.w - 1.5 * INDENT,
+                        if first { Align::LEFT } else { Align::RIGHT },
+                    ));
+                    let x = if first {
+                        r.x + col.x + INDENT
+                    } else {
+                        r.x + col.x + col.w - INDENT * 0.5
+                    };
+                    sk.text((x, y), &galley, em(pt), weight, color, None);
                 }
-                if readable(print.note_text) {
-                    let mut ny = y + line_h;
-                    for note in &row.notes {
-                        let job = crate::captions::note_job(
-                            note,
-                            print.note_text,
-                            placed.rect.w - 2.0 * INDENT,
-                            scale,
-                        );
-                        let galley = painter.layout_job(job);
-                        let h = galley.size().y;
-                        painter.with_clip_rect(r).galley(
-                            pos2(r.left() + mm(INDENT * 2.0), ny),
-                            galley,
-                            NOTE_INK,
-                        );
-                        ny += h;
-                    }
-                }
-                if response.clicked() && pointer.is_some_and(|p| r.contains(p)) {
-                    clicked = Some(*file);
+                let mut ny = y + line_mm(pt);
+                for note in &row.notes {
+                    let galley = sk.layout(note_job(note, print.note_text, r.w - 2.0 * INDENT, PX_PER_MM));
+                    sk.text(
+                        (r.x + INDENT * 2.0, ny),
+                        &galley,
+                        note_em,
+                        Weight::Regular,
+                        NOTE_INK,
+                        Some(r.bottom()),
+                    );
+                    ny += Sketch::size_mm(&galley).1;
                 }
             }
+        }
+    }
+    sk.page
+}
+
+/// Disegna un foglio del riepilogo dalla sua scena, con sopra i file scelti. Restituisce il file
+/// cliccato, se c'è.
+pub fn draw(
+    ui: &mut egui::Ui,
+    sheet: &SummarySheet,
+    scene: &Page,
+    summary: &Summary,
+    thumbs: &mut crate::thumbs::Thumbnails,
+    selected: &std::collections::BTreeSet<usize>,
+    scale: f32,
+) -> Option<usize> {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let (response, painter, origin) = paper(ui, sheet.size, scale);
+    crate::paint::page(&painter, origin, scale, scene, thumbs);
+    let pointer = response.interact_pointer_pos();
+    let mut clicked = None;
+    for placed in &sheet.lines {
+        let Some(Row {
+            kind: Kind::File { file, .. },
+            ..
+        }) = summary.rows.get(placed.line)
+        else {
+            continue;
+        };
+        let r = to_screen(origin, placed.rect, scale);
+        if selected.contains(file) {
+            painter.rect_stroke(r, 0.0, Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
+        }
+        if response.clicked() && pointer.is_some_and(|p| r.contains(p)) {
+            clicked = Some(*file);
         }
     }
     clicked

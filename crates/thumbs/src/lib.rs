@@ -25,7 +25,7 @@ pub const MAX_SIDE: u32 = 4096;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ThumbError {
-    #[error("impossibile leggere il file: {0}")]
+    #[error("{}", io_text(.0))]
     Io(#[from] std::io::Error),
     #[error("immagine non leggibile: {0}")]
     Image(#[from] image::ImageError),
@@ -41,6 +41,15 @@ pub enum ThumbError {
     Crashed,
     #[error("il file non ha la pagina {0}")]
     NoPage(usize),
+}
+
+/// Gli errori più comuni detti in italiano: quelli del sistema arrivano nella lingua di Windows.
+fn io_text(e: &std::io::Error) -> String {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => "file non trovato".into(),
+        std::io::ErrorKind::PermissionDenied => "accesso al file negato".into(),
+        _ => format!("impossibile leggere il file: {e}"),
+    }
 }
 
 /// Una miniatura: pixel RGBA non premoltiplicati, riga per riga.

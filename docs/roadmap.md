@@ -8,7 +8,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 | 0 | Base del progetto, CI, CLAUDE.md, corpus; prototipi di craft-ui, hayro, EPS e craft-print | Stack confermato o ripieghi decisi | In corso: base, pannelli e misure pronti; prototipi da fare |
 | 1 | Scansione ricorsiva, metadati, file di progetto, note salvate | Progetto da 10.000 file aperto e salvato | In corso: apri e salva pronti |
 | 2 | Decodificatori in processo separato, profili ICC, cache su disco | Corpus completo senza crash | Da fare |
-| 3 | Griglia, elenco e nesting su A4 e A3, intestazioni cartella, export PDF | Parità con la stampa attuale, ±0,5 mm | Da fare (griglia iniziale pronta) |
+| 3 | Griglia, elenco e nesting su A4 e A3, intestazioni cartella, export PDF | Parità con la stampa attuale, ±0,5 mm | In corso: griglia, riepilogo ed export PDF pronti |
 | 4 | Pannelli agganciabili, anteprima, note, ordine a trascinamento, filtri | Un lavoro vero fatto solo con la nuova app | Da fare |
 | 5 | Stampa Windows a scala 100%, area stampabile del driver, calibrazione | A4 e A3 esatti su due stampanti | Da fare |
 | 6 | CSV, appunti, modelli salvati, segni di taglio, miniature vettoriali, HEIC | Ogni extra con i suoi criteri | Da fare |
@@ -41,3 +41,11 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Prova con un lavoro da 10.000 file: JSON 2,6 MB letto e scritto in 60 ms, impaginazione in 5 ms per fotogramma (625 fogli A4)
 - [ ] Ricalcolare l'impaginazione solo quando il lavoro cambia, non a ogni fotogramma
 - [x] Lavori recenti nel menu File (in `%APPDATA%\WinFiles\recenti.json`)
+
+## Fase 3 in dettaglio
+- [x] Griglia con intestazioni di cartella, note e titolo
+- [x] Foglio di riepilogo in cima
+- [x] Esporta PDF (File, Ctrl+E e barra): stessa scena dell'anteprima, Inter incorporato, PDF e AI come vettori, immagini a 300 DPI ([ADR 0008](adr/0008-esportazione-pdf.md))
+- [x] La rotella cambia foglio nell'anteprima, Ctrl+rotella ingrandisce
+- [ ] Elenco e nesting
+- [ ] Confronto con la stampa della 4.9, ±0,5 mm

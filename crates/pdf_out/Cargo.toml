@@ -1,0 +1,20 @@
+[package]
+name = "winfiles-pdf-out"
+description = "Scrive le scene dei fogli in un file PDF, con le pagine dei PDF originali come vettori."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+winfiles-geom.workspace = true
+winfiles-model.workspace = true
+winfiles-scene.workspace = true
+winfiles-thumbs.workspace = true
+thiserror.workspace = true
+image.workspace = true
+krilla.workspace = true
+
+[lints]
+workspace = true

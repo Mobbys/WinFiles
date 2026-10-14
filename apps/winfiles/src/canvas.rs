@@ -1,20 +1,24 @@
 //! L'anteprima: il foglio impaginato sul fondo grigio, come un documento in VectorCraft. Le misure
-//! arrivano in millimetri dal motore di layout e qui vengono solo scalate: nessun calcolo di
-//! impaginazione in questo file. Il foglio è carta bianca e resta bianco anche nel tema scuro.
+//! arrivano in millimetri dal motore di layout; qui si compone la scena del foglio (la stessa del
+//! PDF) e la si disegna: nessun calcolo di impaginazione in questo file.
+//! Il foglio è carta bianca e resta bianco anche nel tema scuro.
 
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
-use egui::{Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2};
+use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use std::collections::HashMap;
 use std::path::Path;
+use winfiles_geom::Rect as MmRect;
 use winfiles_layout::{Header, Sheet};
 use winfiles_model::{PageInfo, PrintSettings, Project, Totals};
+use winfiles_scene::{Page, Picture, Source, Weight};
 
 use crate::captions::{
     CAPTION_PAD, FOLDER_NOTE_INSET, INFO_RATIO, MM_PER_PT, NOTE_GAP, NOTE_INK, Slot, TITLE_PAD_X,
     TITLE_PAD_Y, area_text, info_lines, line_mm, note_job, title_job,
 };
-use crate::theme::{Tokens, semibold};
-use crate::thumbs::{ThumbState, Thumbnails};
+use crate::sketch::{self, PX_PER_MM, Sketch, grow};
+use crate::theme::Tokens;
+use crate::thumbs::Thumbnails;
 
 /// Margine attorno al foglio quando l'anteprima lo adatta alla finestra, in punti schermo.
 const FIT_MARGIN: f32 = 28.0;
@@ -60,18 +64,18 @@ pub struct CanvasOutput {
     pub zoom_by: Option<f32>,
 }
 
-/// Una riga di testo che si tronca con "…" se non sta nella larghezza.
-fn one_line(text: String, font: FontId, color: Color32, width: f32) -> LayoutJob {
+/// Una riga di testo che si tronca con "…" se non sta nella larghezza (`width` in mm), centrata.
+pub(crate) fn one_line(text: String, size: f64, weight: Weight, width: f64) -> LayoutJob {
     let mut job = LayoutJob::single_section(
         text,
         TextFormat {
-            font_id: font,
-            color,
+            font_id: sketch::font(size, weight),
+            color: INK,
             ..Default::default()
         },
     );
     job.wrap = TextWrapping {
-        max_width: width.max(1.0),
+        max_width: (width as f32 * PX_PER_MM).max(1.0),
         max_rows: 1,
         break_anywhere: true,
         overflow_character: Some('…'),
@@ -81,42 +85,27 @@ fn one_line(text: String, font: FontId, color: Color32, width: f32) -> LayoutJob
 }
 
 /// La parte della miniatura da mostrare: per i PDF con TrimBox solo il formato finito, senza
-/// l'abbondanza, come il riquadro calcolato dal layout.
-fn trim_uv(page: Option<&PageInfo>) -> Rect {
-    let full = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
+/// l'abbondanza, come il riquadro calcolato dal layout. In frazioni della pagina intera.
+fn trim_crop(page: Option<&PageInfo>) -> MmRect {
+    let full = MmRect::new(0.0, 0.0, 1.0, 1.0);
     let Some(page) = page else {
         return full;
     };
     let Some(trim) = page.trim else { return full };
-    let fx = (trim.w / page.size.w).clamp(0.0, 1.0) as f32;
-    let fy = (trim.h / page.size.h).clamp(0.0, 1.0) as f32;
+    let fx = (trim.w / page.size.w).clamp(0.0, 1.0);
+    let fy = (trim.h / page.size.h).clamp(0.0, 1.0);
     if !(fx > 0.0 && fy > 0.0) {
         return full;
     }
-    Rect::from_center_size(pos2(0.5, 0.5), Vec2::new(fx, fy))
+    MmRect::new((1.0 - fx) / 2.0, (1.0 - fy) / 2.0, fx, fy)
 }
 
-/// Disegna `sheet` a `scale` punti per millimetro nello spazio disponibile. `slots` dice a quale
-/// pagina di quale file corrisponde ogni elemento; `selected` sono i file scelti.
-pub fn draw(
-    ui: &mut egui::Ui,
-    sheet: &Sheet,
-    project: &Project,
-    slots: &[Slot],
-    thumbs: &mut Thumbnails,
-    selected: Selection<'_>,
-    scale: f32,
-) -> CanvasOutput {
-    let t = Tokens::get(ui.ctx());
-    let mut out = CanvasOutput::default();
-    let (response, painter, origin) = paper(ui, sheet.size, scale);
-    let map = |r: winfiles_geom::Rect| to_screen(origin, r, scale);
-    let mm = |v: f64| v as f32 * scale;
-
-    // Corpo del testo come sarà stampato (punti tipografici convertiti in mm e poi in punti
-    // schermo); sotto i 4 punti schermo non si legge e non si disegna.
+/// La scena di un foglio di miniature: intestazioni, miniature, didascalie e note, in mm.
+/// `slots` dice a quale pagina di quale file corrisponde ogni elemento.
+pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[Slot]) -> Page {
+    let mut sk = Sketch::new(ctx, sheet.size);
     let print = &project.print;
-    let font = |pt: f64| (pt * MM_PER_PT) as f32 * scale;
+    let em = |pt: f64| pt * MM_PER_PT;
     let (name_pt, info_pt) = (print.caption_text, print.caption_text * INFO_RATIO);
     // Per ogni intestazione: totali e nota della sua cartella.
     let labels = project.folder_labels();
@@ -126,48 +115,42 @@ pub fn draw(
         .filter_map(|(path, label)| Some((label.as_str(), (*path, *totals.get(path)?))))
         .collect();
     if let Some(title) = sheet.title {
-        draw_title(&painter, map(title), title.w, print, scale);
+        draw_title(&mut sk, title, print);
     }
     for header in &sheet.headers {
         let folder = folders.get(header.folder.as_str());
-        let r = map(header.rect);
+        let r = header.rect;
         let note_h = header.note.map_or(0.0, |n| n.h);
-        let title = Rect::from_min_size(r.min, Vec2::new(r.width(), mm(header.rect.h - note_h)));
+        let title = MmRect::new(r.x, r.y, r.w, r.h - note_h);
         let custom = folder
             .and_then(|f| project.folder_titles.get(f.0))
             .map(|t| t.trim())
             .filter(|t| !t.is_empty());
         draw_header(
-            &painter,
+            &mut sk,
             title,
             header,
             custom,
             folder.map(|f| totals_text(&f.1, print)).as_deref(),
-            font(print.header_text),
-            scale,
+            em(print.header_text),
         );
         if let Some(note) = header.note
-            && font(print.note_text) >= 4.0
             && let Some(text) = folder.and_then(|f| project.folder_notes.get(f.0))
         {
-            let note_rect = map(note);
             let width = note.w - 2.0 * FOLDER_NOTE_INSET;
-            let galley = painter.layout_job(note_job(text, print.note_text, width, scale));
-            painter.with_clip_rect(note_rect).galley(
-                pos2(
-                    note_rect.left() + mm(FOLDER_NOTE_INSET),
-                    note_rect.top() + mm(CAPTION_PAD),
-                ),
-                galley,
+            let galley = sk.layout(note_job(text, print.note_text, width, PX_PER_MM));
+            sk.text(
+                (note.x + FOLDER_NOTE_INSET, note.y + CAPTION_PAD),
+                &galley,
+                em(print.note_text),
+                Weight::Regular,
                 NOTE_INK,
+                Some(note.bottom()),
             );
         }
     }
 
-    let pointer = response.interact_pointer_pos();
     for item in &sheet.items {
-        let cell = map(item.cell);
-        let image = map(item.image);
         let Some(slot) = slots.get(item.id) else {
             continue;
         };
@@ -175,101 +158,103 @@ pub fn draw(
             continue;
         };
         let page_info = file.pages.get(slot.page);
-        let visible = ui.clip_rect().intersects(cell);
-        match visible.then(|| thumbs.get(&file.path, file.kind, slot.page)) {
-            Some(ThumbState::Ready(tex)) => {
-                painter.image(tex.id(), image, trim_uv(page_info), Color32::WHITE);
-                painter.rect_stroke(image, 0.0, Stroke::new(0.5, FRAME), StrokeKind::Outside);
-            }
-            state => {
-                painter.rect_filled(image, 0.0, Color32::from_gray(242));
-                painter.rect_stroke(image, 0.0, Stroke::new(0.5, FRAME), StrokeKind::Inside);
-                if font(info_pt) >= 4.0 {
-                    let text = match state {
-                        Some(ThumbState::Failed(_)) => {
-                            format!("{}\nanteprima non disponibile", file.kind.label())
-                        }
-                        _ => "…".to_string(),
-                    };
-                    let mut job = LayoutJob::single_section(
-                        text,
-                        TextFormat {
-                            font_id: FontId::proportional(font(info_pt)),
-                            color: INK_SOFT,
-                            ..Default::default()
-                        },
-                    );
-                    job.wrap.max_width = image.width();
-                    job.halign = egui::Align::Center;
-                    let galley = painter.layout_job(job);
-                    painter.galley(
-                        pos2(image.center().x, image.center().y - galley.size().y / 2.0),
-                        galley,
-                        INK_SOFT,
-                    );
-                }
-            }
-        }
+        let image = item.image;
+        sk.picture(Picture {
+            rect: image,
+            source: Source {
+                path: file.path.clone(),
+                kind: file.kind,
+                page: slot.page,
+            },
+            crop: trim_crop(page_info),
+        });
+        // Un filo sottile attorno alla miniatura: le immagini chiare non si perdono nel foglio.
+        sk.rect(grow(image, 0.12), 0.0, None, Some((FRAME, 0.12)));
 
         // Le pagine di uno stesso file: cornice ed etichetta "Pag. 2/4" nel colore del file.
         if let Some(color) = slot.color {
-            painter.rect_stroke(
-                image,
-                0.0,
-                Stroke::new(mm(0.5).max(1.0), color),
-                StrokeKind::Outside,
+            sk.rect(grow(image, 0.5), 0.0, None, Some((color, 0.5)));
+            let size = em(name_pt * 0.9);
+            let label = format!("Pag. {}/{}", slot.page + 1, slot.pages);
+            let galley = sk.layout_line(&label, size, Weight::SemiBold);
+            let (w, h) = Sketch::size_mm(&galley);
+            let (px, py) = (size * 0.45, size * 0.2);
+            let badge = MmRect::new(image.x + 1.0, image.y + 1.0, w + 2.0 * px, h + 2.0 * py);
+            sk.rect(badge, size * 0.3, Some(color), None);
+            sk.text(
+                (badge.x + px, badge.y + py),
+                &galley,
+                size,
+                Weight::SemiBold,
+                Color32::WHITE,
+                None,
             );
-            let px = font(name_pt * 0.9);
-            if px >= 4.0 {
-                let label = format!("Pag. {}/{}", slot.page + 1, slot.pages);
-                let galley = painter.layout_no_wrap(label, semibold(px), Color32::WHITE);
-                let pad = Vec2::new(px * 0.45, px * 0.2);
-                let badge = Rect::from_min_size(image.min + Vec2::splat(mm(1.0)), galley.size() + pad * 2.0);
-                painter.rect_filled(badge, px * 0.3, color);
-                painter.galley(badge.min + pad, galley, Color32::WHITE);
-            }
         }
 
-        let caption = map(item.caption);
-        let clip = painter.with_clip_rect(caption.intersect(painter.clip_rect()));
-        let mut y = caption.top() + mm(CAPTION_PAD);
-        if font(name_pt) >= 4.0 {
-            let name = file
-                .path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let galley = clip.layout_job(one_line(name, semibold(font(name_pt)), INK, caption.width()));
-            clip.galley(pos2(caption.center().x, y), galley, INK);
-        }
-        y += mm(line_mm(name_pt));
+        let caption = item.caption;
+        let cx = caption.x + caption.w / 2.0;
+        let bottom = Some(caption.bottom());
+        let mut y = caption.y + CAPTION_PAD;
+        let name = file
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let galley = sk.layout(one_line(name, em(name_pt), Weight::SemiBold, caption.w));
+        sk.text((cx, y), &galley, em(name_pt), Weight::SemiBold, INK, bottom);
+        y += line_mm(name_pt);
         match page_info {
             Some(page) => {
                 for line in info_lines(page, project.unit, print) {
                     let ink = if line.trim { NOTE_INK } else { INK_SOFT };
-                    if font(info_pt) >= 4.0 {
-                        let galley = clip.layout_job(one_line(
-                            line.text,
-                            FontId::proportional(font(info_pt)),
-                            ink,
-                            caption.width(),
-                        ));
-                        clip.galley(pos2(caption.center().x, y), galley, ink);
-                    }
-                    y += mm(line_mm(info_pt));
+                    let galley = sk.layout(one_line(line.text, em(info_pt), Weight::Regular, caption.w));
+                    sk.text((cx, y), &galley, em(info_pt), Weight::Regular, ink, bottom);
+                    y += line_mm(info_pt);
                 }
             }
-            None => y += mm(line_mm(info_pt)),
+            None => y += line_mm(info_pt),
         }
         let note = file.note(slot.page);
-        if !note.trim().is_empty() && font(print.note_text) >= 4.0 {
-            y += mm(NOTE_GAP);
-            let mut job = note_job(note, print.note_text, item.caption.w, scale);
+        if !note.trim().is_empty() {
+            y += NOTE_GAP;
+            let mut job = note_job(note, print.note_text, caption.w, PX_PER_MM);
             job.halign = egui::Align::Center;
-            let galley = clip.layout_job(job);
-            clip.galley(pos2(caption.center().x, y), galley, NOTE_INK);
+            let galley = sk.layout(job);
+            sk.text(
+                (cx, y),
+                &galley,
+                em(print.note_text),
+                Weight::Regular,
+                NOTE_INK,
+                bottom,
+            );
         }
+    }
+    sk.page
+}
 
+/// Disegna `scene`, la scena di `sheet`, a `scale` punti per millimetro nello spazio disponibile,
+/// con sopra la scelta dei file. `selected` sono i file scelti.
+pub fn draw(
+    ui: &mut egui::Ui,
+    sheet: &Sheet,
+    scene: &Page,
+    slots: &[Slot],
+    thumbs: &mut Thumbnails,
+    selected: Selection<'_>,
+    scale: f32,
+) -> CanvasOutput {
+    let t = Tokens::get(ui.ctx());
+    let mut out = CanvasOutput::default();
+    let (response, painter, origin) = paper(ui, sheet.size, scale);
+    crate::paint::page(&painter, origin, scale, scene, thumbs);
+
+    let pointer = response.interact_pointer_pos();
+    for item in &sheet.items {
+        let Some(slot) = slots.get(item.id) else {
+            continue;
+        };
+        let cell = to_screen(origin, item.cell, scale);
         if selected.marked.contains(&slot.file) {
             // La pagina di cui si scrive la nota ha il bordo pieno, le altre scelte uno sottile.
             let width = if selected.focus == Some((slot.file, slot.page)) {
@@ -300,23 +285,19 @@ pub fn draw(
 }
 
 /// Il titolo in cima al foglio, in un riquadro dagli angoli arrotondati con un fondo appena
-/// grigio. `r` è già in punti schermo, `width_mm` è la sua larghezza sul foglio.
-pub(crate) fn draw_title(painter: &egui::Painter, r: Rect, width_mm: f64, print: &PrintSettings, scale: f32) {
-    let mm = |v: f64| v as f32 * scale;
-    painter.rect(
-        r,
-        mm(1.8),
-        TITLE_FILL,
-        Stroke::new(mm(0.35).max(1.0), INK_SOFT),
-        StrokeKind::Inside,
+/// grigio.
+pub(crate) fn draw_title(sk: &mut Sketch<'_>, r: MmRect, print: &PrintSettings) {
+    sk.rect(r, 1.8, Some(TITLE_FILL), Some((INK_SOFT, 0.35)));
+    let inner = (r.w - 2.0 * TITLE_PAD_X) as f32;
+    let galley = sk.layout(title_job(&print.title, print.title_text, inner, PX_PER_MM));
+    sk.text(
+        (r.x + TITLE_PAD_X, r.y + TITLE_PAD_Y),
+        &galley,
+        print.title_text * MM_PER_PT,
+        Weight::SemiBold,
+        INK,
+        Some(r.bottom()),
     );
-    if (print.title_text * MM_PER_PT) as f32 * scale >= 4.0 {
-        let inner = (width_mm - 2.0 * TITLE_PAD_X) as f32;
-        let galley = painter.layout_job(title_job(&print.title, print.title_text, inner, scale));
-        painter
-            .with_clip_rect(r)
-            .galley(r.min + Vec2::new(mm(TITLE_PAD_X), mm(TITLE_PAD_Y)), galley, INK);
-    }
 }
 
 /// Il foglio bianco con la sua ombra, centrato nello spazio disponibile. Restituisce la risposta
@@ -366,27 +347,19 @@ pub(crate) fn totals_text(t: &Totals, print: &PrintSettings) -> String {
 }
 
 /// L'intestazione di una cartella: le cartelle come etichette colorate, una linea sottile e i
-/// totali a destra. Nessun riquadro grigio.
+/// totali a destra. Nessun riquadro grigio. `size` è il corpo del testo in mm.
 pub(crate) fn draw_header(
-    painter: &egui::Painter,
-    title: Rect,
+    sk: &mut Sketch<'_>,
+    title: MmRect,
     header: &Header,
     custom: Option<&str>,
     totals: Option<&str>,
-    px: f32,
-    scale: f32,
+    size: f64,
 ) {
-    let mm = |v: f32| v * scale;
-    if px < 4.0 {
-        painter.line_segment(
-            [title.left_center(), title.right_center()],
-            Stroke::new(1.0, FRAME),
-        );
-        return;
-    }
-    let cy = title.center().y;
-    let pad = Vec2::new(px * 0.5, px * 0.22);
-    let mut x = title.left();
+    let cy = title.y + title.h / 2.0;
+    let (pad_x, pad_y) = (size * 0.5, size * 0.22);
+    let right = title.right();
+    let mut x = title.x;
     // Un'intestazione scelta dall'utente è un'unica etichetta; altrimenti una per cartella.
     let crumbs: Vec<&str> = match custom {
         Some(text) => vec![text],
@@ -397,48 +370,71 @@ pub(crate) fn draw_header(
             .get(i % CRUMB_COLORS.len())
             .copied()
             .unwrap_or(INK_SOFT);
-        let galley = painter.layout_no_wrap((*crumb).to_string(), semibold(px), Color32::WHITE);
-        let size = galley.size() + pad * 2.0;
+        let galley = sk.layout_line(crumb, size, Weight::SemiBold);
+        let (w, h) = Sketch::size_mm(&galley);
+        let (pw, ph) = (w + 2.0 * pad_x, h + 2.0 * pad_y);
         // Le cartelle che non stanno si fermano prima dei totali.
-        if x + size.x > title.right() - mm(30.0) && i > 0 {
+        if x + pw > right - 30.0 && i > 0 {
             break;
         }
-        let pill = Rect::from_min_size(pos2(x, cy - size.y / 2.0), size);
-        painter.rect_filled(pill, mm(1.2), color);
-        painter.galley(pill.min + pad, galley, Color32::WHITE);
+        let pill = MmRect::new(x, cy - ph / 2.0, pw, ph);
+        sk.rect(pill, 1.2, Some(color), None);
+        sk.text(
+            (x + pad_x, pill.y + pad_y),
+            &galley,
+            size,
+            Weight::SemiBold,
+            Color32::WHITE,
+            None,
+        );
         x = pill.right();
         if i + 1 < crumbs.len() {
-            let sep = painter.layout_no_wrap("›".to_string(), semibold(px), INK_SOFT);
-            painter.galley(pos2(x + mm(1.0), cy - sep.size().y / 2.0), sep.clone(), INK_SOFT);
-            x += sep.size().x + mm(2.0);
+            let sep = sk.layout_line("›", size, Weight::SemiBold);
+            let (w, h) = Sketch::size_mm(&sep);
+            sk.text(
+                (x + 1.0, cy - h / 2.0),
+                &sep,
+                size,
+                Weight::SemiBold,
+                INK_SOFT,
+                None,
+            );
+            x += w + 2.0;
         }
     }
     if header.continued {
-        let more = painter.layout_no_wrap(
-            "(continua)".to_string(),
-            FontId::proportional(px * 0.85),
+        let small = size * 0.85;
+        let more = sk.layout_line("(continua)", small, Weight::Regular);
+        let (w, h) = Sketch::size_mm(&more);
+        sk.text(
+            (x + 2.0, cy - h / 2.0),
+            &more,
+            small,
+            Weight::Regular,
             INK_SOFT,
+            None,
         );
-        painter.galley(
-            pos2(x + mm(2.0), cy - more.size().y / 2.0),
-            more.clone(),
-            INK_SOFT,
-        );
-        x += more.size().x + mm(2.0);
+        x += w + 2.0;
     }
-    let mut line_end = title.right();
+    let mut line_end = right;
     if let Some(text) = totals {
-        let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(px * 0.82), INK_SOFT);
-        let pos = pos2(title.right() - galley.size().x, cy - galley.size().y / 2.0);
-        if pos.x > x + mm(6.0) {
-            line_end = pos.x - mm(2.5);
-            painter.galley(pos, galley, INK_SOFT);
+        let small = size * 0.82;
+        let galley = sk.layout_line(text, small, Weight::Regular);
+        let (w, h) = Sketch::size_mm(&galley);
+        let tx = right - w;
+        if tx > x + 6.0 {
+            line_end = tx - 2.5;
+            sk.text(
+                (tx, cy - h / 2.0),
+                &galley,
+                small,
+                Weight::Regular,
+                INK_SOFT,
+                None,
+            );
         }
     }
-    if line_end > x + mm(4.0) {
-        painter.line_segment(
-            [pos2(x + mm(2.5), cy), pos2(line_end, cy)],
-            Stroke::new(mm(0.25).max(1.0), FRAME),
-        );
+    if line_end > x + 4.0 {
+        sk.line((x + 2.5, cy), (line_end, cy), FRAME, 0.25);
     }
 }
