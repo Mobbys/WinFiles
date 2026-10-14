@@ -5,6 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
+mod units;
+pub use units::{Unit, area_m2, format_area, format_length, format_number, format_size};
+
 /// Millimetri in un pollice.
 pub const MM_PER_INCH: f64 = 25.4;
 /// Punti PDF in un pollice.

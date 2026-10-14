@@ -40,4 +40,5 @@ allow-wildcard-paths = true
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-allow-git = []
+# Le librerie ArtCraft, sempre a commit fissato.
+allow-git = ["https://github.com/storytold/craft-libs"]

@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use winfiles_geom::{Margins, Orientation, Paper, Size};
+use winfiles_geom::{Margins, Orientation, Paper, Size, Unit, area_m2};
 
 /// Versione del formato del file di progetto. Si alza a ogni modifica incompatibile.
 pub const FORMAT_VERSION: u32 = 1;
@@ -80,22 +80,91 @@ pub struct PageInfo {
     pub trim: Option<Size>,
 }
 
+impl PageInfo {
+    /// Il formato finito: il TrimBox se c'è, altrimenti il formato pagina.
+    pub fn finished(&self) -> Size {
+        self.trim.unwrap_or(self.size)
+    }
+}
+
+/// Risoluzione dichiarata da un'immagine (o presunta quando il file non la dice).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ImageInfo {
+    pub width_px: u32,
+    pub height_px: u32,
+    /// Punti per pollice in orizzontale e in verticale.
+    pub dpi_x: f64,
+    pub dpi_y: f64,
+    /// Falso se il file non dichiara la risoluzione e si usa quella predefinita (come la 4.9).
+    pub dpi_from_file: bool,
+}
+
 /// Un file del progetto.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FileEntry {
     pub path: PathBuf,
     pub kind: FileKind,
+    /// Pagine con le misure lette dal file; vuoto finché il file non è stato letto.
     #[serde(default)]
     pub pages: Vec<PageInfo>,
+    /// Pixel e risoluzione, solo per le immagini.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageInfo>,
     /// Nota libera dell'utente su questo file.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
 }
 
 impl FileEntry {
+    /// Un file appena aggiunto, ancora da misurare.
+    pub fn new(path: PathBuf, kind: FileKind) -> Self {
+        Self {
+            path,
+            kind,
+            pages: Vec::new(),
+            image: None,
+            note: String::new(),
+        }
+    }
+
     /// La cartella che contiene il file (chiave per il raggruppamento).
     pub fn folder(&self) -> &Path {
         self.path.parent().unwrap_or_else(|| Path::new(""))
+    }
+
+    /// Metri quadrati di tutte le pagine, al formato finito.
+    pub fn area_m2(&self) -> f64 {
+        self.pages.iter().map(|p| area_m2(p.finished())).sum()
+    }
+}
+
+/// Somme di un gruppo di file: numero di file, di pagine e metri quadrati.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Totals {
+    pub files: usize,
+    pub pages: usize,
+    pub area_m2: f64,
+    /// File di cui non si conoscono ancora (o non si possono leggere) le misure.
+    pub unmeasured: usize,
+}
+
+impl Totals {
+    fn add(&mut self, file: &FileEntry) {
+        self.files += 1;
+        self.pages += file.pages.len();
+        self.area_m2 += file.area_m2();
+        if file.pages.is_empty() {
+            self.unmeasured += 1;
+        }
+    }
+
+    /// Somme di un insieme di file.
+    pub fn of<'a>(files: impl IntoIterator<Item = &'a FileEntry>) -> Self {
+        let mut t = Totals::default();
+        for f in files {
+            t.add(f);
+        }
+        t
     }
 }
 
@@ -143,6 +212,8 @@ pub struct Project {
     /// Note per cartella, con il percorso della cartella come chiave.
     pub folder_notes: BTreeMap<PathBuf, String>,
     pub print: PrintSettings,
+    /// Unità in cui mostrare le misure.
+    pub unit: Unit,
 }
 
 impl Project {
@@ -152,6 +223,45 @@ impl Project {
             title: title.into(),
             ..Self::default()
         }
+    }
+
+    /// Somme per cartella, in ordine di cartella.
+    pub fn folder_totals(&self) -> BTreeMap<&Path, Totals> {
+        let mut out: BTreeMap<&Path, Totals> = BTreeMap::new();
+        for f in &self.files {
+            out.entry(f.folder()).or_default().add(f);
+        }
+        out
+    }
+
+    /// Nomi brevi delle cartelle per elenco e intestazioni: il percorso a partire dalla cartella
+    /// comune a tutti i file, separato da " › " (per esempio `Cliente Rossi › Foto`).
+    pub fn folder_labels(&self) -> BTreeMap<&Path, String> {
+        let folders: Vec<&Path> = self.folder_totals().into_keys().collect();
+        let mut common: Option<&Path> = folders.first().copied();
+        for f in &folders {
+            while let Some(c) = common {
+                if f.starts_with(c) {
+                    break;
+                }
+                common = c.parent();
+            }
+        }
+        // Si parte dal genitore della cartella comune, così il suo nome resta visibile.
+        let base = common.and_then(Path::parent);
+        folders
+            .into_iter()
+            .map(|f| {
+                let rel = base.and_then(|b| f.strip_prefix(b).ok()).unwrap_or(f);
+                let parts: Vec<String> = rel.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+                let label = if parts.is_empty() {
+                    f.display().to_string()
+                } else {
+                    parts.join(" › ")
+                };
+                (f, label)
+            })
+            .collect()
     }
 
     /// Serializza in JSON leggibile.
@@ -227,6 +337,7 @@ mod tests {
                 size: Size::new(210.0, 297.0),
                 trim: Some(Size::new(200.0, 287.0)),
             }],
+            image: None,
             note: "Verificare il colore Pantone, è più scuro".into(),
         });
         p.folder_notes
@@ -244,6 +355,56 @@ mod tests {
             "Consegna entro venerdì"
         );
         assert_eq!(back.folder_note(Path::new("/altro")), "");
+    }
+
+    #[test]
+    fn metri_quadri_al_formato_finito() {
+        let mut p = sample();
+        // Il PDF di prova ha un TrimBox 200 × 287: conta quello, non il MediaBox.
+        assert!((p.files[0].area_m2() - 0.0574).abs() < 1e-9);
+        let mut foto = FileEntry::new(PathBuf::from("/lavori/foto/a.jpg"), FileKind::Image);
+        foto.pages.push(PageInfo {
+            size: Size::new(1000.0, 500.0),
+            trim: None,
+        });
+        p.files.push(foto);
+        p.files.push(FileEntry::new(
+            PathBuf::from("/lavori/foto/b.jpg"),
+            FileKind::Image,
+        ));
+        let per_folder = p.folder_totals();
+        let foto = per_folder[Path::new("/lavori/foto")];
+        assert_eq!((foto.files, foto.pages, foto.unmeasured), (2, 1, 1));
+        assert!((foto.area_m2 - 0.5).abs() < 1e-9);
+        let all = Totals::of(&p.files);
+        assert_eq!(all.files, 3);
+        assert!((all.area_m2 - 0.5574).abs() < 1e-9);
+    }
+
+    #[test]
+    fn nomi_brevi_delle_cartelle() {
+        let mut p = Project::new("x");
+        for path in [
+            "/lavori/corpus/Catalogo/a.pdf",
+            "/lavori/corpus/Cliente Rossi/Foto/b.jpg",
+            "/lavori/corpus/Cliente Rossi/c.jpg",
+        ] {
+            p.files.push(FileEntry::new(PathBuf::from(path), FileKind::Pdf));
+        }
+        let labels = p.folder_labels();
+        assert_eq!(labels[Path::new("/lavori/corpus/Catalogo")], "corpus › Catalogo");
+        assert_eq!(
+            labels[Path::new("/lavori/corpus/Cliente Rossi/Foto")],
+            "corpus › Cliente Rossi › Foto"
+        );
+        assert_eq!(
+            labels[Path::new("/lavori/corpus/Cliente Rossi")],
+            "corpus › Cliente Rossi"
+        );
+        let mut one = Project::new("y");
+        one.files
+            .push(FileEntry::new(PathBuf::from("/a/b/x.pdf"), FileKind::Pdf));
+        assert_eq!(one.folder_labels()[Path::new("/a/b")], "b");
     }
 
     #[test]

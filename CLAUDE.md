@@ -35,12 +35,14 @@ stampa leggono il suo risultato e non ricalcolano nulla.
 |---|---|---|
 | L0 | `crates/geom` | millimetri, formati carta, rettangoli |
 | L1 | `crates/model` | progetto `.winfiles`: file, pagine, note, impostazioni di stampa |
+| L1 | `crates/formats` | misure dei file dalle intestazioni (pixel, DPI, pagine, TrimBox, BoundingBox) |
 | L2 | `crates/layout` | impaginazione in fogli A4/A3 |
 | app | `apps/winfiles` | finestra egui (provvisoria finché non c'è il crate `ui`) |
 | strumenti | `xtask` | `cargo xtask ci`, `cargo xtask layers` |
 
-In arrivo: `scan` (Fase 1), `formats` e `thumbs` (Fase 2), `pdf_out` (Fase 3), `ui` con il docking
-di `craft-ui` (Fasi 0 e 4), stampa con `craft-print` (Fase 5).
+L'app usa già i pannelli agganciabili di `craft-ui` e il tema di VectorCraft (`apps/winfiles/src/theme.rs`):
+nessun colore scritto a mano nei widget. In arrivo: `scan` (Fase 1), decodificatori e `thumbs`
+(Fase 2), `pdf_out` (Fase 3), il crate `ui` (Fase 4), stampa con `craft-print` (Fase 5).
 `cargo xtask layers` vieta egui, eframe, winit e rfd sotto l'interfaccia.
 
 ## Dipendenze

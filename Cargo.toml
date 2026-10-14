@@ -15,6 +15,7 @@ repository = "https://github.com/Mobbys/WinFiles"
 winfiles-geom = { path = "crates/geom", version = "0.1.0" }
 winfiles-model = { path = "crates/model", version = "0.1.0" }
 winfiles-layout = { path = "crates/layout", version = "0.1.0" }
+winfiles-formats = { path = "crates/formats", version = "0.1.0" }
 
 # base
 serde = { version = "1", features = ["derive"] }
@@ -22,9 +23,15 @@ serde_json = "1"
 thiserror = "2"
 proptest = "1"
 
+# lettura dei file (vedi docs/adr/0005-misure-dei-file.md)
+hayro-syntax = { version = "0.8", default-features = false, features = ["std"] }
+
 # interfaccia
 eframe = "0.36"
 egui = "0.36"
+egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
+# Pannelli agganciabili e icone delle app ArtCraft, a commit fissato (vedi CLAUDE.md).
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "457a078809690994b22debdffb703ff36d3129df" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

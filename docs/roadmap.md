@@ -5,7 +5,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 
 | Fase | Contenuto | Criterio per passare oltre | Stato |
 |---|---|---|---|
-| 0 | Base del progetto, CI, CLAUDE.md, corpus; prototipi di craft-ui, hayro, EPS e craft-print | Stack confermato o ripieghi decisi | In corso: base pronta, prototipi da fare |
+| 0 | Base del progetto, CI, CLAUDE.md, corpus; prototipi di craft-ui, hayro, EPS e craft-print | Stack confermato o ripieghi decisi | In corso: base, pannelli e misure pronti; prototipi da fare |
 | 1 | Scansione ricorsiva, metadati, file di progetto, note salvate | Progetto da 10.000 file aperto e salvato | Da fare |
 | 2 | Decodificatori in processo separato, profili ICC, cache su disco | Corpus completo senza crash | Da fare |
 | 3 | Griglia, elenco e nesting su A4 e A3, intestazioni cartella, export PDF | Parità con la stampa attuale, ±0,5 mm | Da fare (griglia iniziale pronta) |
@@ -22,8 +22,10 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] CI: controlli su Linux, test ed eseguibile su Windows
 - [x] Crate `geom`, `model` (progetto JSON con note), `layout` (griglia con test di proprietà)
 - [x] Prima finestra: file trascinati, anteprima del foglio, note, impostazioni
-- [ ] Prototipo docking con `craft-ui`
-- [ ] Prototipo lettura PDF/AI con `hayro`, misura dei tempi sul corpus
+- [x] Pannelli agganciabili con `craft-ui` e tema "Medio scuro" di VectorCraft (font Inter, icone Lucide)
+- [x] Misure dei file: pixel e DPI delle immagini, pagine, formato e TrimBox di PDF e AI, BoundingBox degli EPS ([ADR 0005](adr/0005-misure-dei-file.md))
+- [x] Misure in mm o cm e m² per file, cartella e totale
+- [ ] Prototipo rendering PDF/AI con `hayro`, misura dei tempi sul corpus
 - [ ] Prototipo EPS con il crate di VectorCraft
 - [ ] Prototipo stampa con `craft-print` e pagina di calibrazione
 - [ ] Corpus di file di prova difficili

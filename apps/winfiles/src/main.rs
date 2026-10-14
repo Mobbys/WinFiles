@@ -6,8 +6,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
-mod preview;
+mod canvas;
+mod dock;
+mod icons;
+mod measure;
+mod panels;
 mod scan;
+mod theme;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -24,6 +29,11 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "WinFiles",
         options,
-        Box::new(|_cc| Ok(Box::new(app::WinFilesApp::with_paths(paths)))),
+        Box::new(|cc| {
+            theme::install_fonts(&cc.egui_ctx);
+            theme::apply(&cc.egui_ctx);
+            egui_extras::install_image_loaders(&cc.egui_ctx);
+            Ok(Box::new(app::WinFilesApp::new(&cc.egui_ctx, paths)))
+        }),
     )
 }

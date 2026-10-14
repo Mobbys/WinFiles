@@ -19,8 +19,11 @@ opengl = ["eframe/glow"]
 winfiles-geom.workspace = true
 winfiles-model.workspace = true
 winfiles-layout.workspace = true
+winfiles-formats.workspace = true
 eframe.workspace = true
 egui.workspace = true
+egui_extras.workspace = true
+craft-ui.workspace = true
 
 [lints]
 workspace = true

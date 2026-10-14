@@ -36,12 +36,7 @@ fn visit(path: &Path, depth: usize, out: &mut Vec<FileEntry>) {
     } else {
         let kind = FileKind::from_path(path);
         if kind != FileKind::Unsupported {
-            out.push(FileEntry {
-                path: path.to_path_buf(),
-                kind,
-                pages: Vec::new(),
-                note: String::new(),
-            });
+            out.push(FileEntry::new(path.to_path_buf(), kind));
         }
     }
 }
