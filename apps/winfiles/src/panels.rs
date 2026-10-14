@@ -116,6 +116,14 @@ fn section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(2.0);
 }
 
+/// Cosa fare dell'intestazione di una cartella nell'elenco.
+enum Rename {
+    Start(std::path::PathBuf, String),
+    Commit,
+    Cancel,
+    Reset(std::path::PathBuf),
+}
+
 impl WinFilesApp {
     pub(crate) fn files_panel(&mut self, ui: &mut egui::Ui) {
         let t = Tokens::get(ui.ctx());
@@ -150,6 +158,7 @@ impl WinFilesApp {
         }
         let unit = self.project.unit;
         let mut clicked = None;
+        let mut rename = None;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show_rows(ui, ROW, rows.len(), |ui, range| {
@@ -174,16 +183,75 @@ impl WinFilesApp {
                                     format_area(tot.area_m2)
                                 );
                             }
-                            two_lines(
-                                ui,
-                                rect.with_min_x(rect.left() + 26.0),
-                                label,
-                                semibold(12.5),
-                                t.text_strong,
-                                &info,
-                                t.text_dim,
-                            );
-                            resp.on_hover_text(path.display().to_string());
+                            let editing = matches!(&self.renaming, Some((p, _)) if p.as_path() == *path);
+                            if editing {
+                                // Rinomina sul posto: Invio o clic fuori conferma, Esc annulla.
+                                let field = Rect::from_min_size(
+                                    rect.min + vec2(24.0, 1.0),
+                                    vec2(rect.width() - 28.0, 20.0),
+                                );
+                                if let Some((_, text)) = &mut self.renaming {
+                                    // In una Ui figlia, così il campo non sposta le righe sotto.
+                                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
+                                    let edit = child.add_sized(
+                                        field.size(),
+                                        egui::TextEdit::singleline(text)
+                                            .font(semibold(12.5))
+                                            .margin(egui::Margin::symmetric(6, 1))
+                                            .hint_text(labels.get(*path).map_or("", String::as_str)),
+                                    );
+                                    if !edit.has_focus() && !edit.lost_focus() {
+                                        edit.request_focus();
+                                    }
+                                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                        rename = Some(Rename::Cancel);
+                                    } else if edit.lost_focus() {
+                                        rename = Some(Rename::Commit);
+                                    }
+                                }
+                                ui.painter().text(
+                                    rect.left_bottom() + vec2(30.0, -2.0),
+                                    egui::Align2::LEFT_BOTTOM,
+                                    &info,
+                                    egui::FontId::proportional(11.5),
+                                    t.text_dim,
+                                );
+                            } else {
+                                two_lines(
+                                    ui,
+                                    rect.with_min_x(rect.left() + 26.0)
+                                        .with_max_x(rect.right() - 26.0),
+                                    label,
+                                    semibold(12.5),
+                                    t.text_strong,
+                                    &info,
+                                    t.text_dim,
+                                );
+                                if resp.hovered() {
+                                    let r = Rect::from_center_size(
+                                        rect.right_center() - vec2(14.0, 0.0),
+                                        Vec2::splat(14.0),
+                                    );
+                                    icons::paint(ui, "pencil", r, t.text_dim);
+                                }
+                                if resp.double_clicked() {
+                                    rename = Some(Rename::Start(path.to_path_buf(), label.clone()));
+                                }
+                                let resp = resp.on_hover_text(format!(
+                                    "{}\nDoppio clic per rinominare l'intestazione",
+                                    path.display()
+                                ));
+                                resp.context_menu(|ui| {
+                                    if ui.button("Rinomina l'intestazione").clicked() {
+                                        rename = Some(Rename::Start(path.to_path_buf(), label.clone()));
+                                        ui.close();
+                                    }
+                                    if ui.button("Torna al nome della cartella").clicked() {
+                                        rename = Some(Rename::Reset(path.to_path_buf()));
+                                        ui.close();
+                                    }
+                                });
+                            }
                         }
                         Row::File(i) => {
                             let Some(f) = self.project.files.get(*i) else {
@@ -251,6 +319,26 @@ impl WinFilesApp {
             });
         if clicked.is_some() {
             self.selected = clicked;
+        }
+        match rename {
+            Some(Rename::Start(path, label)) => self.renaming = Some((path, label)),
+            Some(Rename::Cancel) => self.renaming = None,
+            Some(Rename::Reset(path)) => {
+                self.project.folder_titles.remove(&path);
+            }
+            Some(Rename::Commit) => {
+                if let Some((path, text)) = self.renaming.take() {
+                    let text = text.trim();
+                    // Vuoto o uguale al percorso: si torna al nome della cartella.
+                    let default = self.project.folder_labels().get(path.as_path()).cloned();
+                    if text.is_empty() || Some(text) == default.as_deref() {
+                        self.project.folder_titles.remove(&path);
+                    } else {
+                        self.project.folder_titles.insert(path, text.to_string());
+                    }
+                }
+            }
+            None => {}
         }
     }
 
@@ -432,16 +520,6 @@ impl WinFilesApp {
             return;
         };
         let folder = file.folder().to_path_buf();
-        let default_label = self
-            .project
-            .folder_labels()
-            .get(folder.as_path())
-            .cloned()
-            .unwrap_or_else(|| folder_name(&folder));
-        let file = match self.selected.and_then(|i| self.project.files.get_mut(i)) {
-            Some(f) => f,
-            None => return,
-        };
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             section(ui, "Nota del file");
             ui.add(
@@ -450,14 +528,6 @@ impl WinFilesApp {
                     .desired_width(ui.available_width() - 8.0)
                     .margin(egui::Margin::symmetric(10, 8))
                     .hint_text("Per esempio: verificare il colore"),
-            );
-            section(ui, "Intestazione della cartella sul foglio");
-            let title = self.project.folder_titles.entry(folder.clone()).or_default();
-            ui.add(
-                egui::TextEdit::singleline(title)
-                    .desired_width(ui.available_width() - 8.0)
-                    .margin(egui::Margin::symmetric(10, 7))
-                    .hint_text(default_label.as_str()),
             );
             section(ui, &format!("Nota della cartella {}", folder_name(&folder)));
             let note = self.project.folder_notes.entry(folder).or_default();

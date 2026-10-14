@@ -39,6 +39,8 @@ pub struct WinFilesApp {
     pub(crate) thumbs: Thumbnails,
     /// Le miniature sul foglio, una per pagina, ricalcolate a ogni fotogramma.
     slots: Vec<Slot>,
+    /// Cartella di cui si sta rinominando l'intestazione nell'elenco, con il testo in modifica.
+    pub(crate) renaming: Option<(PathBuf, String)>,
     status: String,
 }
 
@@ -59,6 +61,7 @@ impl WinFilesApp {
             measurer: Measurer::start(move || wake.request_repaint()),
             thumbs: Thumbnails::start(move || wake2.request_repaint()),
             slots: Vec::new(),
+            renaming: None,
             status: String::new(),
         };
         if !paths.is_empty() {
