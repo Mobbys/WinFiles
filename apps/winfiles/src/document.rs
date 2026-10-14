@@ -82,9 +82,13 @@ impl WinFilesApp {
 
     /// Apre un file di progetto. In caso di errore il lavoro aperto resta com'è.
     pub(crate) fn open_path(&mut self, path: &Path) {
+        // Percorso completo: quello sulla riga di comando può essere relativo alla cartella da
+        // cui si è partiti, e i lavori recenti devono ritrovarlo da ovunque.
+        let path = &std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
         match Project::load(path) {
             Ok(project) => {
                 self.reset(project, Some(path.to_path_buf()));
+                crate::recent::remember(&mut self.recent, path);
                 let missing = self.errors.len();
                 self.status = match missing {
                     0 => format!("Aperto {}", self.document_name()),
@@ -99,6 +103,7 @@ impl WinFilesApp {
     /// Sostituisce il lavoro: rilegge le misure di tutti i file (possono essere cambiati da
     /// quando il lavoro è stato salvato) e segna quelli che non ci sono più.
     fn reset(&mut self, project: Project, path: Option<PathBuf>) {
+        self.cancel_scans();
         self.errors.clear();
         self.thumbs.clear();
         self.unselect();
@@ -143,12 +148,14 @@ impl WinFilesApp {
         } else {
             path.with_extension(EXTENSION)
         };
+        let path = std::path::absolute(&path).unwrap_or(path);
         if let Some(stem) = path.file_stem() {
             self.project.title = stem.to_string_lossy().into_owned();
         }
         match self.project.save(&path) {
             Ok(()) => {
                 self.saved = self.project.clone();
+                crate::recent::remember(&mut self.recent, &path);
                 self.path = Some(path);
                 self.status = format!("Salvato {}", self.document_name());
                 true

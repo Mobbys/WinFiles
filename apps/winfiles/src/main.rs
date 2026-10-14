@@ -13,6 +13,7 @@ mod document;
 mod icons;
 mod measure;
 mod panels;
+mod recent;
 mod scan;
 mod shell;
 mod summary;

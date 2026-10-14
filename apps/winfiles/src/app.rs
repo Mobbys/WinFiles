@@ -50,6 +50,12 @@ pub struct WinFilesApp {
     /// Cartella di cui si sta rinominando l'intestazione nell'elenco, con il testo in modifica.
     pub(crate) renaming: Option<(PathBuf, String)>,
     pub(crate) status: String,
+    /// I lavori aperti di recente, il più recente per primo.
+    pub(crate) recent: Vec<PathBuf>,
+    /// Ricerche di file in corso.
+    scans: Vec<scan::Scan>,
+    /// Per svegliare l'interfaccia dai thread.
+    ctx: egui::Context,
     /// Il file del lavoro, se è stato salvato o aperto.
     pub(crate) path: Option<PathBuf>,
     /// Il lavoro com'era all'ultimo salvataggio, per sapere se ci sono modifiche.
@@ -89,6 +95,9 @@ impl WinFilesApp {
             slots: Vec::new(),
             renaming: None,
             status: String::new(),
+            scans: Vec::new(),
+            recent: crate::recent::load(),
+            ctx: ctx.clone(),
         };
         // Un file .winfiles sulla riga di comando (doppio clic in Esplora file) apre il lavoro;
         // gli altri file e cartelle si aggiungono all'elenco.
@@ -103,10 +112,42 @@ impl WinFilesApp {
         app
     }
 
+    /// Cerca i file nei percorsi dati in un thread a parte; arrivano con [`Self::receive_scans`].
     fn add_paths(&mut self, paths: Vec<PathBuf>) {
+        let wake = self.ctx.clone();
+        match scan::Scan::start(paths.clone(), move || wake.request_repaint()) {
+            Ok(s) => self.scans.push(s),
+            // Senza thread si cerca qui, bloccando un momento la finestra.
+            Err(_) => self.merge(scan::collect(&paths), false, false),
+        }
+    }
+
+    /// Porta nel lavoro i file delle ricerche finite.
+    fn receive_scans(&mut self) {
+        let mut done = Vec::new();
+        self.scans.retain(|s| match s.poll() {
+            Some(found) => {
+                done.push(found);
+                false
+            }
+            None => true,
+        });
+        for found in done {
+            self.merge(found.files, found.cancelled, found.truncated);
+        }
+    }
+
+    /// Ferma le ricerche in corso: i loro risultati non arriveranno.
+    pub(crate) fn cancel_scans(&mut self) {
+        for s in self.scans.drain(..) {
+            s.cancel();
+        }
+    }
+
+    fn merge(&mut self, found: Vec<winfiles_model::FileEntry>, cancelled: bool, truncated: bool) {
         let before = self.project.files.len();
         let mut files = std::mem::take(&mut self.project.files);
-        files.extend(scan::collect(&paths));
+        files.extend(found);
         files.sort_by(|a, b| a.path.cmp(&b.path));
         files.dedup_by(|a, b| a.path == b.path);
         for f in files
@@ -123,9 +164,19 @@ impl WinFilesApp {
             1 => "Aggiunto 1 file".into(),
             n => format!("Aggiunti {n} file"),
         };
+        if cancelled {
+            self.status = "Ricerca annullata: nessun file aggiunto".into();
+        } else if truncated {
+            self.status = format!(
+                "{}: fermata a {} file, aggiungi le cartelle una alla volta",
+                self.status,
+                scan::MAX_FILES
+            );
+        }
     }
 
     fn clear(&mut self) {
+        self.cancel_scans();
         self.project.files.clear();
         self.errors.clear();
         self.thumbs.clear();
@@ -293,6 +344,35 @@ impl WinFilesApp {
                                 ui.close();
                                 self.guard(&ctx, Then::Open(None));
                             }
+                            let recent = self.recent.clone();
+                            ui.add_enabled_ui(!recent.is_empty(), |ui| {
+                                ui.menu_button("Lavori recenti", |ui| {
+                                    for path in &recent {
+                                        let name = path
+                                            .file_stem()
+                                            .map(|n| n.to_string_lossy().into_owned())
+                                            .unwrap_or_default();
+                                        let there = path.is_file();
+                                        let resp = ui
+                                            .add_enabled(there, egui::Button::new(name))
+                                            .on_hover_text(path.display().to_string())
+                                            .on_disabled_hover_text(format!(
+                                                "{}\nNon c'è più: è stato spostato o cancellato",
+                                                path.display()
+                                            ));
+                                        if resp.clicked() {
+                                            ui.close();
+                                            self.guard(&ctx, Then::Open(Some(path.clone())));
+                                        }
+                                    }
+                                    ui.separator();
+                                    if ui.button("Svuota l'elenco").clicked() {
+                                        crate::recent::forget(&mut self.recent);
+                                        ui.close();
+                                    }
+                                });
+                            });
+                            ui.separator();
                             if item(ui, "Salva", "Ctrl+S") {
                                 ui.close();
                                 self.save(false);
@@ -452,7 +532,21 @@ impl WinFilesApp {
                     ui.label(egui::RichText::new(text).font(semibold(12.5)).color(t.text));
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         let pending = self.measurer.pending();
-                        if pending > 0 {
+                        if !self.scans.is_empty() {
+                            let found: usize = self.scans.iter().map(scan::Scan::found).sum();
+                            if ui.button("Annulla").clicked() {
+                                for s in &self.scans {
+                                    s.cancel();
+                                }
+                            }
+                            ui.label(
+                                egui::RichText::new(format!("Cerco i file… {found} trovati")).size(12.0),
+                            );
+                            ui.add(egui::Spinner::new().size(13.0).color(t.accent));
+                            // Il conteggio sale mentre il thread lavora.
+                            ui.ctx()
+                                .request_repaint_after(std::time::Duration::from_millis(150));
+                        } else if pending > 0 {
                             ui.label(egui::RichText::new(format!("Misuro {pending} file…")).size(12.0));
                             ui.add(egui::Spinner::new().size(13.0).color(t.accent));
                         } else if !self.status.is_empty() {
@@ -981,6 +1075,7 @@ impl eframe::App for WinFilesApp {
             self.remove_files(&marked);
         }
         self.sync_theme(ui.ctx());
+        self.receive_scans();
         self.receive_measures();
         self.thumbs.receive(ui.ctx());
 
