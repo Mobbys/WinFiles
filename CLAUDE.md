@@ -37,14 +37,16 @@ stampa leggono il suo risultato e non ricalcolano nulla.
 | L1 | `crates/model` | progetto `.winfiles`: file, pagine, note, impostazioni di stampa |
 | L1 | `crates/formats` | misure dei file dalle intestazioni (pixel, DPI, pagine, TrimBox, BoundingBox) |
 | L1 | `crates/thumbs` | miniature per l'anteprima (immagini, prima pagina di PDF/AI, anteprima degli EPS) |
+| L1 | `crates/scene` | la scena di un foglio in mm: ciò che anteprima, PDF e stampa disegnano |
 | L2 | `crates/layout` | impaginazione in fogli A4/A3 |
+| L2 | `crates/pdf_out` | scene dei fogli in un PDF (krilla), vedi ADR 0008 |
 | app | `apps/winfiles` | finestra egui (provvisoria finché non c'è il crate `ui`) |
 | strumenti | `xtask` | `cargo xtask ci`, `cargo xtask layers` |
 
 L'app usa già i pannelli agganciabili di `craft-ui` e il tema di VectorCraft (`apps/winfiles/src/theme.rs`):
 nessun colore scritto a mano nei widget, e ogni testo deve passare il test di contrasto in
-`theme.rs` sia nel tema scuro sia in quello chiaro. In arrivo: `scan` (Fase 1), decodificatori e `thumbs`
-(Fase 2), `pdf_out` (Fase 3), il crate `ui` (Fase 4), stampa con `craft-print` (Fase 5).
+`theme.rs` sia nel tema scuro sia in quello chiaro. In arrivo: decodificatori in processo separato (Fase 2), il crate `ui` (Fase 4), stampa con
+`craft-print` (Fase 5), che disegnerà le stesse scene del PDF.
 `cargo xtask layers` vieta egui, eframe, winit e rfd sotto l'interfaccia.
 
 ## Dipendenze
@@ -64,5 +66,7 @@ in inglese.
 - `cargo run -p winfiles -- <file o cartelle>`: apre l'app con quei file già caricati.
 - `cargo run -p winfiles --features opengl`: disegno OpenGL invece di wgpu (PC senza GPU
   moderna, macchine virtuali, screenshot sotto Xvfb).
+- `cargo run -p winfiles -- --pdf uscita.pdf lavoro.winfiles`: esporta i fogli in PDF e chiude;
+  per guardare il risultato senza interfaccia (`pdftoppm -png uscita.pdf`).
 - `cargo xtask ci`: tutti i controlli.
 - L'eseguibile Windows lo produce la CI (job "Windows") come artifact `winfiles-windows`.
