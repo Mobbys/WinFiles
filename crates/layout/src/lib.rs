@@ -95,6 +95,7 @@ fn check(settings: &PrintSettings) -> Result<(), LayoutError> {
         m.bottom,
         m.left,
         settings.gap,
+        settings.row_gap,
         settings.header,
         settings.caption_text,
         settings.note_text,
@@ -146,7 +147,7 @@ pub fn grid_with_title(
     let title = height(title, printable.h);
     // Il titolo toglie spazio in cima; le miniature stanno nell'area che resta.
     let (area, title_rect) = if title > EPS {
-        let top = title + settings.gap;
+        let top = title + settings.row_gap;
         (
             Rect::new(
                 printable.x,
@@ -162,20 +163,36 @@ pub fn grid_with_title(
     let cols = settings.columns as usize;
     let cell_w = cell_width(settings);
     // Deve starci almeno un'intestazione più una riga, altrimenti l'impaginazione non termina mai.
-    if cell_w <= EPS || settings.header + settings.gap + cell_w > area.h + EPS {
+    if cell_w <= EPS || settings.header + settings.row_gap + cell_w > area.h + EPS {
         return Err(LayoutError::NothingFits);
     }
     // Lo spazio massimo per i testi sotto le immagini e sotto l'intestazione: oltre, il testo
     // viene tagliato, ma la riga sta sempre in un foglio.
-    let max_text = area.h - settings.header - settings.gap - cell_w;
-    // La didascalia della riga che inizia da `start`: la più alta tra le sue celle.
-    let row_caption = |start: usize| {
+    let max_text = area.h - settings.header - settings.row_gap - cell_w;
+    // Le celle della riga che inizia da `start`: fino a `cols`, della stessa cartella.
+    let row = |start: usize| {
         let folder = items.get(start).map(|i| i.folder.as_str());
         items
             .iter()
             .skip(start)
             .take(cols)
-            .take_while(|i| Some(i.folder.as_str()) == folder)
+            .take_while(move |i| Some(i.folder.as_str()) == folder)
+    };
+    // L'altezza delle immagini della riga: quella della più alta, così una riga di soli formati
+    // orizzontali non lascia un vuoto sopra le didascalie.
+    let row_image = |start: usize| {
+        row(start)
+            .map(|i| {
+                i.content
+                    .fit_within(Size::new(cell_w, cell_w))
+                    .map_or(cell_w, |s| s.h)
+            })
+            .fold(0.0, f64::max)
+            .clamp(cell_w * 0.05, cell_w)
+    };
+    // La didascalia della riga che inizia da `start`: la più alta tra le sue celle.
+    let row_caption = |start: usize| {
+        row(start)
             .map(|i| height(i.caption, max_text))
             .fold(0.0, f64::max)
     };
@@ -191,6 +208,7 @@ pub fn grid_with_title(
     let mut y = area.y;
     let mut col = 0usize;
     let mut row_h = 0.0;
+    let mut img_h = cell_w;
     let mut current: Option<&str> = None;
 
     for (index, item) in items.iter().enumerate() {
@@ -200,12 +218,13 @@ pub fn grid_with_title(
                 sheets.push(std::mem::replace(&mut sheet, new_sheet()));
                 y = area.y;
             } else if col != 0 {
-                y += row_h + settings.gap;
+                y += row_h + settings.row_gap;
             }
             col = 0;
-            row_h = cell_w + row_caption(index);
-            let note = height(item.folder_note, max_text - (row_h - cell_w));
-            let block = settings.header + note + settings.gap;
+            img_h = row_image(index);
+            row_h = img_h + row_caption(index);
+            let note = height(item.folder_note, max_text - (row_h - img_h));
+            let block = settings.header + note + settings.row_gap;
             if y + block + row_h > area.bottom() + EPS {
                 sheets.push(std::mem::replace(&mut sheet, new_sheet()));
                 y = area.y;
@@ -220,8 +239,9 @@ pub fn grid_with_title(
             current = Some(item.folder.as_str());
         } else if col == cols {
             col = 0;
-            y += row_h + settings.gap;
-            row_h = cell_w + row_caption(index);
+            y += row_h + settings.row_gap;
+            img_h = row_image(index);
+            row_h = img_h + row_caption(index);
         }
 
         if col == 0 && y + row_h > area.bottom() + EPS {
@@ -232,23 +252,24 @@ pub fn grid_with_title(
                 note: None,
                 continued: true,
             });
-            y = area.y + settings.header + settings.gap;
+            y = area.y + settings.header + settings.row_gap;
         }
 
         let x = area.x + col as f64 * (cell_w + settings.gap);
         let cell = Rect::new(x, y, cell_w, row_h);
-        let image_box = Rect::new(x, y, cell_w, cell_w);
+        let image_box = Rect::new(x, y, cell_w, img_h);
         let fitted = item
             .content
             .fit_within(image_box.size())
             .unwrap_or(image_box.size());
+        // Le immagini poggiano sulla didascalia: centrate in larghezza, in basso nel riquadro.
         let image = Rect::new(
             image_box.x + (image_box.w - fitted.w) / 2.0,
-            image_box.y + (image_box.h - fitted.h) / 2.0,
+            image_box.bottom() - fitted.h,
             fitted.w,
             fitted.h,
         );
-        let caption = Rect::new(x, y + cell_w, cell_w, row_h - cell_w);
+        let caption = Rect::new(x, y + img_h, cell_w, row_h - img_h);
         sheet.items.push(Placed {
             id: item.id,
             cell,

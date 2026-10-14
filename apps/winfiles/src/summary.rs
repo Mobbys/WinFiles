@@ -198,6 +198,7 @@ pub fn layout(ctx: &egui::Context, project: &Project, title: f64) -> Result<Summ
         - print.margins.left
         - print.margins.right;
     let rows = rows(project);
+    let name_w = columns(print, width).first().map_or(width, |c| c.w) - 1.5 * INDENT;
     let lines = rows
         .iter()
         .map(|row| match &row.kind {
@@ -214,14 +215,29 @@ pub fn layout(ctx: &egui::Context, project: &Project, title: f64) -> Result<Summ
                     group: true,
                 }
             }
-            Kind::File { .. } => {
+            Kind::File { file, page, .. } => {
+                let name = project
+                    .files
+                    .get(*file)
+                    .map(|f| row_name(f, *page))
+                    .unwrap_or_default();
+                let names = if name.is_empty() {
+                    1
+                } else {
+                    ctx.fonts_mut(|f| f.layout_job(name_cell_job(&name, pt, name_w)))
+                        .rows
+                        .len()
+                        .max(1)
+                };
                 let notes: usize = row
                     .notes
                     .iter()
                     .map(|n| note_rows(ctx, n, print.note_text, width - 2.0 * INDENT))
                     .sum();
                 Line {
-                    height: line_mm(pt) + 2.0 * ROW_PAD + notes as f64 * line_mm(print.note_text),
+                    height: names as f64 * line_mm(pt)
+                        + 2.0 * ROW_PAD
+                        + notes as f64 * line_mm(print.note_text),
                     group: false,
                 }
             }
@@ -234,6 +250,30 @@ pub fn layout(ctx: &egui::Context, project: &Project, title: f64) -> Result<Summ
     };
     let sheets = winfiles_layout::summary(print, blocks, &lines)?;
     Ok(Summary { rows, sheets })
+}
+
+/// Il nome del file nella prima colonna: intero, a capo quando non sta (`width` in mm).
+fn name_cell_job(text: &str, pt: f64, width: f64) -> LayoutJob {
+    let mut job = LayoutJob::single_section(
+        text.to_string(),
+        TextFormat {
+            font_id: sketch::font(pt * MM_PER_PT, Weight::SemiBold),
+            color: INK,
+            line_height: Some(line_mm(pt) as f32 * PX_PER_MM),
+            ..Default::default()
+        },
+    );
+    job.wrap.max_width = (width as f32 * PX_PER_MM).max(1.0);
+    job
+}
+
+/// Il nome da scrivere su una riga del riepilogo: le pagine dopo la prima lo lasciano vuoto.
+fn row_name(f: &FileEntry, page: Option<usize>) -> String {
+    if page.is_none_or(|p| p == 0) {
+        crate::captions::file_name(&f.path)
+    } else {
+        String::new()
+    }
 }
 
 /// Una riga che si tronca con "…", allineata a sinistra o a destra (`width` in mm).
@@ -370,14 +410,8 @@ pub fn compose(ctx: &egui::Context, sheet: &SummarySheet, summary: &Summary, pro
                     sk.rect(r, 0.0, Some(ZEBRA), None);
                 }
                 let y = r.y + ROW_PAD;
-                let name = if page.is_none_or(|p| p == 0) {
-                    f.path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                };
+                let name = row_name(f, *page);
+                let mut name_lines = 1;
                 let values = cells(f, *page, print, unit);
                 for (i, col) in cols.iter().enumerate() {
                     let text = if i == 0 {
@@ -392,13 +426,13 @@ pub fn compose(ctx: &egui::Context, sheet: &SummarySheet, summary: &Summary, pro
                     let trim = col.title == "Al vivo" && text != "—";
                     let color = if trim { NOTE_INK } else { INK };
                     let weight = if first { Weight::SemiBold } else { Weight::Regular };
-                    let galley = sk.layout(text_job(
-                        text,
-                        em(pt),
-                        weight,
-                        col.w - 1.5 * INDENT,
-                        if first { Align::LEFT } else { Align::RIGHT },
-                    ));
+                    let galley = if first {
+                        let g = sk.layout(name_cell_job(text, pt, col.w - 1.5 * INDENT));
+                        name_lines = g.rows.len().max(1);
+                        g
+                    } else {
+                        sk.layout(text_job(text, em(pt), weight, col.w - 1.5 * INDENT, Align::RIGHT))
+                    };
                     let x = if first {
                         r.x + col.x + INDENT
                     } else {
@@ -406,7 +440,7 @@ pub fn compose(ctx: &egui::Context, sheet: &SummarySheet, summary: &Summary, pro
                     };
                     sk.text((x, y), &galley, em(pt), weight, color, None);
                 }
-                let mut ny = y + line_mm(pt);
+                let mut ny = y + name_lines as f64 * line_mm(pt);
                 for note in &row.notes {
                     let galley = sk.layout(note_job(note, print.note_text, r.w - 2.0 * INDENT, PX_PER_MM));
                     sk.text(

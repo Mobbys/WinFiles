@@ -1,13 +1,13 @@
 //! PDF in uscita (livello L2): le scene dei fogli diventano un PDF con un foglio per pagina, alla
-//! misura vera (A4 o A3). I testi usano Inter incorporato, le pagine di PDF e AI si incorporano
-//! come vettori (nitide a qualsiasi ingrandimento), immagini ed EPS come JPEG a 300 DPI.
+//! misura vera (A4 o A3). I testi usano Inter incorporato; le miniature (immagini, pagine di PDF
+//! e AI, anteprime degli EPS) entrano come JPEG a 150 DPI della loro misura sul foglio: nitide
+//! in stampa e leggere, qualunque sia la risoluzione del file originale.
 //!
 //! Un file che non si riesce a leggere non ferma l'esportazione: al suo posto resta un riquadro
 //! grigio, e il file finisce nell'elenco degli avvisi.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use krilla::color::rgb;
@@ -16,20 +16,18 @@ use krilla::image::Image;
 use krilla::num::NormalizedF32;
 use krilla::page::PageSettings;
 use krilla::paint::{Fill, FillRule, Stroke};
-use krilla::pdf::{Pdf, PdfDocument};
 use krilla::surface::Surface;
 use krilla::text::{Font, TextDirection};
 use krilla::{Data, Document};
 use winfiles_geom::{Rect, mm_to_pt};
-use winfiles_model::FileKind;
 use winfiles_scene::{Color, Item, Page, Picture, Source, Text, Weight};
 
-/// Risoluzione delle immagini nel PDF.
-pub const IMAGE_DPI: f64 = 300.0;
-/// Lato massimo in pixel di un'immagine nel PDF.
-const MAX_IMAGE_SIDE: u32 = 4096;
-/// File PDF più grande che si incorpora come vettore; oltre si usa l'immagine.
-const MAX_PDF_BYTES: u64 = 512 * 1024 * 1024;
+/// Risoluzione delle miniature nel PDF, rispetto alla loro misura sul foglio.
+pub const IMAGE_DPI: f64 = 150.0;
+/// Lato massimo in pixel di una miniatura nel PDF (un A3 intero a 150 DPI ne chiede 2480).
+const MAX_IMAGE_SIDE: u32 = 2600;
+/// Qualità dei JPEG delle miniature.
+const JPEG_QUALITY: u8 = 85;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PdfOutError {
@@ -57,18 +55,9 @@ pub struct Report {
     pub warnings: Vec<(PathBuf, String)>,
 }
 
-/// Una miniatura pronta per il PDF.
-enum Prepared {
-    Vector(PdfDocument),
-    Raster(Image),
-    Missing,
-}
-
 struct Writer {
     regular: Font,
     semibold: Font,
-    /// I PDF già letti, con il numero di pagine.
-    pdfs: HashMap<PathBuf, Option<(PdfDocument, usize)>>,
     rasters: HashMap<(Source, u32), Option<Image>>,
     report: Report,
 }
@@ -85,7 +74,6 @@ pub fn write(
     let mut w = Writer {
         regular,
         semibold,
-        pdfs: HashMap::new(),
         rasters: HashMap::new(),
         report: Report::default(),
     };
@@ -264,8 +252,7 @@ impl Writer {
         s.push_transform(&Transform::from_translate(pt(left), pt(top)));
         let size = KSize::from_wh(pt(full_w), pt(full_h));
         match (prepared, size) {
-            (Prepared::Vector(doc), Some(size)) => s.draw_pdf_page(&doc, size, p.source.page),
-            (Prepared::Raster(img), Some(size)) => s.draw_image(img, size),
+            (Some(img), Some(size)) => s.draw_image(img, size),
             _ => {
                 if let Some(path) = rounded(Rect::new(0.0, 0.0, full_w, full_h), 0.0) {
                     s.set_stroke(None);
@@ -278,22 +265,16 @@ impl Writer {
         s.pop();
     }
 
-    /// Prepara la miniatura: la pagina vettoriale per PDF e AI, altrimenti un JPEG alla
-    /// risoluzione di stampa per un lato lungo di `side_mm`.
-    fn prepare(&mut self, source: &Source, side_mm: f64) -> Prepared {
-        if matches!(source.kind, FileKind::Pdf | FileKind::Ai)
-            && let Some(doc) = self.vector(&source.path, source.page)
-        {
-            return Prepared::Vector(doc);
-        }
+    /// La miniatura come JPEG per un lato lungo di `side_mm` sul foglio, a [`IMAGE_DPI`].
+    fn prepare(&mut self, source: &Source, side_mm: f64) -> Option<Image> {
         let px = ((side_mm / 25.4 * IMAGE_DPI).ceil() as u32).clamp(64, MAX_IMAGE_SIDE);
-        // Le misure vicine condividono la stessa immagine.
-        let bucket = px.next_power_of_two().min(MAX_IMAGE_SIDE);
-        let key = (source.clone(), bucket);
+        // Le misure vicine (le pagine dello stesso file) condividono la stessa immagine.
+        let px = px.div_ceil(64).saturating_mul(64).min(MAX_IMAGE_SIDE);
+        let key = (source.clone(), px);
         if let Some(cached) = self.rasters.get(&key) {
-            return cached.clone().map_or(Prepared::Missing, Prepared::Raster);
+            return cached.clone();
         }
-        let image = match raster(source, bucket) {
+        let image = match raster(source, px) {
             Ok(img) => Some(img),
             Err(e) => {
                 self.warn(&source.path, e);
@@ -301,18 +282,7 @@ impl Writer {
             }
         };
         self.rasters.insert(key, image.clone());
-        image.map_or(Prepared::Missing, Prepared::Raster)
-    }
-
-    /// Il PDF come documento da incorporare, se si legge e ha quella pagina.
-    fn vector(&mut self, path: &Path, page: usize) -> Option<PdfDocument> {
-        if !self.pdfs.contains_key(path) {
-            let doc = load_pdf(path);
-            self.pdfs.insert(path.to_path_buf(), doc);
-        }
-        let (doc, pages) = self.pdfs.get(path)?.clone()?;
-        // Una pagina che non c'è farebbe fallire tutto il PDF alla fine: meglio l'immagine.
-        (page < pages).then_some(doc)
+        image
     }
 
     fn warn(&mut self, path: &Path, why: String) {
@@ -320,24 +290,6 @@ impl Writer {
             self.report.warnings.push((path.to_path_buf(), why));
         }
     }
-}
-
-fn load_pdf(path: &Path) -> Option<(PdfDocument, usize)> {
-    let len = std::fs::metadata(path).ok()?.len();
-    if len > MAX_PDF_BYTES {
-        return None;
-    }
-    let bytes = std::fs::read(path).ok()?;
-    // Un PDF protetto o rovinato non si incorpora: si ripiega sull'immagine.
-    let pdf = std::panic::catch_unwind(move || Pdf::new(bytes).ok())
-        .ok()
-        .flatten()?;
-    // Un PDF 2.0 non entra in un documento 1.7: anche qui si usa l'immagine.
-    if format!("{:?}", pdf.version()) == "Pdf20" {
-        return None;
-    }
-    let pages = pdf.pages().len();
-    Some((PdfDocument::new(Arc::new(pdf)), pages))
 }
 
 /// La pagina come JPEG.
@@ -349,7 +301,7 @@ fn raster(source: &Source, side: u32) -> Result<Image, String> {
     // Il JPEG non ha trasparenza: si appoggia la miniatura sul bianco della carta.
     let rgb = image::DynamicImage::ImageRgba8(rgba).to_rgb8();
     let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90)
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY)
         .encode_image(&rgb)
         .map_err(|e| e.to_string())?;
     Image::from_jpeg(Data::from(out), true)

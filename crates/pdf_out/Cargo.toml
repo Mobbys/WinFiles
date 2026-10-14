@@ -1,6 +1,6 @@
 [package]
 name = "winfiles-pdf-out"
-description = "Scrive le scene dei fogli in un file PDF, con le pagine dei PDF originali come vettori."
+description = "Scrive le scene dei fogli in un file PDF, con le miniature in JPEG a 150 DPI."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,12 +9,15 @@ publish = false
 
 [dependencies]
 winfiles-geom.workspace = true
-winfiles-model.workspace = true
 winfiles-scene.workspace = true
 winfiles-thumbs.workspace = true
 thiserror.workspace = true
 image.workspace = true
 krilla.workspace = true
+
+[dev-dependencies]
+winfiles-model.workspace = true
+winfiles-formats.workspace = true
 
 [lints]
 workspace = true

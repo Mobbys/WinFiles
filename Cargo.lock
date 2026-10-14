@@ -1650,7 +1650,7 @@ checksum = "ac9df074ff163a63864cec9b0bf640ccbff8abf4e44481df7369ce0ac172ffbe"
 dependencies = [
  "bitflags 2.13.2",
  "hayro-cmap",
- "hayro-syntax 0.8.0",
+ "hayro-syntax",
  "kurbo 0.13.1",
  "moxcms",
  "phf",
@@ -1673,15 +1673,6 @@ dependencies = [
 
 [[package]]
 name = "hayro-jpeg2000"
-version = "0.3.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c75ab947623ef4ccaa7acf0579edf7cbb5a73838e3839a7be73335e522f433a1"
-dependencies = [
- "fearless_simd 0.4.1",
-]
-
-[[package]]
-name = "hayro-jpeg2000"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "122c5f834c37a2260b9c851bb8be685cf539b2a8b94b704a931ef7d2525d5835"
@@ -1697,21 +1688,6 @@ checksum = "885c5ef0654933139a9b9546fc2c69e18d37f38aa2520f079092b1be18f1fcaa"
 
 [[package]]
 name = "hayro-syntax"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0edeafd70aa2db743de8ede8637d07ec87db05efe69cde371d03f1b185fcef27"
-dependencies = [
- "flate2",
- "hayro-jbig2",
- "hayro-jpeg2000 0.3.5",
- "memchr",
- "rustc-hash 2.1.3",
- "smallvec",
- "zune-jpeg",
-]
-
-[[package]]
-name = "hayro-syntax"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6cdc818d8d265dcb42081d488f7599df4f73fb79e9d347ecedcd3c23809d2026"
@@ -1719,22 +1695,11 @@ dependencies = [
  "flate2",
  "hayro-ccitt",
  "hayro-jbig2",
- "hayro-jpeg2000 0.4.1",
+ "hayro-jpeg2000",
  "memchr",
  "rustc-hash 2.1.3",
  "smallvec",
  "zune-jpeg",
-]
-
-[[package]]
-name = "hayro-write"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0b3db92c4917aad24ff30d61413a9a7509ae88b27aee1ae34eff881e1d2723a"
-dependencies = [
- "flate2",
- "hayro-syntax 0.7.2",
- "pdf-writer",
 ]
 
 [[package]]
@@ -2026,7 +1991,6 @@ dependencies = [
  "flate2",
  "float-cmp",
  "gif",
- "hayro-write",
  "image-webp",
  "imagesize 0.14.0",
  "indexmap",
@@ -4779,7 +4743,7 @@ dependencies = [
 name = "winfiles-formats"
 version = "0.1.0"
 dependencies = [
- "hayro-syntax 0.8.0",
+ "hayro-syntax",
  "proptest",
  "thiserror 2.0.21",
  "winfiles-geom",
@@ -4821,6 +4785,7 @@ dependencies = [
  "image",
  "krilla",
  "thiserror 2.0.21",
+ "winfiles-formats",
  "winfiles-geom",
  "winfiles-model",
  "winfiles-scene",

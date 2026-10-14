@@ -14,8 +14,8 @@ Le licenze GPL e AGPL sono escluse, quindi niente MuPDF né Ghostscript.
 2. `lopdf` scritto a mano: controllo totale, ma testi, font e copia delle pagine sarebbero tutti da
    scrivere e da mantenere.
 3. **Scelta:** `krilla` 0.8 (MIT/Apache, lo stesso autore di `hayro`, usato da Typst): sottoinsiemi
-   di font TrueType, immagini, e `draw_pdf_page` che incorpora una pagina di un altro PDF come
-   vettore. Si usa senza le funzioni predefinite, solo `raster-images`, `simple-text` e `pdf`.
+   di font TrueType e immagini. Si usa senza le funzioni predefinite, solo `raster-images` e
+   `simple-text`.
 
 ## La scena
 Il nuovo crate `scene` (L1) descrive un foglio come elenco di rettangoli, linee, righe di testo
@@ -26,11 +26,12 @@ va ogni cosa, e il PDF non rifà nessun conto.
 
 ## Decisioni collegate
 - I testi usano Inter, gli stessi file TTF dell'interfaccia, incorporati come sottoinsieme.
-- Le pagine di PDF e AI si incorporano come vettori, ritagliate al formato al vivo come
-  nell'anteprima. I PDF 2.0, quelli oltre 512 MB e una pagina che non c'è passano all'immagine:
-  krilla altrimenti farebbe fallire l'intero documento.
-- Immagini ed EPS diventano JPEG di qualità 90 a 300 DPI, al massimo 4096 pixel di lato, con
-  la stessa decodifica delle miniature (orientamento EXIF compreso).
+- Ogni miniatura (immagini, pagine di PDF e AI, anteprime degli EPS) diventa un JPEG di qualità
+  85 a 150 DPI della sua misura sul foglio, con la stessa decodifica delle miniature
+  dell'anteprima (orientamento EXIF compreso), ritagliata al formato al vivo come nell'anteprima.
+  La prima versione incorporava le pagine di PDF e AI come vettori e le immagini a 300 DPI: un
+  foglio di prova pesava 6,9 MB. Michel ha fatto notare che su una miniatura non serve; ora lo
+  stesso foglio pesa meno di 100 KB.
 - Un file illeggibile o mancante lascia un riquadro grigio e finisce negli avvisi; l'esportazione
   non si ferma.
 - L'esportazione gira in un thread, con il foglio a cui è arrivata e Annulla nella barra di stato;
@@ -42,6 +43,6 @@ krilla 0.8 porta `rustybuzz`, segnalato come non più mantenuto (RUSTSEC-2026-02
 falla nota): lo legge solo con Inter, che è nell'app, quindi è ignorato in `deny.toml` finché
 krilla non passa a `harfrust`.
 
-Un'immagine molto grande pesa nel PDF (circa 1-3 MB per miniatura a 300 DPI); se i PDF diventano
-troppo pesanti si potrà scegliere la risoluzione. Le fotografie restano JPEG anche quando il file
-era PNG: per le miniature di controllo va bene, per stampe finali no, ma non è lo scopo dell'app.
+Il PDF è leggero qualunque sia la risoluzione dei file originali. Il testo dentro le pagine di PDF
+e AI diventa pixel: a 150 DPI si legge fino a corpi piccoli, e il PDF serve a controllare, non a
+stampare il lavoro finale. Se servisse più dettaglio, la risoluzione si potrà rendere regolabile.

@@ -14,7 +14,7 @@ use winfiles_scene::{Page, Picture, Source, Weight};
 
 use crate::captions::{
     CAPTION_PAD, FOLDER_NOTE_INSET, INFO_RATIO, MM_PER_PT, NOTE_GAP, NOTE_INK, Slot, TITLE_PAD_X,
-    TITLE_PAD_Y, area_text, info_lines, line_mm, note_job, title_job,
+    TITLE_PAD_Y, area_text, info_lines, line_mm, name_job, note_job, title_job,
 };
 use crate::sketch::{self, PX_PER_MM, Sketch, grow};
 use crate::theme::Tokens;
@@ -195,14 +195,10 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
         let cx = caption.x + caption.w / 2.0;
         let bottom = Some(caption.bottom());
         let mut y = caption.y + CAPTION_PAD;
-        let name = file
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let galley = sk.layout(one_line(name, em(name_pt), Weight::SemiBold, caption.w));
+        let name = crate::captions::file_name(&file.path);
+        let galley = sk.layout(name_job(&name, name_pt, caption.w, PX_PER_MM));
         sk.text((cx, y), &galley, em(name_pt), Weight::SemiBold, INK, bottom);
-        y += line_mm(name_pt);
+        y += galley.rows.len().max(1) as f64 * line_mm(name_pt);
         match page_info {
             Some(page) => {
                 for line in info_lines(page, project.unit, print) {
@@ -300,6 +296,12 @@ pub(crate) fn draw_title(sk: &mut Sketch<'_>, r: MmRect, print: &PrintSettings) 
     );
 }
 
+/// Altezza dello spazio che occupa un foglio alto `size.h` mm a `scale`, con i margini attorno,
+/// in uno spazio visibile alto `view` punti.
+pub fn content_height(size: winfiles_geom::Size, scale: f32, view: f32) -> f32 {
+    view.max(size.h as f32 * scale + 2.0 * FIT_MARGIN)
+}
+
 /// Il foglio bianco con la sua ombra, centrato nello spazio disponibile. Restituisce la risposta
 /// ai clic, il pennello e l'angolo in alto a sinistra del foglio sullo schermo.
 pub(crate) fn paper(
@@ -311,7 +313,7 @@ pub(crate) fn paper(
     let avail = ui.available_size();
     let total = Vec2::new(
         avail.x.max(page_size.x + 2.0 * FIT_MARGIN),
-        avail.y.max(page_size.y + 2.0 * FIT_MARGIN),
+        content_height(size, scale, avail.y),
     );
     let (response, painter) = ui.allocate_painter(total, Sense::click());
     let origin = response.rect.center() - page_size / 2.0;
@@ -436,5 +438,29 @@ pub(crate) fn draw_header(
     }
     if line_end > x + 4.0 {
         sk.line((x + 2.5, cy), (line_end, cy), FRAME, 0.25);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Il blocco segnalato da Michel: dopo un cambio di foglio con la rotella verso l'alto lo
+    /// scorrimento andava a un valore enorme e il foglio spariva dalla vista. L'altezza dello
+    /// spazio è sempre finita e il fondo del foglio sta dentro.
+    #[test]
+    fn il_fondo_del_foglio_e_raggiungibile() {
+        let a4 = winfiles_geom::Size::new(210.0, 297.0);
+        for (scale, view) in [
+            (0.1, 600.0),
+            (1.3 * 3.78, 600.0),
+            (MAX_ZOOM, 600.0),
+            (2.0, 5000.0),
+        ] {
+            let h = content_height(a4, scale, view);
+            assert!(h.is_finite() && h >= view);
+            let bottom = (h - view).max(0.0);
+            assert!(bottom + view >= 297.0 * scale + FIT_MARGIN - 1e-3);
+        }
     }
 }

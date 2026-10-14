@@ -63,7 +63,7 @@ pub struct WinFilesApp {
     wheel_edges: (bool, bool),
     last_flip: f64,
     /// Dove portare lo scorrimento del foglio appena cambiato con la rotella.
-    flip_to: Option<f32>,
+    flip_to: Option<Edge>,
     /// `--pdf` sulla riga di comando: esportare qui appena i file sono letti, poi chiudere.
     batch_pdf: Option<PathBuf>,
     /// L'esportazione in corso è quella di `--pdf`.
@@ -821,8 +821,8 @@ impl WinFilesApp {
                 .unwrap_or_else(|| canvas::fit_zoom(sheet.size, board.size()));
             self.shown_zoom = scale;
             let scene = crate::summary::compose(ui.ctx(), sheet, summary, &self.project);
-            let flip_to = self.flip_to.take();
-            let scrolled = scroll_area(flip_to).show(ui, |ui| {
+            let offset = self.flip_offset(ui, sheet.size, scale);
+            let scrolled = scroll_area(offset).show(ui, |ui| {
                 crate::summary::draw(ui, sheet, &scene, summary, &mut self.thumbs, &self.marked, scale)
             });
             self.wheel(ui, board, count, &scrolled);
@@ -840,8 +840,8 @@ impl WinFilesApp {
             .unwrap_or_else(|| canvas::fit_zoom(sheet.size, board.size()));
         self.shown_zoom = scale;
         let scene = canvas::compose(ui.ctx(), sheet, &self.project, &self.slots);
-        let flip_to = self.flip_to.take();
-        let scrolled = scroll_area(flip_to).show(ui, |ui| {
+        let offset = self.flip_offset(ui, sheet.size, scale);
+        let scrolled = scroll_area(offset).show(ui, |ui| {
             canvas::draw(
                 ui,
                 sheet,
@@ -903,16 +903,36 @@ impl WinFilesApp {
         // Rotella in giù: delta negativo.
         if delta < 0.0 && was_bottom && self.sheet + 1 < count {
             self.sheet += 1;
-            self.flip_to = Some(0.0);
+            self.flip_to = Some(Edge::Top);
         } else if delta > 0.0 && was_top && self.sheet > 0 {
             self.sheet -= 1;
-            self.flip_to = Some(f32::MAX);
+            self.flip_to = Some(Edge::Bottom);
         } else {
             return;
         }
         self.last_flip = now;
         self.wheel_edges = (true, true);
         ui.ctx().request_repaint();
+    }
+}
+
+/// Il bordo del foglio da mostrare dopo un cambio di foglio con la rotella.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edge {
+    Top,
+    Bottom,
+}
+
+impl WinFilesApp {
+    /// Lo scorrimento che mostra il bordo chiesto del foglio appena cambiato con la rotella,
+    /// calcolato dall'altezza vera del foglio: un valore enorme lascerebbe la vista fuori dal
+    /// foglio e lo scorrimento animato non finirebbe mai.
+    fn flip_offset(&mut self, ui: &egui::Ui, size: winfiles_geom::Size, scale: f32) -> Option<f32> {
+        let view = ui.available_height();
+        Some(match self.flip_to.take()? {
+            Edge::Top => 0.0,
+            Edge::Bottom => (canvas::content_height(size, scale, view) - view).max(0.0),
+        })
     }
 }
 

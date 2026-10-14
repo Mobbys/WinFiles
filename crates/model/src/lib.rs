@@ -217,8 +217,10 @@ pub struct PrintSettings {
     pub margins: Margins,
     /// Numero di colonne della griglia.
     pub columns: u32,
-    /// Spazio tra le celle, in mm.
+    /// Spazio tra le colonne, in mm.
     pub gap: f64,
+    /// Spazio tra le righe di miniature (e sotto titolo e intestazioni), in mm.
+    pub row_gap: f64,
     /// Corpo del testo delle didascalie (nome del file e misure), in punti tipografici.
     pub caption_text: f64,
     /// Corpo del testo delle note di file e cartelle, in punti tipografici.
@@ -249,6 +251,7 @@ impl Default for PrintSettings {
             margins: Margins::uniform(10.0),
             columns: 4,
             gap: 4.0,
+            row_gap: 3.0,
             caption_text: 7.0,
             note_text: 8.0,
             header_text: 9.0,

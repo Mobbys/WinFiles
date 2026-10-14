@@ -727,8 +727,11 @@ impl WinFilesApp {
                         print.margins = Margins::uniform(margin);
                     }
                     ui.end_row();
-                    dim_label(ui, "Spazio tra miniature");
+                    dim_label(ui, "Spazio tra le colonne");
                     mm(ui, &mut print.gap, 20.0);
+                    ui.end_row();
+                    dim_label(ui, "Spazio tra le righe");
+                    mm(ui, &mut print.row_gap, 20.0);
 
                     ui.end_row();
                 });

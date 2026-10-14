@@ -34,7 +34,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 
 # PDF in uscita (vedi docs/adr/0008-esportazione-pdf.md): testi con i font incorporati, immagini
 # e pagine dei PDF originali incorporate come vettori.
-krilla = { version = "0.8", default-features = false, features = ["raster-images", "simple-text", "pdf"] }
+krilla = { version = "0.8", default-features = false, features = ["raster-images", "simple-text"] }
 
 # interfaccia
 eframe = "0.36"

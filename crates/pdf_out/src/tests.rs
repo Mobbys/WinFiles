@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
 use winfiles_geom::Size;
+use winfiles_model::FileKind;
 
 use super::*;
 
@@ -112,17 +113,41 @@ fn un_foglio_con_testi_vettori_e_immagini() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
-/// Le misure delle pagine di un PDF in mm, lette con lo stesso lettore delle miniature.
+/// Le misure delle pagine di un PDF in mm, lette come le legge l'app.
 fn winfiles_formats_like_size(path: &Path) -> Vec<(f64, f64)> {
-    let bytes = std::fs::read(path).unwrap();
-    let pdf = Pdf::new(bytes).unwrap();
-    pdf.pages()
+    winfiles_formats::probe(path, FileKind::Pdf)
+        .unwrap()
+        .pages
         .iter()
-        .map(|p| {
-            let (w, h) = p.render_dimensions();
-            (f64::from(w) * 25.4 / 72.0, f64::from(h) * 25.4 / 72.0)
-        })
+        .map(|p| (p.size.w, p.size.h))
         .collect()
+}
+
+#[test]
+fn le_miniature_pesano_poco_anche_se_il_file_e_grande() {
+    // Una foto da 3000 × 2000 pixel stampata in una miniatura di 60 × 40 mm: a 150 DPI bastano
+    // circa 354 pixel di lato, e il PDF resta leggero.
+    let d = dir("peso");
+    let big = d.join("grande.png");
+    image::RgbImage::from_fn(3000, 2000, |x, y| {
+        image::Rgb([(x % 251) as u8, (y % 241) as u8, ((x ^ y) % 239) as u8])
+    })
+    .save(&big)
+    .unwrap();
+    let mut page = Page::new(Size::new(210.0, 297.0));
+    page.push(Item::Picture(Picture {
+        rect: Rect::new(10.0, 10.0, 60.0, 40.0),
+        source: Source {
+            path: big.clone(),
+            kind: FileKind::Image,
+            page: 0,
+        },
+        crop: Rect::new(0.0, 0.0, 1.0, 1.0),
+    }));
+    let (bytes, report) = write(&[page], &FONTS, &AtomicBool::new(false), |_| {}).unwrap();
+    assert!(report.warnings.is_empty());
+    assert!(bytes.len() < 200_000, "{} byte", bytes.len());
+    std::fs::remove_dir_all(&d).unwrap();
 }
 
 #[test]

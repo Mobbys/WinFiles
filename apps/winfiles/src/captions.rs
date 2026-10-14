@@ -101,6 +101,41 @@ pub fn note_job(text: &str, pt: f64, width_mm: f64, px_per_mm: f32) -> LayoutJob
     job
 }
 
+/// Il nome del file sotto la miniatura: in neretto, centrato, a capo quando non sta in una riga
+/// (tra le parole, o dentro una parola troppo lunga), mai troncato.
+pub fn name_job(name: &str, pt: f64, width_mm: f64, px_per_mm: f32) -> LayoutJob {
+    let size = (pt * MM_PER_PT) as f32 * px_per_mm;
+    let mut job = LayoutJob::single_section(
+        name.to_string(),
+        TextFormat {
+            font_id: crate::theme::semibold(size.max(0.5)),
+            color: Color32::from_rgb(20, 20, 20),
+            line_height: Some((line_mm(pt) as f32 * px_per_mm).max(0.5)),
+            ..Default::default()
+        },
+    );
+    job.wrap.max_width = (width_mm as f32 * px_per_mm).max(1.0);
+    job.wrap.break_anywhere = false;
+    job.halign = egui::Align::Center;
+    job
+}
+
+/// Quante righe occupa il nome di un file in una didascalia larga `width_mm` (almeno una).
+pub fn name_rows(ctx: &egui::Context, name: &str, pt: f64, width_mm: f64) -> usize {
+    if name.is_empty() {
+        return 1;
+    }
+    let job = name_job(name, pt, width_mm, MEASURE_PX_PER_MM as f32);
+    ctx.fonts_mut(|f| f.layout_job(job)).rows.len().max(1)
+}
+
+/// Il nome da scrivere per un file.
+pub fn file_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 /// Spazio tra il riquadro del titolo e il suo testo, in mm.
 pub const TITLE_PAD_X: f64 = 3.0;
 pub const TITLE_PAD_Y: f64 = 1.8;
@@ -196,9 +231,10 @@ pub fn area_text(full: f64, trim: f64, show_sizes: bool, show_trim: bool) -> Opt
     }
 }
 
-/// Altezza della didascalia (nome, `lines` righe di misure e nota), in mm.
+/// Altezza della didascalia (nome intero, `lines` righe di misure e nota), in mm.
 pub fn caption_height(
     ctx: &egui::Context,
+    name: &str,
     note: &str,
     lines: usize,
     caption_pt: f64,
@@ -206,7 +242,8 @@ pub fn caption_height(
     width: f64,
 ) -> f64 {
     let info = line_mm(caption_pt * INFO_RATIO);
-    let mut h = CAPTION_PAD * 2.0 + line_mm(caption_pt) + lines as f64 * info;
+    let names = name_rows(ctx, name, caption_pt, width) as f64;
+    let mut h = CAPTION_PAD * 2.0 + names * line_mm(caption_pt) + lines as f64 * info;
     let rows = note_rows(ctx, note, note_pt, width);
     if rows > 0 {
         h += NOTE_GAP + rows as f64 * line_mm(note_pt);
@@ -276,6 +313,7 @@ pub fn items(ctx: &egui::Context, project: &Project, slots: &[Slot]) -> Vec<Item
             folder: label.clone(),
             caption: caption_height(
                 ctx,
+                &file_name(&f.path),
                 f.note(slot.page),
                 lines,
                 print.caption_text,
@@ -368,15 +406,24 @@ mod tests {
     #[test]
     fn la_nota_allunga_la_didascalia() {
         let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             let ctx = ui.ctx();
-            let empty = caption_height(ctx, "", 2, 7.0, 8.0, 44.5);
-            let short = caption_height(ctx, "Controllare il nero", 2, 7.0, 8.0, 44.5);
-            let long = caption_height(ctx, &"parola ".repeat(40), 2, 7.0, 8.0, 44.5);
+            let empty = caption_height(ctx, "a.pdf", "", 2, 7.0, 8.0, 44.5);
+            let short = caption_height(ctx, "a.pdf", "Controllare il nero", 2, 7.0, 8.0, 44.5);
+            let long = caption_height(ctx, "a.pdf", &"parola ".repeat(40), 2, 7.0, 8.0, 44.5);
             assert!(short > empty && long > short);
             // Testo più grande, didascalia più alta; meno righe di misure, più bassa.
-            assert!(caption_height(ctx, "", 2, 10.0, 8.0, 44.5) > empty);
-            assert!(caption_height(ctx, "", 1, 7.0, 8.0, 44.5) < empty);
+            assert!(caption_height(ctx, "a.pdf", "", 2, 10.0, 8.0, 44.5) > empty);
+            assert!(caption_height(ctx, "a.pdf", "", 1, 7.0, 8.0, 44.5) < empty);
+            // Un nome lungo va a capo, intero: la didascalia cresce di una riga per ogni riga del
+            // nome, anche senza spazi.
+            let lungo = "Brochure_pieghevole_tre_ante_cliente_Rossi_definitivo_v12_stampa.pdf";
+            assert!(name_rows(ctx, lungo, 7.0, 44.5) >= 2);
+            assert!(name_rows(ctx, &lungo.replace('_', ""), 7.0, 44.5) >= 2);
+            let alta = caption_height(ctx, lungo, "", 2, 7.0, 8.0, 44.5);
+            let righe = name_rows(ctx, lungo, 7.0, 44.5) as f64;
+            assert!((alta - empty - (righe - 1.0) * line_mm(7.0)).abs() < 1e-9);
             assert_eq!(folder_note_height(ctx, "  ", 8.0, 190.0), 0.0);
         });
         out.textures_delta.clear();

@@ -22,10 +22,12 @@ fn quattro_colonne_su_a4() {
     assert_eq!(s.size, Size::new(210.0, 297.0));
     // 190 mm utili, 3 spazi da 4 mm: celle da 44,5 mm.
     assert!((s.items[0].cell.w - 44.5).abs() < 1e-9);
-    // Un'immagine 2:1 occupa tutta la larghezza e metà altezza, centrata in verticale.
+    // Un'immagine 2:1 occupa tutta la larghezza e metà altezza; in una riga di soli formati
+    // orizzontali la riga è alta quanto l'immagine, senza vuoto sopra la didascalia.
     let img = s.items[0].image;
     assert!((img.w - 44.5).abs() < 1e-9 && (img.h - 22.25).abs() < 1e-9);
-    assert!((img.y - (s.items[0].cell.y + 11.125)).abs() < 1e-9);
+    assert!((img.y - s.items[0].cell.y).abs() < 1e-9);
+    assert!((s.items[0].caption.y - img.bottom()).abs() < 1e-9);
     assert_eq!(s.headers.len(), 1);
 }
 
@@ -62,7 +64,7 @@ fn la_riga_e_alta_quanto_la_didascalia_piu_alta() {
     // Prima riga: 4 celle alte come la didascalia da 30 mm; seconda riga: 12 mm.
     assert!(s.items[..4].iter().all(|p| (p.caption.h - 30.0).abs() < 1e-9));
     assert!((s.items[4].caption.h - 12.0).abs() < 1e-9);
-    assert!((s.items[4].cell.y - (s.items[0].cell.bottom() + settings.gap)).abs() < 1e-9);
+    assert!((s.items[4].cell.y - (s.items[0].cell.bottom() + settings.row_gap)).abs() < 1e-9);
 }
 
 #[test]
@@ -74,7 +76,7 @@ fn la_nota_della_cartella_sta_sotto_l_intestazione() {
     let note = s.headers[0].note.unwrap();
     assert!((note.y - (s.headers[0].rect.y + settings.header)).abs() < 1e-9);
     assert!((note.h - 8.0).abs() < 1e-9);
-    assert!(s.items[0].cell.y >= note.bottom() + settings.gap - 1e-9);
+    assert!(s.items[0].cell.y >= note.bottom() + settings.row_gap - 1e-9);
     assert!(s.headers[1].note.is_none());
 }
 
@@ -90,9 +92,35 @@ fn il_titolo_sta_in_cima_a_ogni_foglio() {
     for s in &sheets {
         let t = s.title.unwrap();
         assert!((t.y - s.area.y).abs() < 1e-9 && (t.h - 12.0).abs() < 1e-9);
-        assert!(s.headers[0].rect.y >= t.bottom() + settings.gap - 1e-9);
+        assert!(s.headers[0].rect.y >= t.bottom() + settings.row_gap - 1e-9);
     }
     assert!(grid(&settings, &items).unwrap()[0].title.is_none());
+}
+
+#[test]
+fn le_immagini_della_riga_poggiano_sulla_didascalia() {
+    // Una riga con un verticale e un orizzontale: alta quanto il verticale; l'orizzontale sta in
+    // basso, appoggiato alla sua didascalia, e le didascalie sono allineate.
+    let settings = PrintSettings::default();
+    let items = vec![item(0, 210.0, 297.0, "a"), item(1, 297.0, 210.0, "a")];
+    let s = &grid(&settings, &items).unwrap()[0];
+    let (alto, largo) = (&s.items[0], &s.items[1]);
+    assert!((alto.image.h - alto.cell.w).abs() < 1e-9);
+    assert!((largo.image.bottom() - alto.image.bottom()).abs() < 1e-9);
+    assert!((largo.caption.y - alto.caption.y).abs() < 1e-9);
+}
+
+#[test]
+fn spazio_tra_le_righe_separato_da_quello_tra_le_colonne() {
+    let settings = PrintSettings {
+        gap: 6.0,
+        row_gap: 1.0,
+        ..PrintSettings::default()
+    };
+    let items: Vec<_> = (0..8).map(|i| item(i, 1.0, 1.0, "a")).collect();
+    let s = &grid(&settings, &items).unwrap()[0];
+    assert!((s.items[1].cell.x - (s.items[0].cell.right() + 6.0)).abs() < 1e-9);
+    assert!((s.items[4].cell.y - (s.items[0].cell.bottom() + 1.0)).abs() < 1e-9);
 }
 
 #[test]
@@ -127,20 +155,23 @@ fn settings_strategy() -> impl Strategy<Value = PrintSettings> {
         prop_oneof![Just(Orientation::Portrait), Just(Orientation::Landscape)],
         0.0f64..30.0,
         1u32..=MAX_COLUMNS,
-        0.0f64..10.0,
+        (0.0f64..10.0, 0.0f64..10.0),
         0.0f64..15.0,
         any::<bool>(),
     )
         .prop_map(
-            |(paper, orientation, margin, columns, gap, header, page_break_per_folder)| PrintSettings {
-                paper,
-                orientation,
-                margins: Margins::uniform(margin),
-                columns,
-                gap,
-                header,
-                page_break_per_folder,
-                ..PrintSettings::default()
+            |(paper, orientation, margin, columns, (gap, row_gap), header, page_break_per_folder)| {
+                PrintSettings {
+                    paper,
+                    orientation,
+                    margins: Margins::uniform(margin),
+                    columns,
+                    gap,
+                    row_gap,
+                    header,
+                    page_break_per_folder,
+                    ..PrintSettings::default()
+                }
             },
         )
 }
