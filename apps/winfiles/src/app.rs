@@ -6,10 +6,11 @@ use std::path::PathBuf;
 
 use craft_ui::docking::{Action, DockArea, DockContent, Layout, PanelLimits};
 use egui::{Align, Color32, Rect, Sense, Stroke, Vec2, vec2};
-use winfiles_geom::{Orientation, Paper, Size, Unit, format_area};
-use winfiles_layout::{Item, LayoutError, MAX_COLUMNS, Sheet, grid};
-use winfiles_model::{FileKind, Project, Totals};
+use winfiles_geom::{Orientation, Paper, Unit, format_area};
+use winfiles_layout::{LayoutError, MAX_COLUMNS, Sheet, grid};
+use winfiles_model::{Project, Totals};
 
+use crate::captions::{self, Slot};
 use crate::dock::{self, PanelId};
 use crate::icons;
 use crate::measure::Measurer;
@@ -36,37 +37,9 @@ pub struct WinFilesApp {
     dock: Layout<PanelId>,
     measurer: Measurer,
     pub(crate) thumbs: Thumbnails,
+    /// Le miniature sul foglio, una per pagina, ricalcolate a ogni fotogramma.
+    slots: Vec<Slot>,
     status: String,
-}
-
-/// Proporzioni provvisorie finché un file non è stato misurato.
-fn placeholder_size(kind: FileKind) -> Size {
-    match kind {
-        FileKind::Image => Size::new(4.0, 3.0),
-        _ => Size::new(210.0, 297.0),
-    }
-}
-
-/// Gli elementi da impaginare, una pagina per file per ora, con le proporzioni vere.
-fn items(project: &Project) -> Vec<Item> {
-    let labels = project.folder_labels();
-    project
-        .files
-        .iter()
-        .enumerate()
-        .map(|(id, f)| Item {
-            id,
-            content: f
-                .pages
-                .first()
-                .map(|p| p.finished())
-                .unwrap_or_else(|| placeholder_size(f.kind)),
-            folder: labels
-                .get(f.folder())
-                .cloned()
-                .unwrap_or_else(|| f.folder().display().to_string()),
-        })
-        .collect()
 }
 
 impl WinFilesApp {
@@ -85,6 +58,7 @@ impl WinFilesApp {
             dock: dock::default_layout(),
             measurer: Measurer::start(move || wake.request_repaint()),
             thumbs: Thumbnails::start(move || wake2.request_repaint()),
+            slots: Vec::new(),
             status: String::new(),
         };
         if !paths.is_empty() {
@@ -477,7 +451,15 @@ impl WinFilesApp {
         let out = egui::ScrollArea::both()
             .auto_shrink(false)
             .show(ui, |ui| {
-                canvas::draw(ui, sheet, &self.project, &mut self.thumbs, self.selected, scale)
+                canvas::draw(
+                    ui,
+                    sheet,
+                    &self.project,
+                    &self.slots,
+                    &mut self.thumbs,
+                    self.selected,
+                    scale,
+                )
             })
             .inner;
         if let Some(id) = out.clicked {
@@ -693,7 +675,11 @@ impl eframe::App for WinFilesApp {
         self.receive_measures();
         self.thumbs.receive(ui.ctx());
 
-        let sheets = grid(&self.project.print, &items(&self.project));
+        self.slots = captions::slots(&self.project);
+        let sheets = grid(
+            &self.project.print,
+            &captions::items(ui.ctx(), &self.project, &self.slots),
+        );
         self.app_bar(ui);
         self.control_bar(ui);
         self.status_bar(ui);

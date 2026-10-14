@@ -39,6 +39,8 @@ pub enum ThumbError {
     NoPreview,
     #[error("il decodificatore si è fermato su un errore interno")]
     Crashed,
+    #[error("il file non ha la pagina {0}")]
+    NoPage(usize),
 }
 
 /// Una miniatura: pixel RGBA non premoltiplicati, riga per riga.
@@ -49,13 +51,15 @@ pub struct Thumb {
     pub rgba: Vec<u8>,
 }
 
-/// Miniatura del file con il lato lungo di al massimo `max_side` pixel.
-pub fn render(path: &Path, kind: FileKind, max_side: u32) -> Result<Thumb, ThumbError> {
+/// Miniatura della pagina `page` (da 0) del file, con il lato lungo di al massimo `max_side`
+/// pixel. Immagini ed EPS hanno solo la pagina 0.
+pub fn render(path: &Path, kind: FileKind, page: usize, max_side: u32) -> Result<Thumb, ThumbError> {
     let max_side = max_side.clamp(16, MAX_SIDE);
-    catch_unwind(AssertUnwindSafe(|| render_inner(path, kind, max_side))).unwrap_or(Err(ThumbError::Crashed))
+    catch_unwind(AssertUnwindSafe(|| render_inner(path, kind, page, max_side)))
+        .unwrap_or(Err(ThumbError::Crashed))
 }
 
-fn render_inner(path: &Path, kind: FileKind, max_side: u32) -> Result<Thumb, ThumbError> {
+fn render_inner(path: &Path, kind: FileKind, page: usize, max_side: u32) -> Result<Thumb, ThumbError> {
     let mut file = std::fs::File::open(path)?;
     let mut head = [0u8; 1024];
     let n = read_up_to(&mut file, &mut head)?;
@@ -68,7 +72,10 @@ fn render_inner(path: &Path, kind: FileKind, max_side: u32) -> Result<Thumb, Thu
         file.seek(SeekFrom::Start(0))?;
         let mut data = Vec::new();
         file.read_to_end(&mut data)?;
-        return pdf(data, max_side);
+        return pdf(data, page, max_side);
+    }
+    if page > 0 {
+        return Err(ThumbError::NoPage(page + 1));
     }
     if head.starts_with(&[0xC5, 0xD0, 0xD3, 0xC6]) {
         return eps_preview(&mut file, head, max_side);
@@ -123,12 +130,12 @@ fn image_thumb<R: std::io::BufRead + Seek>(
     })
 }
 
-fn pdf(data: Vec<u8>, max_side: u32) -> Result<Thumb, ThumbError> {
+fn pdf(data: Vec<u8>, page: usize, max_side: u32) -> Result<Thumb, ThumbError> {
     let pdf = Pdf::new(data).map_err(|e| match e {
         LoadPdfError::Decryption(_) => ThumbError::Encrypted,
         LoadPdfError::Invalid => ThumbError::Pdf,
     })?;
-    let page = pdf.pages().first().ok_or(ThumbError::Pdf)?;
+    let page = pdf.pages().get(page).ok_or(ThumbError::NoPage(page + 1))?;
     let (w, h) = page.render_dimensions();
     let long = w.max(h);
     if !(long.is_finite() && long > 0.0) {

@@ -61,7 +61,7 @@ fn pdf() -> Vec<u8> {
 #[test]
 fn image_is_scaled_down_keeping_proportions() {
     let f = Temp::new("a.png", &png(400, 200));
-    let t = render(&f.0, FileKind::Image, 100).unwrap();
+    let t = render(&f.0, FileKind::Image, 0, 100).unwrap();
     assert_eq!((t.width, t.height), (100, 50));
     assert_eq!(t.rgba.len(), 100 * 50 * 4);
     // Metà sinistra rossa, metà destra nera.
@@ -73,14 +73,14 @@ fn image_is_scaled_down_keeping_proportions() {
 #[test]
 fn small_images_are_not_enlarged() {
     let f = Temp::new("b.png", &png(20, 10));
-    let t = render(&f.0, FileKind::Image, 512).unwrap();
+    let t = render(&f.0, FileKind::Image, 0, 512).unwrap();
     assert_eq!((t.width, t.height), (20, 10));
 }
 
 #[test]
 fn pdf_first_page_is_rendered_on_white() {
     let f = Temp::new("c.pdf", &pdf());
-    let t = render(&f.0, FileKind::Pdf, 200).unwrap();
+    let t = render(&f.0, FileKind::Pdf, 0, 200).unwrap();
     assert_eq!((t.width, t.height), (200, 100));
     let px = |x: u32, y: u32| {
         let i = ((y * t.width + x) * 4) as usize;
@@ -93,16 +93,30 @@ fn pdf_first_page_is_rendered_on_white() {
 #[test]
 fn damaged_files_are_errors() {
     let f = Temp::new("d.jpg", b"\xFF\xD8\xFF\xE0 non e' un jpeg");
-    assert!(render(&f.0, FileKind::Image, 100).is_err());
+    assert!(render(&f.0, FileKind::Image, 0, 100).is_err());
     let f = Temp::new("e.pdf", b"%PDF-1.4 rotto");
-    assert!(render(&f.0, FileKind::Pdf, 100).is_err());
+    assert!(render(&f.0, FileKind::Pdf, 0, 100).is_err());
     let f = Temp::new("f.eps", b"%!PS-Adobe-3.0 EPSF-3.0\n");
     assert!(matches!(
-        render(&f.0, FileKind::Eps, 100),
+        render(&f.0, FileKind::Eps, 0, 100),
         Err(ThumbError::NoPreview)
     ));
     assert!(matches!(
-        render(&PathBuf::from("/non/esiste.png"), FileKind::Image, 100),
+        render(&PathBuf::from("/non/esiste.png"), FileKind::Image, 0, 100),
         Err(ThumbError::Io(_))
+    ));
+}
+
+#[test]
+fn pages_beyond_the_last_are_errors_not_crashes() {
+    let f = Temp::new("g.pdf", &pdf());
+    assert!(matches!(
+        render(&f.0, FileKind::Pdf, 1, 100),
+        Err(ThumbError::NoPage(2))
+    ));
+    let f = Temp::new("h.png", &png(4, 4));
+    assert!(matches!(
+        render(&f.0, FileKind::Image, 3, 100),
+        Err(ThumbError::NoPage(4))
     ));
 }

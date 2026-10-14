@@ -7,6 +7,8 @@ fn item(id: usize, w: f64, h: f64, folder: &str) -> Item {
         id,
         content: Size::new(w, h),
         folder: folder.into(),
+        caption: 12.0,
+        folder_note: 0.0,
     }
 }
 
@@ -52,6 +54,31 @@ fn intestazione_ripetuta_sul_foglio_successivo() {
 }
 
 #[test]
+fn la_riga_e_alta_quanto_la_didascalia_piu_alta() {
+    let settings = PrintSettings::default();
+    let mut items: Vec<_> = (0..6).map(|i| item(i, 1.0, 1.0, "a")).collect();
+    items[1].caption = 30.0;
+    let s = &grid(&settings, &items).unwrap()[0];
+    // Prima riga: 4 celle alte come la didascalia da 30 mm; seconda riga: 12 mm.
+    assert!(s.items[..4].iter().all(|p| (p.caption.h - 30.0).abs() < 1e-9));
+    assert!((s.items[4].caption.h - 12.0).abs() < 1e-9);
+    assert!((s.items[4].cell.y - (s.items[0].cell.bottom() + settings.gap)).abs() < 1e-9);
+}
+
+#[test]
+fn la_nota_della_cartella_sta_sotto_l_intestazione() {
+    let settings = PrintSettings::default();
+    let mut items = vec![item(0, 1.0, 1.0, "a"), item(1, 1.0, 1.0, "b")];
+    items[0].folder_note = 8.0;
+    let s = &grid(&settings, &items).unwrap()[0];
+    let note = s.headers[0].note.unwrap();
+    assert!((note.y - (s.headers[0].rect.y + settings.header)).abs() < 1e-9);
+    assert!((note.h - 8.0).abs() < 1e-9);
+    assert!(s.items[0].cell.y >= note.bottom() + settings.gap - 1e-9);
+    assert!(s.headers[1].note.is_none());
+}
+
+#[test]
 fn nessun_elemento_un_foglio_vuoto() {
     let sheets = grid(&PrintSettings::default(), &[]).unwrap();
     assert_eq!(sheets.len(), 1);
@@ -84,32 +111,40 @@ fn settings_strategy() -> impl Strategy<Value = PrintSettings> {
         0.0f64..30.0,
         1u32..=MAX_COLUMNS,
         0.0f64..10.0,
-        0.0f64..20.0,
         0.0f64..15.0,
         any::<bool>(),
     )
         .prop_map(
-            |(paper, orientation, margin, columns, gap, caption, header, page_break_per_folder)| {
-                PrintSettings {
-                    paper,
-                    orientation,
-                    margins: Margins::uniform(margin),
-                    columns,
-                    gap,
-                    caption,
-                    header,
-                    page_break_per_folder,
-                }
+            |(paper, orientation, margin, columns, gap, header, page_break_per_folder)| PrintSettings {
+                paper,
+                orientation,
+                margins: Margins::uniform(margin),
+                columns,
+                gap,
+                header,
+                page_break_per_folder,
+                ..PrintSettings::default()
             },
         )
 }
 
 fn items_strategy() -> impl Strategy<Value = Vec<Item>> {
-    prop::collection::vec((0.1f64..5000.0, 0.1f64..5000.0, 0usize..4), 0..120).prop_map(|v| {
+    let one = (
+        0.1f64..5000.0,
+        0.1f64..5000.0,
+        0usize..4,
+        -5.0f64..400.0,
+        -5.0f64..400.0,
+    );
+    prop::collection::vec(one, 0..120).prop_map(|v| {
         let mut v: Vec<_> = v
             .into_iter()
             .enumerate()
-            .map(|(i, (w, h, f))| item(i, w, h, &format!("c{f}")))
+            .map(|(i, (w, h, f, caption, note))| Item {
+                caption,
+                folder_note: note,
+                ..item(i, w, h, &format!("c{f}"))
+            })
             .collect();
         // Le cartelle arrivano raggruppate, come dalla scansione.
         v.sort_by(|a, b| a.folder.cmp(&b.folder));
@@ -149,6 +184,9 @@ proptest! {
             }
             for h in &sheet.headers {
                 prop_assert!(sheet.area.contains(h.rect, 1e-6));
+                if let Some(note) = h.note {
+                    prop_assert!(h.rect.contains(note, 1e-6));
+                }
             }
             // Nessuna sovrapposizione tra celle e intestazioni dello stesso foglio.
             for (i, a) in rects.iter().enumerate() {

@@ -194,9 +194,20 @@ impl WinFilesApp {
                                 Vec2::splat(15.0),
                             );
                             icons::paint(ui, kind_icon(f.kind), icon, tint);
-                            let mut name = file_name(f);
-                            if !f.note.is_empty() {
-                                name.push_str("  ✎");
+                            let name = file_name(f);
+                            // Una matita a destra per i file con una nota (Inter non ha il simbolo ✎).
+                            let note_icon = !f.note.trim().is_empty();
+                            if note_icon {
+                                let r = Rect::from_center_size(
+                                    rect.right_center() - vec2(16.0, 0.0),
+                                    Vec2::splat(14.0),
+                                );
+                                icons::paint(
+                                    ui,
+                                    "pencil",
+                                    r,
+                                    if selected { t.text_strong } else { t.accent_text },
+                                );
                             }
                             // Misure calcolate con la risoluzione presunta: in arancione, da verificare.
                             let assumed = f.image.is_some_and(|i| !i.dpi_from_file);
@@ -211,7 +222,8 @@ impl WinFilesApp {
                             let info = file_info(f, unit, error.is_some(), assumed);
                             two_lines(
                                 ui,
-                                rect.with_min_x(rect.left() + 42.0),
+                                rect.with_min_x(rect.left() + 42.0)
+                                    .with_max_x(rect.right() - if note_icon { 30.0 } else { 0.0 }),
                                 &name,
                                 egui::FontId::proportional(12.5),
                                 name_color,
@@ -258,7 +270,7 @@ impl WinFilesApp {
             let box_size = vec2(ui.available_width(), 170.0);
             let (area, _) = ui.allocate_exact_size(box_size, Sense::hover());
             ui.painter().rect_filled(area, t.radius, t.pasteboard);
-            match thumbs.get(&f.path, f.kind) {
+            match thumbs.get(&f.path, f.kind, 0) {
                 ThumbState::Ready(tex) => {
                     let size = tex.size_vec2();
                     let k = ((area.width() - 16.0) / size.x).min((area.height() - 16.0) / size.y).min(1.0);
@@ -433,6 +445,15 @@ impl WinFilesApp {
             // Il cursore occupa la larghezza del pannello, lasciando posto al numero.
             ui.spacing_mut().slider_width = (ui.available_width() - 64.0).max(60.0);
             ui.add(egui::Slider::new(&mut print.columns, 1..=10));
+            ui.add_space(8.0);
+            dim_label(ui, "Testo di nome e misure");
+            ui.add(text_slider(
+                &mut print.caption_text,
+                MIN_CAPTION_PT..=MAX_CAPTION_PT,
+            ));
+            ui.add_space(8.0);
+            dim_label(ui, "Testo delle note");
+            ui.add(text_slider(&mut print.note_text, MIN_NOTE_PT..=MAX_NOTE_PT));
             ui.add_space(10.0);
             egui::Grid::new("impaginazione")
                 .num_columns(2)
@@ -446,9 +467,6 @@ impl WinFilesApp {
                     ui.end_row();
                     dim_label(ui, "Spazio tra miniature");
                     mm(ui, &mut print.gap, 20.0);
-                    ui.end_row();
-                    dim_label(ui, "Didascalia");
-                    mm(ui, &mut print.caption, 40.0);
                     ui.end_row();
                     dim_label(ui, "Intestazione cartella");
                     mm(ui, &mut print.header, 30.0);
@@ -481,6 +499,24 @@ fn mm_field(value: &mut f64, max: f64) -> egui::DragValue<'_> {
         .custom_formatter(|v, _| format!("{} mm", format_number(v, 1, false)))
         .custom_parser(|text| {
             let clean = text.trim().trim_end_matches("mm").trim().replace(',', ".");
+            clean.parse::<f64>().ok()
+        })
+}
+
+/// Corpo minimo e massimo del testo delle didascalie, in punti.
+pub(crate) const MIN_CAPTION_PT: f64 = 4.0;
+pub(crate) const MAX_CAPTION_PT: f64 = 16.0;
+/// Corpo minimo e massimo del testo delle note, in punti (come gli 8-40 px della 4.9).
+pub(crate) const MIN_NOTE_PT: f64 = 6.0;
+pub(crate) const MAX_NOTE_PT: f64 = 30.0;
+
+/// Un cursore per il corpo di un testo, in punti tipografici con la virgola decimale.
+pub(crate) fn text_slider(value: &mut f64, range: std::ops::RangeInclusive<f64>) -> egui::Slider<'_> {
+    egui::Slider::new(value, range)
+        .step_by(0.5)
+        .custom_formatter(|v, _| format!("{} pt", format_number(v, 1, true)))
+        .custom_parser(|text| {
+            let clean = text.trim().trim_end_matches("pt").trim().replace(',', ".");
             clean.parse::<f64>().ok()
         })
 }

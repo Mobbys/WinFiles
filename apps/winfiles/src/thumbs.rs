@@ -23,22 +23,25 @@ pub enum ThumbState {
     Failed(String),
 }
 
+/// Una miniatura: file e pagina (da 0).
+type Key = (PathBuf, usize);
+
 struct Done {
-    path: PathBuf,
+    key: Key,
     result: Result<Thumb, String>,
 }
 
 pub struct Thumbnails {
-    jobs: Option<Sender<(PathBuf, FileKind)>>,
+    jobs: Option<Sender<(Key, FileKind)>>,
     results: Receiver<Done>,
-    cache: HashMap<PathBuf, (ThumbState, u64)>,
+    cache: HashMap<Key, (ThumbState, u64)>,
     /// Contatore per sapere quale miniatura è stata usata meno di recente.
     clock: u64,
 }
 
 impl Thumbnails {
     pub fn start(wake: impl Fn() + Send + Sync + 'static) -> Self {
-        let (jobs, inbox) = channel::<(PathBuf, FileKind)>();
+        let (jobs, inbox) = channel::<(Key, FileKind)>();
         let (outbox, results) = channel();
         let inbox = Arc::new(Mutex::new(inbox));
         let wake = Arc::new(wake);
@@ -54,9 +57,9 @@ impl Thumbnails {
                             Ok(rx) => rx.recv(),
                             Err(_) => break,
                         };
-                        let Ok((path, kind)) = job else { break };
-                        let result = render(&path, kind, SIDE).map_err(|e| e.to_string());
-                        if outbox.send(Done { path, result }).is_err() {
+                        let Ok((key, kind)) = job else { break };
+                        let result = render(&key.0, kind, key.1, SIDE).map_err(|e| e.to_string());
+                        if outbox.send(Done { key, result }).is_err() {
                             break;
                         }
                         wake();
@@ -72,18 +75,19 @@ impl Thumbnails {
         }
     }
 
-    /// La miniatura di `path`, chiesta ai thread se non c'è ancora.
-    pub fn get(&mut self, path: &Path, kind: FileKind) -> &ThumbState {
+    /// La miniatura della pagina `page` di `path`, chiesta ai thread se non c'è ancora.
+    pub fn get(&mut self, path: &Path, kind: FileKind, page: usize) -> &ThumbState {
         self.clock += 1;
         let clock = self.clock;
-        if !self.cache.contains_key(path) {
+        let key = (path.to_path_buf(), page);
+        if !self.cache.contains_key(&key) {
             let state = match &self.jobs {
-                Some(jobs) if jobs.send((path.to_path_buf(), kind)).is_ok() => ThumbState::Loading,
+                Some(jobs) if jobs.send((key.clone(), kind)).is_ok() => ThumbState::Loading,
                 _ => ThumbState::Failed("miniature non disponibili".into()),
             };
-            self.cache.insert(path.to_path_buf(), (state, clock));
+            self.cache.insert(key.clone(), (state, clock));
         }
-        match self.cache.get_mut(path) {
+        match self.cache.get_mut(&key) {
             Some(entry) => {
                 entry.1 = clock;
                 &entry.0
@@ -98,7 +102,7 @@ impl Thumbnails {
             let state = match done.result {
                 Ok(t) => match image_of(&t) {
                     Some(img) => ThumbState::Ready(ctx.load_texture(
-                        done.path.display().to_string(),
+                        format!("{}#{}", done.key.0.display(), done.key.1),
                         img,
                         egui::TextureOptions::LINEAR,
                     )),
@@ -107,16 +111,16 @@ impl Thumbnails {
                 Err(e) => ThumbState::Failed(e),
             };
             // Una miniatura arrivata dopo essere uscita dalla cache si scarta.
-            if let Some(entry) = self.cache.get_mut(&done.path) {
+            if let Some(entry) = self.cache.get_mut(&done.key) {
                 entry.0 = state;
             }
         }
         if self.cache.len() > MAX_CACHED {
-            let mut ages: Vec<(u64, PathBuf)> = self
+            let mut ages: Vec<(u64, Key)> = self
                 .cache
                 .iter()
                 .filter(|(_, (s, _))| !matches!(s, ThumbState::Loading))
-                .map(|(p, (_, t))| (*t, p.clone()))
+                .map(|(k, (_, t))| (*t, k.clone()))
                 .collect();
             ages.sort();
             let excess = self.cache.len() - MAX_CACHED;

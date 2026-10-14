@@ -179,8 +179,10 @@ pub struct PrintSettings {
     pub columns: u32,
     /// Spazio tra le celle, in mm.
     pub gap: f64,
-    /// Altezza riservata alla didascalia sotto ogni miniatura, in mm.
-    pub caption: f64,
+    /// Corpo del testo delle didascalie (nome del file e misure), in punti tipografici.
+    pub caption_text: f64,
+    /// Corpo del testo delle note di file e cartelle, in punti tipografici.
+    pub note_text: f64,
     /// Altezza dell'intestazione di cartella, in mm.
     pub header: f64,
     /// Ogni cartella inizia su un foglio nuovo.
@@ -195,7 +197,8 @@ impl Default for PrintSettings {
             margins: Margins::uniform(10.0),
             columns: 4,
             gap: 4.0,
-            caption: 12.0,
+            caption_text: 7.0,
+            note_text: 8.0,
             header: 10.0,
             page_break_per_folder: false,
         }
