@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*", "xtask"]
+default-members = ["crates/*", "apps/winfiles", "xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "LicenseRef-WinFiles-Proprietary"
+rust-version = "1.95"
+repository = "https://github.com/Mobbys/WinFiles"
+
+[workspace.dependencies]
+# interni
+winfiles-geom = { path = "crates/geom", version = "0.1.0" }
+winfiles-model = { path = "crates/model", version = "0.1.0" }
+winfiles-layout = { path = "crates/layout", version = "0.1.0" }
+
+# base
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+proptest = "1"
+
+# interfaccia
+eframe = "0.36"
+egui = "0.36"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

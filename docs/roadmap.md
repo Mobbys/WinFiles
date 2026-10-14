@@ -1,0 +1,29 @@
+# Roadmap
+
+Dieci fasi in sequenza: si passa alla successiva solo quando il criterio è verificato.
+WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF fino alla Fase 9.
+
+| Fase | Contenuto | Criterio per passare oltre | Stato |
+|---|---|---|---|
+| 0 | Base del progetto, CI, CLAUDE.md, corpus; prototipi di craft-ui, hayro, EPS e craft-print | Stack confermato o ripieghi decisi | In corso: base pronta, prototipi da fare |
+| 1 | Scansione ricorsiva, metadati, file di progetto, note salvate | Progetto da 10.000 file aperto e salvato | Da fare |
+| 2 | Decodificatori in processo separato, profili ICC, cache su disco | Corpus completo senza crash | Da fare |
+| 3 | Griglia, elenco e nesting su A4 e A3, intestazioni cartella, export PDF | Parità con la stampa attuale, ±0,5 mm | Da fare (griglia iniziale pronta) |
+| 4 | Pannelli agganciabili, anteprima, note, ordine a trascinamento, filtri | Un lavoro vero fatto solo con la nuova app | Da fare |
+| 5 | Stampa Windows a scala 100%, area stampabile del driver, calibrazione | A4 e A3 esatti su due stampanti | Da fare |
+| 6 | CSV, appunti, modelli salvati, segni di taglio, miniature vettoriali, HEIC | Ogni extra con i suoi criteri | Da fare |
+| 7 | Installer MSI, aggiornamenti, beta in parallelo con WinFile 4.9 | Liste Anteprime 4.9 messa a riposo | Da fare |
+| 8 | Modulo Immagini: dati tecnici, calcolo DPI, ruota, specchia, ritaglia, RAW, HEIC | Tutto ciò che fa oggi Controllo Immagini | Da fare |
+| 9 | Modulo PDF: unisci, dividi, ruota, elimina, ritaglia, margini, adatta ad A4 o A3 | WinFile 4.9 messo a riposo | Da fare |
+
+## Fase 0 in dettaglio
+- [x] Workspace Cargo, lint "mai un crash", `cargo xtask ci`, controllo dei livelli
+- [x] `cargo-deny` per licenze e vulnerabilità
+- [x] CI: controlli su Linux, test ed eseguibile su Windows
+- [x] Crate `geom`, `model` (progetto JSON con note), `layout` (griglia con test di proprietà)
+- [x] Prima finestra: file trascinati, anteprima del foglio, note, impostazioni
+- [ ] Prototipo docking con `craft-ui`
+- [ ] Prototipo lettura PDF/AI con `hayro`, misura dei tempi sul corpus
+- [ ] Prototipo EPS con il crate di VectorCraft
+- [ ] Prototipo stampa con `craft-print` e pagina di calibrazione
+- [ ] Corpus di file di prova difficili

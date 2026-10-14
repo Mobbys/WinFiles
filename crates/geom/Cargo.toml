@@ -1,0 +1,17 @@
+[package]
+name = "winfiles-geom"
+description = "Misure in millimetri, formati carta e rettangoli per l'impaginazione."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

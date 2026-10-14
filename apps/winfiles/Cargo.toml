@@ -1,0 +1,26 @@
+[package]
+name = "winfiles"
+description = "WinFiles: stampa delle miniature di file e cartelle su A4 e A3."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "winfiles"
+path = "src/main.rs"
+
+[features]
+# Disegno con OpenGL invece di wgpu: per PC vecchi senza DirectX 12 e per gli screenshot in CI.
+opengl = ["eframe/glow"]
+
+[dependencies]
+winfiles-geom.workspace = true
+winfiles-model.workspace = true
+winfiles-layout.workspace = true
+eframe.workspace = true
+egui.workspace = true
+
+[lints]
+workspace = true
