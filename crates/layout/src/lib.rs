@@ -13,6 +13,9 @@
 use winfiles_geom::{Rect, Size, sheet_size};
 use winfiles_model::PrintSettings;
 
+mod summary;
+pub use summary::{Line, PlacedLine, SummaryBlocks, SummarySheet, summary};
+
 /// Colonne massime ammesse.
 pub const MAX_COLUMNS: u32 = 20;
 /// Tolleranza nei confronti tra misure, in mm.

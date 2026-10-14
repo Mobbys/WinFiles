@@ -15,6 +15,7 @@ mod measure;
 mod panels;
 mod scan;
 mod shell;
+mod summary;
 mod theme;
 mod thumbs;
 

@@ -225,3 +225,102 @@ proptest! {
         prop_assert!(seen.iter().all(|&n| n == 1));
     }
 }
+
+mod riepilogo {
+    use super::*;
+    use crate::{Line, SummaryBlocks, summary};
+
+    fn lines(groups: usize, rows: usize, h: f64) -> Vec<Line> {
+        let mut out = Vec::new();
+        for _ in 0..groups {
+            out.push(Line {
+                height: 8.0,
+                group: true,
+            });
+            out.extend((0..rows).map(|_| Line {
+                height: h,
+                group: false,
+            }));
+        }
+        out
+    }
+
+    #[test]
+    fn tutte_le_righe_una_volta_e_dentro_l_area() {
+        let s = PrintSettings::default();
+        let input = lines(5, 40, 6.0);
+        let blocks = SummaryBlocks {
+            title: 10.0,
+            heading: 15.0,
+            columns: 6.0,
+        };
+        let sheets = summary(&s, blocks, &input).unwrap();
+        assert!(sheets.len() > 1);
+        let mut seen: Vec<usize> = sheets
+            .iter()
+            .flat_map(|sh| sh.lines.iter().filter(|l| !l.continued).map(|l| l.line))
+            .collect();
+        seen.dedup();
+        assert_eq!(seen, (0..input.len()).collect::<Vec<_>>());
+        for sh in &sheets {
+            assert!(sh.title.is_some() && sh.columns.is_some());
+            for l in &sh.lines {
+                assert!(l.rect.bottom() <= sh.area.bottom() + 1e-6);
+            }
+        }
+        // L'intestazione con i totali solo sul primo foglio.
+        assert!(sheets[0].heading.is_some() && sheets[1].heading.is_none());
+    }
+
+    #[test]
+    fn la_cartella_si_ripete_e_non_resta_sola_in_fondo() {
+        let s = PrintSettings::default();
+        let input = lines(3, 60, 6.0);
+        let sheets = summary(&s, SummaryBlocks::default(), &input).unwrap();
+        for sh in &sheets {
+            // Il primo elemento di ogni foglio dopo il primo è una cartella (nuova o ripetuta).
+            let first = &sh.lines[0];
+            assert!(input[first.line].group);
+            // L'ultima riga non è mai una cartella.
+            let last = sh.lines.last().unwrap();
+            assert!(!input[last.line].group || last.line + 1 == input.len());
+        }
+        assert!(sheets.iter().skip(1).any(|sh| sh.lines[0].continued));
+    }
+
+    #[test]
+    fn altezze_ostili_non_bloccano() {
+        let s = PrintSettings::default();
+        let input = vec![
+            Line {
+                height: f64::INFINITY,
+                group: true,
+            },
+            Line {
+                height: 1e12,
+                group: false,
+            },
+            Line {
+                height: -5.0,
+                group: false,
+            },
+            Line {
+                height: f64::NAN,
+                group: false,
+            },
+        ];
+        let sheets = summary(
+            &s,
+            SummaryBlocks {
+                title: 1e9,
+                heading: 1e9,
+                columns: 1e9,
+            },
+            &input,
+        )
+        .unwrap();
+        let count: usize = sheets.iter().map(|s| s.lines.len()).sum();
+        assert!(count >= 4 && sheets.len() <= 4);
+        assert_eq!(summary(&s, SummaryBlocks::default(), &[]).unwrap().len(), 1);
+    }
+}

@@ -274,7 +274,14 @@ pub fn items(ctx: &egui::Context, project: &Project, slots: &[Slot]) -> Vec<Item
             id,
             content: page.map_or_else(|| placeholder_size(f.kind), PageInfo::finished),
             folder: label.clone(),
-            caption: caption_height(ctx, &f.note, lines, print.caption_text, print.note_text, width),
+            caption: caption_height(
+                ctx,
+                f.note(slot.page),
+                lines,
+                print.caption_text,
+                print.note_text,
+                width,
+            ),
             folder_note: *folder_note,
         });
     }

@@ -29,6 +29,8 @@ pub struct WinFilesApp {
     pub(crate) selected: Option<usize>,
     /// Tutti i file scelti (Ctrl e Maiusc aggiungono), per eliminarli insieme.
     pub(crate) marked: BTreeSet<usize>,
+    /// La pagina del file scelto di cui il pannello Note mostra la nota.
+    pub(crate) selected_page: usize,
     /// Il file da cui parte una scelta con Maiusc.
     pub(crate) anchor: Option<usize>,
     pub(crate) sheet: usize,
@@ -73,6 +75,7 @@ impl WinFilesApp {
             shown_title: String::new(),
             selected: None,
             marked: BTreeSet::new(),
+            selected_page: 0,
             anchor: None,
             sheet: 0,
             zoom: None,
@@ -155,6 +158,7 @@ impl WinFilesApp {
     /// Sceglie un file con un clic: da solo, oppure con Ctrl lo aggiunge o lo toglie e con Maiusc
     /// prende tutti quelli tra il primo scelto e questo, come in Esplora file.
     pub(crate) fn pick(&mut self, i: usize, mods: egui::Modifiers) {
+        self.selected_page = 0;
         if mods.shift
             && let Some(a) = self.anchor
         {
@@ -465,11 +469,11 @@ impl WinFilesApp {
     }
 
     /// L'anteprima: una scheda con titolo, navigazione tra i fogli e zoom, e il foglio sul fondo.
-    pub(crate) fn canvas(&mut self, ui: &mut egui::Ui, sheets: &Result<Vec<Sheet>, LayoutError>) {
+    pub(crate) fn canvas(&mut self, ui: &mut egui::Ui, pages: &Pages) {
         let t = Tokens::get(ui.ctx());
         let full = ui.max_rect();
         card(ui, full);
-        let count = sheets.as_ref().map_or(0, Vec::len);
+        let count = pages.as_ref().map_or(0, Sheets::len);
         self.sheet = self.sheet.min(count.saturating_sub(1));
 
         // Intestazione della scheda.
@@ -558,7 +562,7 @@ impl WinFilesApp {
         let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(board.shrink(2.0)));
         inner.set_clip_rect(board.shrink(2.0).intersect(ui.clip_rect()));
         let ui = &mut inner;
-        let sheets = match sheets {
+        let pages = match pages {
             Ok(s) => s,
             Err(e) => {
                 ui.painter().text(
@@ -574,10 +578,33 @@ impl WinFilesApp {
         if self.project.files.is_empty() {
             empty_hint(ui, board);
         }
-        let Some(sheet) = sheets.get(self.sheet) else {
+        let summary_sheets = pages.summary.as_ref().map_or(0, |s| s.sheets.len());
+        // I fogli di riepilogo vengono prima di quelli delle miniature.
+        if let Some(summary) = &pages.summary
+            && let Some(sheet) = summary.sheets.get(self.sheet)
+        {
+            let scale = self
+                .zoom
+                .unwrap_or_else(|| canvas::fit_zoom(sheet.size, board.size()));
+            self.shown_zoom = scale;
+            let clicked = egui::ScrollArea::both()
+                .auto_shrink(false)
+                .show(ui, |ui| {
+                    crate::summary::draw(ui, sheet, summary, &self.project, &self.marked, scale)
+                })
+                .inner;
+            if let Some(file) = clicked {
+                let mods = ui.input(|i| i.modifiers);
+                self.pick(file, mods);
+            }
+            return;
+        }
+        let Some(sheet) = pages.grid.get(self.sheet.saturating_sub(summary_sheets)) else {
             return;
         };
-        let scale = self.zoom.unwrap_or_else(|| canvas::fit_zoom(sheet, board.size()));
+        let scale = self
+            .zoom
+            .unwrap_or_else(|| canvas::fit_zoom(sheet.size, board.size()));
         self.shown_zoom = scale;
         let out = egui::ScrollArea::both()
             .auto_shrink(false)
@@ -588,14 +615,18 @@ impl WinFilesApp {
                     &self.project,
                     &self.slots,
                     &mut self.thumbs,
-                    &self.marked,
+                    canvas::Selection {
+                        marked: &self.marked,
+                        focus: self.selected.map(|f| (f, self.selected_page)),
+                    },
                     scale,
                 )
             })
             .inner;
-        if let Some(id) = out.clicked {
+        if let Some((file, page)) = out.clicked {
             let mods = ui.input(|i| i.modifiers);
-            self.pick(id, mods);
+            self.pick(file, mods);
+            self.selected_page = page;
         }
         if let Some(by) = out.zoom_by {
             self.zoom = Some((scale * by).clamp(canvas::MIN_ZOOM, canvas::MAX_ZOOM));
@@ -842,10 +873,24 @@ fn paint_tabs(ui: &egui::Ui, panels: &[PanelId], active: usize, floating: bool, 
     }
 }
 
+/// Tutti i fogli del lavoro: il riepilogo (se richiesto) e poi le miniature.
+pub(crate) struct Sheets {
+    pub summary: Option<crate::summary::Summary>,
+    pub grid: Vec<Sheet>,
+}
+
+impl Sheets {
+    pub fn len(&self) -> usize {
+        self.summary.as_ref().map_or(0, |s| s.sheets.len()) + self.grid.len()
+    }
+}
+
+pub(crate) type Pages = Result<Sheets, LayoutError>;
+
 /// Collega i pannelli agganciabili al loro contenuto.
 struct Content<'a> {
     app: &'a mut WinFilesApp,
-    sheets: &'a Result<Vec<Sheet>, LayoutError>,
+    sheets: &'a Pages,
 }
 
 impl DockContent<PanelId> for Content<'_> {
@@ -951,7 +996,15 @@ impl eframe::App for WinFilesApp {
             &print,
             &captions::items(ui.ctx(), &self.project, &self.slots),
             title,
-        );
+        )
+        .and_then(|grid| {
+            let summary = if print.show_summary && !self.project.files.is_empty() {
+                Some(crate::summary::layout(ui.ctx(), &self.project, title)?)
+            } else {
+                None
+            };
+            Ok(Sheets { summary, grid })
+        });
         self.app_bar(ui);
         self.control_bar(ui);
         self.status_bar(ui);

@@ -112,9 +112,13 @@ pub struct FileEntry {
     /// Pixel e risoluzione, solo per le immagini.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<ImageInfo>,
-    /// Nota libera dell'utente su questo file.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub note: String,
+    /// Note dell'utente per pagina, con l'indice della pagina (da 0) come chiave: ogni pagina di
+    /// un PDF ha la sua, come ogni miniatura nella 4.9.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub notes: BTreeMap<usize, String>,
+    /// Nota unica per file dei primi lavori salvati: all'apertura passa alla prima pagina.
+    #[serde(default, rename = "note", skip_serializing)]
+    legacy_note: String,
 }
 
 impl FileEntry {
@@ -125,13 +129,33 @@ impl FileEntry {
             kind,
             pages: Vec::new(),
             image: None,
-            note: String::new(),
+            notes: BTreeMap::new(),
+            legacy_note: String::new(),
         }
     }
 
     /// La cartella che contiene il file (chiave per il raggruppamento).
     pub fn folder(&self) -> &Path {
         self.path.parent().unwrap_or_else(|| Path::new(""))
+    }
+
+    /// La nota di una pagina, vuota se non c'è.
+    pub fn note(&self, page: usize) -> &str {
+        self.notes.get(&page).map_or("", String::as_str)
+    }
+
+    /// Scrive la nota di una pagina; un testo vuoto la toglie, così il lavoro resta pulito.
+    pub fn set_note(&mut self, page: usize, text: String) {
+        if text.trim().is_empty() {
+            self.notes.remove(&page);
+        } else {
+            self.notes.insert(page, text);
+        }
+    }
+
+    /// Vero se almeno una pagina ha una nota.
+    pub fn has_notes(&self) -> bool {
+        self.notes.values().any(|n| !n.trim().is_empty())
     }
 
     /// Metri quadrati di tutte le pagine, al formato finito.
@@ -213,6 +237,8 @@ pub struct PrintSettings {
     pub show_sizes: bool,
     /// Mostra sul foglio le misure al vivo (TrimBox), in rosso, quando sono diverse.
     pub show_trim: bool,
+    /// Un foglio di riepilogo in cima: l'elenco di cartelle e file con le misure.
+    pub show_summary: bool,
 }
 
 impl Default for PrintSettings {
@@ -232,6 +258,7 @@ impl Default for PrintSettings {
             title: String::new(),
             show_sizes: true,
             show_trim: true,
+            show_summary: false,
         }
     }
 }
@@ -316,7 +343,13 @@ impl Project {
         if !value.is_object() {
             return Err(ModelError::NotAnObject);
         }
-        let project: Project = serde_json::from_value(value)?;
+        let mut project: Project = serde_json::from_value(value)?;
+        for f in &mut project.files {
+            let legacy = std::mem::take(&mut f.legacy_note);
+            if !legacy.trim().is_empty() {
+                f.notes.entry(0).or_insert(legacy);
+            }
+        }
         if project.version > FORMAT_VERSION {
             return Err(ModelError::TooNew {
                 found: project.version,
@@ -375,11 +408,28 @@ mod tests {
                 trim: Some(Size::new(200.0, 287.0)),
             }],
             image: None,
-            note: "Verificare il colore Pantone, è più scuro".into(),
+            notes: BTreeMap::from([(0, "Verificare il colore Pantone, è più scuro".into())]),
+            legacy_note: String::new(),
         });
         p.folder_notes
             .insert(PathBuf::from("/lavori/cliente"), "Consegna entro venerdì".into());
         p
+    }
+
+    #[test]
+    fn la_nota_del_file_dei_primi_lavori_passa_alla_prima_pagina() {
+        let text = r#"{"version":1,"files":[{"path":"/a/b.pdf","kind":"Pdf","note":"Controllare"}]}"#;
+        let p = Project::from_json(text).unwrap();
+        assert_eq!(p.files[0].note(0), "Controllare");
+        assert_eq!(p.files[0].note(1), "");
+        // Si salva solo nel formato nuovo.
+        let json = p.to_json().unwrap();
+        assert!(json.contains("\"notes\"") && !json.contains("\"note\""));
+        let mut f = p.files[0].clone();
+        f.set_note(2, "Pagina tre".into());
+        f.set_note(0, "  ".into());
+        assert_eq!(f.notes.len(), 1);
+        assert!(f.has_notes());
     }
 
     #[test]

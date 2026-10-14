@@ -306,7 +306,7 @@ impl WinFilesApp {
                             icons::paint(ui, kind_icon(f.kind), icon, tint);
                             let name = file_name(f);
                             // Una matita a destra per i file con una nota (Inter non ha il simbolo ✎).
-                            let note_icon = !f.note.trim().is_empty();
+                            let note_icon = f.has_notes();
                             if note_icon {
                                 let r = Rect::from_center_size(
                                     rect.right_center() - vec2(16.0, 0.0),
@@ -612,30 +612,77 @@ impl WinFilesApp {
         let Some(file) = self.selected.and_then(|i| self.project.files.get_mut(i)) else {
             dim_label(
                 ui,
-                "Seleziona un file per scrivere le sue note e quelle della sua cartella.",
+                "Seleziona un file o una sua pagina nell'anteprima per scrivere le note.",
             );
             return;
         };
         let folder = file.folder().to_path_buf();
+        let pages = file.pages.len().max(1);
+        let mut page = self.selected_page.min(pages - 1);
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            section(ui, "Nota del file");
-            ui.add(
-                egui::TextEdit::multiline(&mut file.note)
+            if pages > 1 {
+                // Ogni pagina ha la sua nota: si sceglie qui o cliccando la miniatura.
+                ui.horizontal(|ui| {
+                    section(ui, "Nota della pagina");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Da destra a sinistra: si legge "‹ 2 › di 4".
+                        dim_label(ui, &format!("di {pages}"));
+                        let mut n = (page + 1) as u32;
+                        crate::app::stepper(ui, &mut n, 1, pages as u32);
+                        page = (n as usize).clamp(1, pages) - 1;
+                    });
+                });
+            } else {
+                section(ui, "Nota del file");
+            }
+            let mut text = file.note(page).to_string();
+            let edit = ui.add(
+                egui::TextEdit::multiline(&mut text)
+                    .id_salt(("nota-pagina", page))
                     .desired_rows(3)
                     .desired_width(ui.available_width() - 8.0)
                     .margin(egui::Margin::symmetric(10, 8))
                     .hint_text("Per esempio: verificare il colore"),
             );
+            if edit.changed() {
+                file.set_note(page, text);
+            }
+            if pages > 1 {
+                let others: Vec<String> = file
+                    .notes
+                    .iter()
+                    .filter(|(p, n)| **p != page && **p < pages && !n.trim().is_empty())
+                    .map(|(p, _)| (p + 1).to_string())
+                    .collect();
+                if !others.is_empty() {
+                    dim_label(ui, &format!("Note anche a pagina {}", others.join(", ")));
+                }
+            }
             section(ui, &format!("Nota della cartella {}", folder_name(&folder)));
-            let note = self.project.folder_notes.entry(folder).or_default();
-            ui.add(
-                egui::TextEdit::multiline(note)
+            // Si scrive su una copia: aprire il pannello non deve creare note vuote nel lavoro.
+            let mut note = self
+                .project
+                .folder_notes
+                .get(&folder)
+                .cloned()
+                .unwrap_or_default();
+            let edit = ui.add(
+                egui::TextEdit::multiline(&mut note)
+                    .id_salt("nota-cartella")
                     .desired_rows(3)
                     .desired_width(ui.available_width() - 8.0)
                     .margin(egui::Margin::symmetric(10, 8))
                     .hint_text("Vale per tutti i file della cartella"),
             );
+            if edit.changed() {
+                if note.trim().is_empty() {
+                    self.project.folder_notes.remove(&folder);
+                } else {
+                    self.project.folder_notes.insert(folder, note);
+                }
+            }
         });
+        self.selected_page = page;
     }
 
     pub(crate) fn layout_panel(&mut self, ui: &mut egui::Ui) {
@@ -690,6 +737,8 @@ impl WinFilesApp {
                 .on_hover_text("Il formato pagina del file e la sua area, sotto ogni miniatura");
             ui.checkbox(&mut print.show_trim, "Misure al vivo")
                 .on_hover_text("In rosso, il formato finito (TrimBox) quando è diverso dalla pagina");
+            ui.checkbox(&mut print.show_summary, "Foglio di riepilogo in cima")
+                .on_hover_text("Un foglio con l'elenco di cartelle e file, pagine, misure, m² e note");
             ui.checkbox(
                 &mut print.page_break_per_folder,
                 "Ogni cartella su un foglio nuovo",

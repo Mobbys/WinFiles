@@ -22,8 +22,8 @@ pub const MIN_ZOOM: f32 = 0.1;
 pub const MAX_ZOOM: f32 = 8.0;
 
 /// Colori della carta stampata (non dell'interfaccia): testo quasi nero, grigi di servizio.
-const INK: Color32 = Color32::from_rgb(20, 20, 20);
-const INK_SOFT: Color32 = Color32::from_rgb(85, 85, 85);
+pub(crate) const INK: Color32 = Color32::from_rgb(20, 20, 20);
+pub(crate) const INK_SOFT: Color32 = Color32::from_rgb(85, 85, 85);
 /// Colori delle etichette delle cartelle, dal livello più alto al più basso, come le "briciole"
 /// colorate della 4.9 ma scuri abbastanza da leggerci il bianco anche stampati.
 const CRUMB_COLORS: [Color32; 5] = [
@@ -34,20 +34,28 @@ const CRUMB_COLORS: [Color32; 5] = [
     Color32::from_rgb(0x55, 0x2b, 0xc4),
 ];
 const TITLE_FILL: Color32 = Color32::from_rgb(246, 247, 249);
-const FRAME: Color32 = Color32::from_rgb(190, 190, 190);
+pub(crate) const FRAME: Color32 = Color32::from_rgb(190, 190, 190);
 
 /// Ingrandimento che fa stare il foglio intero nello spazio `avail` (punti per millimetro).
-pub fn fit_zoom(sheet: &Sheet, avail: Vec2) -> f32 {
-    let (w, h) = (sheet.size.w as f32, sheet.size.h as f32);
+pub fn fit_zoom(size: winfiles_geom::Size, avail: Vec2) -> f32 {
+    let (w, h) = (size.w as f32, size.h as f32);
     ((avail.x - 2.0 * FIT_MARGIN) / w)
         .min((avail.y - 2.0 * FIT_MARGIN) / h)
         .clamp(MIN_ZOOM, MAX_ZOOM)
 }
 
+/// I file scelti e la pagina in primo piano (quella del pannello Note).
+#[derive(Clone, Copy)]
+pub struct Selection<'a> {
+    pub marked: &'a std::collections::BTreeSet<usize>,
+    pub focus: Option<(usize, usize)>,
+}
+
 /// Cosa è successo nell'anteprima in questo fotogramma.
 #[derive(Default)]
 pub struct CanvasOutput {
-    pub clicked: Option<usize>,
+    /// File e pagina della miniatura cliccata.
+    pub clicked: Option<(usize, usize)>,
     /// Ctrl + rotella: fattore di ingrandimento richiesto.
     pub zoom_by: Option<f32>,
 }
@@ -96,34 +104,14 @@ pub fn draw(
     project: &Project,
     slots: &[Slot],
     thumbs: &mut Thumbnails,
-    selected: &std::collections::BTreeSet<usize>,
+    selected: Selection<'_>,
     scale: f32,
 ) -> CanvasOutput {
     let t = Tokens::get(ui.ctx());
     let mut out = CanvasOutput::default();
-    let page_size = Vec2::new(sheet.size.w as f32, sheet.size.h as f32) * scale;
-    let avail = ui.available_size();
-    let size = Vec2::new(
-        avail.x.max(page_size.x + 2.0 * FIT_MARGIN),
-        avail.y.max(page_size.y + 2.0 * FIT_MARGIN),
-    );
-    let (response, painter) = ui.allocate_painter(size, Sense::click());
-    let origin = response.rect.center() - page_size / 2.0;
-    let map = |r: winfiles_geom::Rect| {
-        Rect::from_min_size(
-            origin + Vec2::new(r.x as f32, r.y as f32) * scale,
-            Vec2::new(r.w as f32, r.h as f32) * scale,
-        )
-    };
+    let (response, painter, origin) = paper(ui, sheet.size, scale);
+    let map = |r: winfiles_geom::Rect| to_screen(origin, r, scale);
     let mm = |v: f64| v as f32 * scale;
-
-    let page = Rect::from_min_size(origin, page_size);
-    painter.rect_filled(
-        page.translate(Vec2::new(0.0, 3.0)).expand(1.0),
-        0.0,
-        Color32::from_black_alpha(90),
-    );
-    painter.rect_filled(page, 0.0, Color32::WHITE);
 
     // Corpo del testo come sarà stampato (punti tipografici convertiti in mm e poi in punti
     // schermo); sotto i 4 punti schermo non si legge e non si disegna.
@@ -138,24 +126,7 @@ pub fn draw(
         .filter_map(|(path, label)| Some((label.as_str(), (*path, *totals.get(path)?))))
         .collect();
     if let Some(title) = sheet.title {
-        // Il titolo in un riquadro dagli angoli arrotondati, con un fondo appena grigio.
-        let r = map(title);
-        painter.rect(
-            r,
-            mm(1.8),
-            TITLE_FILL,
-            Stroke::new(mm(0.35).max(1.0), INK_SOFT),
-            StrokeKind::Inside,
-        );
-        if font(print.title_text) >= 4.0 {
-            let inner = (title.w - 2.0 * TITLE_PAD_X) as f32;
-            let galley = painter.layout_job(title_job(&print.title, print.title_text, inner, scale));
-            painter.with_clip_rect(r).galley(
-                r.min + Vec2::new(mm(TITLE_PAD_X), mm(TITLE_PAD_Y)),
-                galley,
-                INK,
-            );
-        }
+        draw_title(&painter, map(title), title.w, print, scale);
     }
     for header in &sheet.headers {
         let folder = folders.get(header.folder.as_str());
@@ -290,24 +261,31 @@ pub fn draw(
             }
             None => y += mm(line_mm(info_pt)),
         }
-        if !file.note.trim().is_empty() && font(print.note_text) >= 4.0 {
+        let note = file.note(slot.page);
+        if !note.trim().is_empty() && font(print.note_text) >= 4.0 {
             y += mm(NOTE_GAP);
-            let mut job = note_job(&file.note, print.note_text, item.caption.w, scale);
+            let mut job = note_job(note, print.note_text, item.caption.w, scale);
             job.halign = egui::Align::Center;
             let galley = clip.layout_job(job);
             clip.galley(pos2(caption.center().x, y), galley, NOTE_INK);
         }
 
-        if selected.contains(&slot.file) {
+        if selected.marked.contains(&slot.file) {
+            // La pagina di cui si scrive la nota ha il bordo pieno, le altre scelte uno sottile.
+            let width = if selected.focus == Some((slot.file, slot.page)) {
+                2.5
+            } else {
+                1.0
+            };
             painter.rect_stroke(
                 cell.expand(3.0),
                 3.0,
-                Stroke::new(2.0, t.accent),
+                Stroke::new(width, t.accent),
                 StrokeKind::Outside,
             );
         }
         if response.clicked() && pointer.is_some_and(|p| cell.contains(p)) {
-            out.clicked = Some(slot.file);
+            out.clicked = Some((slot.file, slot.page));
         }
     }
 
@@ -321,9 +299,62 @@ pub fn draw(
     out
 }
 
+/// Il titolo in cima al foglio, in un riquadro dagli angoli arrotondati con un fondo appena
+/// grigio. `r` è già in punti schermo, `width_mm` è la sua larghezza sul foglio.
+pub(crate) fn draw_title(painter: &egui::Painter, r: Rect, width_mm: f64, print: &PrintSettings, scale: f32) {
+    let mm = |v: f64| v as f32 * scale;
+    painter.rect(
+        r,
+        mm(1.8),
+        TITLE_FILL,
+        Stroke::new(mm(0.35).max(1.0), INK_SOFT),
+        StrokeKind::Inside,
+    );
+    if (print.title_text * MM_PER_PT) as f32 * scale >= 4.0 {
+        let inner = (width_mm - 2.0 * TITLE_PAD_X) as f32;
+        let galley = painter.layout_job(title_job(&print.title, print.title_text, inner, scale));
+        painter
+            .with_clip_rect(r)
+            .galley(r.min + Vec2::new(mm(TITLE_PAD_X), mm(TITLE_PAD_Y)), galley, INK);
+    }
+}
+
+/// Il foglio bianco con la sua ombra, centrato nello spazio disponibile. Restituisce la risposta
+/// ai clic, il pennello e l'angolo in alto a sinistra del foglio sullo schermo.
+pub(crate) fn paper(
+    ui: &mut egui::Ui,
+    size: winfiles_geom::Size,
+    scale: f32,
+) -> (egui::Response, egui::Painter, Pos2) {
+    let page_size = Vec2::new(size.w as f32, size.h as f32) * scale;
+    let avail = ui.available_size();
+    let total = Vec2::new(
+        avail.x.max(page_size.x + 2.0 * FIT_MARGIN),
+        avail.y.max(page_size.y + 2.0 * FIT_MARGIN),
+    );
+    let (response, painter) = ui.allocate_painter(total, Sense::click());
+    let origin = response.rect.center() - page_size / 2.0;
+    let page = Rect::from_min_size(origin, page_size);
+    painter.rect_filled(
+        page.translate(Vec2::new(0.0, 3.0)).expand(1.0),
+        0.0,
+        Color32::from_black_alpha(90),
+    );
+    painter.rect_filled(page, 0.0, Color32::WHITE);
+    (response, painter, origin)
+}
+
+/// Il riquadro in mm sul foglio portato in punti schermo.
+pub(crate) fn to_screen(origin: Pos2, r: winfiles_geom::Rect, scale: f32) -> Rect {
+    Rect::from_min_size(
+        origin + Vec2::new(r.x as f32, r.y as f32) * scale,
+        Vec2::new(r.w as f32, r.h as f32) * scale,
+    )
+}
+
 /// I totali di una cartella a destra della sua intestazione: file, pagine e area, con le misure
 /// che le caselle dell'impaginazione lasciano vedere.
-fn totals_text(t: &Totals, print: &PrintSettings) -> String {
+pub(crate) fn totals_text(t: &Totals, print: &PrintSettings) -> String {
     let mut text = format!("{} file · {} pagine", t.files, t.pages);
     if let Some(area) = area_text(t.area_full_m2, t.area_m2, print.show_sizes, print.show_trim) {
         text = format!("{text} · {area}");
@@ -336,7 +367,7 @@ fn totals_text(t: &Totals, print: &PrintSettings) -> String {
 
 /// L'intestazione di una cartella: le cartelle come etichette colorate, una linea sottile e i
 /// totali a destra. Nessun riquadro grigio.
-fn draw_header(
+pub(crate) fn draw_header(
     painter: &egui::Painter,
     title: Rect,
     header: &Header,
