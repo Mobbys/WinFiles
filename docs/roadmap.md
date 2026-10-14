@@ -37,5 +37,6 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] File mancanti segnati all'apertura, misure rilette in background
 - [x] Togliere file dall'elenco, con scelta multipla
 - [ ] Scansione in background con annullamento (crate `scan`)
-- [ ] Prova con un lavoro da 10.000 file: tempi di apertura e salvataggio
+- [x] Prova con un lavoro da 10.000 file: JSON 2,6 MB letto e scritto in 60 ms, impaginazione in 5 ms per fotogramma (625 fogli A4)
+- [ ] Ricalcolare l'impaginazione solo quando il lavoro cambia, non a ogni fotogramma
 - [ ] Lavori recenti nel menu File

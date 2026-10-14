@@ -178,6 +178,12 @@ pub fn info_lines(page: &PageInfo, unit: Unit, print: &PrintSettings) -> Vec<Inf
     out
 }
 
+/// Quante righe di misure ha una pagina: come `info_lines(..).len()`, senza comporre i testi
+/// (con migliaia di file si conta a ogni fotogramma).
+pub fn info_count(page: &PageInfo, print: &PrintSettings) -> usize {
+    usize::from(print.show_sizes) + usize::from(print.show_trim && page.trim.is_some_and(|t| t != page.size))
+}
+
 /// L'area di un gruppo di file per le intestazioni: con abbondanza e, tra parentesi, al vivo
 /// quando è diversa, come nella 4.9. `None` se le caselle nascondono entrambe le misure.
 pub fn area_text(full: f64, trim: f64, show_sizes: bool, show_trim: bool) -> Option<String> {
@@ -233,35 +239,46 @@ pub fn items(ctx: &egui::Context, project: &Project, slots: &[Slot]) -> Vec<Item
     let sheet_width = winfiles_geom::sheet_size(print.paper, print.orientation).w
         - print.margins.left
         - print.margins.right;
-    slots
-        .iter()
-        .enumerate()
-        .filter_map(|(id, slot)| {
-            let f = project.files.get(slot.file)?;
-            let folder_note = project.folder_notes.get(f.folder()).map_or("", String::as_str);
-            // Un file non ancora misurato tiene il posto di una riga.
-            let lines = f
-                .pages
-                .get(slot.page)
-                .map_or(usize::from(print.show_sizes || print.show_trim), |p| {
-                    info_lines(p, project.unit, print).len()
-                });
-            Some(Item {
-                id,
-                content: f
-                    .pages
-                    .get(slot.page)
-                    .map(|p| p.finished())
-                    .unwrap_or_else(|| placeholder_size(f.kind)),
-                folder: labels
-                    .get(f.folder())
-                    .cloned()
-                    .unwrap_or_else(|| f.folder().display().to_string()),
-                caption: caption_height(ctx, &f.note, lines, print.caption_text, print.note_text, width),
-                folder_note: folder_note_height(ctx, folder_note, print.note_text, sheet_width),
-            })
-        })
-        .collect()
+    // I file sono in ordine di cartella: etichetta e nota si calcolano una volta per cartella.
+    let mut current: Option<(&std::path::Path, String, f64)> = None;
+    let mut out = Vec::with_capacity(slots.len());
+    for (id, slot) in slots.iter().enumerate() {
+        let Some(f) = project.files.get(slot.file) else {
+            continue;
+        };
+        let folder = f.folder();
+        if current
+            .as_ref()
+            .is_none_or(|(p, _, _)| p.as_os_str() != folder.as_os_str())
+        {
+            let label = labels
+                .get(folder)
+                .cloned()
+                .unwrap_or_else(|| folder.display().to_string());
+            let note = project.folder_notes.get(folder).map_or("", String::as_str);
+            current = Some((
+                folder,
+                label,
+                folder_note_height(ctx, note, print.note_text, sheet_width),
+            ));
+        }
+        let Some((_, label, folder_note)) = &current else {
+            continue;
+        };
+        let page = f.pages.get(slot.page);
+        // Un file non ancora misurato tiene il posto di una riga.
+        let lines = page.map_or(usize::from(print.show_sizes || print.show_trim), |p| {
+            info_count(p, print)
+        });
+        out.push(Item {
+            id,
+            content: page.map_or_else(|| placeholder_size(f.kind), PageInfo::finished),
+            folder: label.clone(),
+            caption: caption_height(ctx, &f.note, lines, print.caption_text, print.note_text, width),
+            folder_note: *folder_note,
+        });
+    }
+    out
 }
 
 #[cfg(test)]
@@ -325,6 +342,7 @@ mod tests {
         // Le caselle tolgono le righe.
         print.show_sizes = false;
         assert_eq!(info_lines(&page, Unit::Cm, &print).len(), 1);
+        assert_eq!(info_count(&page, &print), 1);
         print.show_trim = false;
         assert!(info_lines(&page, Unit::Cm, &print).is_empty());
 
