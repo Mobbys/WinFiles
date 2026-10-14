@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use craft_ui::docking::{Action, DockArea, DockContent, Layout, PanelLimits};
 use egui::{Align, Color32, Rect, Sense, Stroke, Vec2, vec2};
 use winfiles_geom::{Orientation, Paper, Unit, format_area};
-use winfiles_layout::{LayoutError, MAX_COLUMNS, Sheet, grid};
+use winfiles_layout::{LayoutError, MAX_COLUMNS, Sheet, grid_with_title};
 use winfiles_model::{Project, Totals};
 
 use crate::captions::{self, Slot};
@@ -631,6 +631,85 @@ pub(crate) fn segmented<T: PartialEq + Copy>(
     }
 }
 
+/// Il titolo di una linguetta, con lo spazio per la maniglia.
+fn tab_text(label: &str) -> String {
+    format!("{TAB_GRIP_SPACE}{label}")
+}
+const TAB_GRIP_SPACE: &str = "     ";
+
+/// Le linguette di un gruppo di pannelli, ridisegnate sopra quelle di craft-ui: una maniglia a
+/// puntini che dice che si possono trascinare, la mano al passaggio del mouse, e la linguetta
+/// attiva unita alla scheda con una barra blu in alto. Le posizioni seguono le regole di craft-ui
+/// (larghezza del titolo + 24 punti, da sinistra; 12 punti di presa nelle finestre mobili): se le
+/// linguette non stanno tutte, craft-ui ne nasconde alcune e qui non si disegna nulla.
+fn paint_tabs(ui: &egui::Ui, panels: &[PanelId], active: usize, floating: bool, body: Rect) {
+    let t = Tokens::get(ui.ctx());
+    let style = dock::style(ui);
+    let strip = Rect::from_min_max(
+        egui::pos2(body.left(), body.top() - style.tab_height),
+        egui::pos2(body.right(), body.top()),
+    );
+    let mut x = strip.left() + if floating { 12.0 } else { 0.0 };
+    let widths: Vec<f32> = panels
+        .iter()
+        .map(|p| {
+            ui.painter()
+                .layout_no_wrap(tab_text(p.label()), style.font.clone(), Color32::WHITE)
+                .size()
+                .x
+                + 24.0
+        })
+        .collect();
+    if x + widths.iter().sum::<f32>() > strip.right() {
+        return;
+    }
+    let painter = ui.ctx().layer_painter(ui.layer_id());
+    let pointer = ui.ctx().pointer_hover_pos();
+    for (i, (panel, w)) in panels.iter().zip(&widths).enumerate() {
+        let tab = Rect::from_min_size(egui::pos2(x, strip.top()), vec2(*w, strip.height()));
+        x += w;
+        let hovered = pointer.is_some_and(|p| tab.contains(p));
+        if i == active {
+            painter.rect_filled(
+                tab,
+                egui::CornerRadius {
+                    nw: t.radius,
+                    ne: t.radius,
+                    sw: 0,
+                    se: 0,
+                },
+                t.panel,
+            );
+            painter.rect_filled(
+                Rect::from_min_size(tab.min + vec2(6.0, 0.0), vec2(tab.width() - 12.0, 2.5)),
+                1.0,
+                t.accent,
+            );
+            let label = painter.layout_no_wrap(tab_text(panel.label()), style.font.clone(), t.text_strong);
+            painter.galley(tab.center() - label.size() * 0.5, label, t.text_strong);
+        } else if hovered {
+            painter.rect_filled(tab.shrink2(vec2(2.0, 4.0)), t.radius, t.hover);
+            let label = painter.layout_no_wrap(tab_text(panel.label()), style.font.clone(), t.text);
+            painter.galley(tab.center() - label.size() * 0.5, label, t.text);
+        }
+        // Maniglia: sei puntini a sinistra del titolo.
+        let grip = egui::pos2(tab.left() + 15.0, tab.center().y);
+        let color = if i == active || hovered {
+            t.text_dim
+        } else {
+            t.text_disabled
+        };
+        for dx in [0.0, 4.0] {
+            for dy in [-4.0, 0.0, 4.0] {
+                painter.circle_filled(grip + vec2(dx, dy), 1.2, color);
+            }
+        }
+        if hovered && *panel != PanelId::Canvas {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+    }
+}
+
 /// Collega i pannelli agganciabili al loro contenuto.
 struct Content<'a> {
     app: &'a mut WinFilesApp,
@@ -638,12 +717,40 @@ struct Content<'a> {
 }
 
 impl DockContent<PanelId> for Content<'_> {
+    /// Spazio a sinistra del titolo per la maniglia di trascinamento (vedi `paint_tabs`).
+    fn label(
+        &mut self,
+        _ui: &egui::Ui,
+        _panel: &PanelId,
+        logical: &str,
+        _font: &egui::FontId,
+        _color: Color32,
+    ) -> egui::WidgetText {
+        tab_text(logical).into()
+    }
+
     fn body(&mut self, ui: &mut egui::Ui, panel: &PanelId) {
         if *panel == PanelId::Canvas {
             self.app.canvas(ui, self.sheets);
             return;
         }
-        card(ui, ui.max_rect());
+        let body = ui.max_rect();
+        let t = Tokens::get(ui.ctx());
+        // Il fondo della scheda: l'angolo in alto a sinistra è dritto perché ci si appoggia la
+        // linguetta del primo pannello.
+        ui.painter().rect_filled(
+            body,
+            egui::CornerRadius {
+                nw: 0,
+                ne: t.card_radius,
+                sw: t.card_radius,
+                se: t.card_radius,
+            },
+            t.panel,
+        );
+        if let Some((panels, active, floating)) = dock::group_of(&self.app.dock, *panel) {
+            paint_tabs(ui, &panels, active, floating, body);
+        }
         egui::Frame::NONE
             .inner_margin(egui::Margin::same(14))
             .show(ui, |ui| {
@@ -676,9 +783,15 @@ impl eframe::App for WinFilesApp {
         self.thumbs.receive(ui.ctx());
 
         self.slots = captions::slots(&self.project);
-        let sheets = grid(
-            &self.project.print,
+        let print = &self.project.print;
+        let width = winfiles_geom::sheet_size(print.paper, print.orientation).w
+            - print.margins.left
+            - print.margins.right;
+        let title = captions::title_height(ui.ctx(), &print.title, width);
+        let sheets = grid_with_title(
+            print,
             &captions::items(ui.ctx(), &self.project, &self.slots),
+            title,
         );
         self.app_bar(ui);
         self.control_bar(ui);

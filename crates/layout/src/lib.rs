@@ -72,6 +72,8 @@ pub struct Sheet {
     pub size: Size,
     /// Area stampabile (foglio meno margini).
     pub area: Rect,
+    /// Dove scrivere il titolo in cima al foglio, se c'è.
+    pub title: Option<Rect>,
     pub headers: Vec<Header>,
     pub items: Vec<Placed>,
 }
@@ -126,9 +128,34 @@ fn height(v: f64, max: f64) -> f64 {
 
 /// Impagina `items` nell'ordine dato, in griglia.
 pub fn grid(settings: &PrintSettings, items: &[Item]) -> Result<Vec<Sheet>, LayoutError> {
+    grid_with_title(settings, items, 0.0)
+}
+
+/// Come [`grid`], con un titolo alto `title` mm in cima a ogni foglio (0 = nessun titolo).
+pub fn grid_with_title(
+    settings: &PrintSettings,
+    items: &[Item],
+    title: f64,
+) -> Result<Vec<Sheet>, LayoutError> {
     check(settings)?;
     let size = sheet_size(settings.paper, settings.orientation);
-    let area = Rect::new(0.0, 0.0, size.w, size.h).inset(settings.margins);
+    let printable = Rect::new(0.0, 0.0, size.w, size.h).inset(settings.margins);
+    let title = height(title, printable.h);
+    // Il titolo toglie spazio in cima; le miniature stanno nell'area che resta.
+    let (area, title_rect) = if title > EPS {
+        let top = title + settings.gap;
+        (
+            Rect::new(
+                printable.x,
+                printable.y + top,
+                printable.w,
+                (printable.h - top).max(0.0),
+            ),
+            Some(Rect::new(printable.x, printable.y, printable.w, title)),
+        )
+    } else {
+        (printable, None)
+    };
     let cols = settings.columns as usize;
     let cell_w = cell_width(settings);
     // Deve starci almeno un'intestazione più una riga, altrimenti l'impaginazione non termina mai.
@@ -152,7 +179,8 @@ pub fn grid(settings: &PrintSettings, items: &[Item]) -> Result<Vec<Sheet>, Layo
 
     let new_sheet = || Sheet {
         size,
-        area,
+        area: printable,
+        title: title_rect,
         ..Sheet::default()
     };
     let mut sheets = Vec::new();

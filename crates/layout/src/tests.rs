@@ -79,6 +79,23 @@ fn la_nota_della_cartella_sta_sotto_l_intestazione() {
 }
 
 #[test]
+fn il_titolo_sta_in_cima_a_ogni_foglio() {
+    let settings = PrintSettings {
+        columns: 1,
+        ..PrintSettings::default()
+    };
+    let items: Vec<_> = (0..5).map(|i| item(i, 1.0, 1.0, "a")).collect();
+    let sheets = grid_with_title(&settings, &items, 12.0).unwrap();
+    assert!(sheets.len() > 1);
+    for s in &sheets {
+        let t = s.title.unwrap();
+        assert!((t.y - s.area.y).abs() < 1e-9 && (t.h - 12.0).abs() < 1e-9);
+        assert!(s.headers[0].rect.y >= t.bottom() + settings.gap - 1e-9);
+    }
+    assert!(grid(&settings, &items).unwrap()[0].title.is_none());
+}
+
+#[test]
 fn nessun_elemento_un_foglio_vuoto() {
     let sheets = grid(&PrintSettings::default(), &[]).unwrap();
     assert_eq!(sheets.len(), 1);
@@ -157,8 +174,8 @@ proptest! {
 
     /// Le regole che ogni impaginazione deve rispettare, qualunque siano impostazioni e file.
     #[test]
-    fn invarianti_della_griglia(settings in settings_strategy(), items in items_strategy()) {
-        let sheets = match grid(&settings, &items) {
+    fn invarianti_della_griglia(settings in settings_strategy(), items in items_strategy(), title in prop_oneof![Just(0.0f64), -5.0f64..80.0]) {
+        let sheets = match grid_with_title(&settings, &items, title) {
             Ok(s) => s,
             Err(LayoutError::NothingFits) => return Ok(()),
             Err(e) => return Err(TestCaseError::fail(e.to_string())),
@@ -168,6 +185,10 @@ proptest! {
         let mut seen = vec![0u32; items.len()];
         for sheet in &sheets {
             let mut rects: Vec<Rect> = sheet.headers.iter().map(|h| h.rect).collect();
+            if let Some(t) = sheet.title {
+                prop_assert!(sheet.area.contains(t, 1e-6));
+                rects.push(t);
+            }
             for p in &sheet.items {
                 seen[p.id] += 1;
                 // Tutto dentro l'area stampabile, l'immagine dentro la sua cella.

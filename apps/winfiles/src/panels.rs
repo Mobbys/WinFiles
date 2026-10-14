@@ -130,7 +130,15 @@ impl WinFilesApp {
         for (i, f) in self.project.files.iter().enumerate() {
             let folder = f.folder();
             if last != Some(folder) {
-                let label = labels.get(folder).cloned().unwrap_or_else(|| folder_name(folder));
+                let label = self
+                    .project
+                    .folder_titles
+                    .get(folder)
+                    .map(|t| t.trim())
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+                    .or_else(|| labels.get(folder).cloned())
+                    .unwrap_or_else(|| folder_name(folder));
                 rows.push(Row::Folder(
                     folder,
                     label,
@@ -371,7 +379,15 @@ impl WinFilesApp {
         };
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             for (folder, tot) in self.project.folder_totals() {
-                let label = labels.get(folder).cloned().unwrap_or_else(|| folder_name(folder));
+                let label = self
+                    .project
+                    .folder_titles
+                    .get(folder)
+                    .map(|t| t.trim())
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+                    .or_else(|| labels.get(folder).cloned())
+                    .unwrap_or_else(|| folder_name(folder));
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::hover());
                 two_lines(
                     ui,
@@ -415,6 +431,17 @@ impl WinFilesApp {
             );
             return;
         };
+        let folder = file.folder().to_path_buf();
+        let default_label = self
+            .project
+            .folder_labels()
+            .get(folder.as_path())
+            .cloned()
+            .unwrap_or_else(|| folder_name(&folder));
+        let file = match self.selected.and_then(|i| self.project.files.get_mut(i)) {
+            Some(f) => f,
+            None => return,
+        };
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             section(ui, "Nota del file");
             ui.add(
@@ -424,7 +451,14 @@ impl WinFilesApp {
                     .margin(egui::Margin::symmetric(10, 8))
                     .hint_text("Per esempio: verificare il colore"),
             );
-            let folder = file.folder().to_path_buf();
+            section(ui, "Intestazione della cartella sul foglio");
+            let title = self.project.folder_titles.entry(folder.clone()).or_default();
+            ui.add(
+                egui::TextEdit::singleline(title)
+                    .desired_width(ui.available_width() - 8.0)
+                    .margin(egui::Margin::symmetric(10, 7))
+                    .hint_text(default_label.as_str()),
+            );
             section(ui, &format!("Nota della cartella {}", folder_name(&folder)));
             let note = self.project.folder_notes.entry(folder).or_default();
             ui.add(
@@ -441,6 +475,14 @@ impl WinFilesApp {
         let print = &mut self.project.print;
         let mm = |ui: &mut egui::Ui, value: &mut f64, max: f64| ui.add(mm_field(value, max));
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            dim_label(ui, "Titolo in cima ai fogli");
+            ui.add(
+                egui::TextEdit::singleline(&mut print.title)
+                    .desired_width(ui.available_width() - 8.0)
+                    .margin(egui::Margin::symmetric(10, 7))
+                    .hint_text("Per esempio: Cliente Rossi, ordine 124"),
+            );
+            ui.add_space(8.0);
             dim_label(ui, "Colonne");
             // Il cursore occupa la larghezza del pannello, lasciando posto al numero.
             ui.spacing_mut().slider_width = (ui.available_width() - 64.0).max(60.0);

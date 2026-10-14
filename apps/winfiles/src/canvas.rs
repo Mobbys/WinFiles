@@ -12,7 +12,8 @@ use winfiles_layout::{Header, Sheet};
 use winfiles_model::{PageInfo, Project, Totals};
 
 use crate::captions::{
-    CAPTION_PAD, FOLDER_NOTE_INSET, INFO_RATIO, MM_PER_PT, NOTE_GAP, NOTE_INK, Slot, line_mm, note_job,
+    CAPTION_PAD, FOLDER_NOTE_INSET, INFO_RATIO, MM_PER_PT, NOTE_GAP, NOTE_INK, Slot, TITLE_PT, line_mm,
+    note_job, title_job,
 };
 use crate::theme::{Tokens, semibold};
 use crate::thumbs::{ThumbState, Thumbnails};
@@ -137,11 +138,22 @@ pub fn draw(
         .iter()
         .filter_map(|(path, label)| Some((label.as_str(), (*path, *totals.get(path)?))))
         .collect();
+    if let Some(r) = sheet.title
+        && font(TITLE_PT) >= 4.0
+    {
+        let r = map(r);
+        let galley = painter.layout_job(title_job(&print.title, r.width() / scale, scale));
+        painter.with_clip_rect(r).galley(r.min, galley, INK);
+    }
     for header in &sheet.headers {
         let folder = folders.get(header.folder.as_str());
         let r = map(header.rect);
         let title = Rect::from_min_size(r.min, Vec2::new(r.width(), mm(print.header)));
-        draw_header(&painter, title, header, folder.map(|f| &f.1), scale);
+        let custom = folder
+            .and_then(|f| project.folder_titles.get(f.0))
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty());
+        draw_header(&painter, title, header, custom, folder.map(|f| &f.1), scale);
         if let Some(note) = header.note
             && font(print.note_text) >= 4.0
             && let Some(text) = folder.and_then(|f| project.folder_notes.get(f.0))
@@ -293,7 +305,14 @@ pub fn draw(
 
 /// L'intestazione di una cartella: le cartelle come etichette colorate, una linea sottile e i
 /// totali a destra. Nessun riquadro grigio.
-fn draw_header(painter: &egui::Painter, title: Rect, header: &Header, totals: Option<&Totals>, scale: f32) {
+fn draw_header(
+    painter: &egui::Painter,
+    title: Rect,
+    header: &Header,
+    custom: Option<&str>,
+    totals: Option<&Totals>,
+    scale: f32,
+) {
     let mm = |v: f32| v * scale;
     let px = mm(3.2);
     if px < 4.0 {
@@ -306,7 +325,11 @@ fn draw_header(painter: &egui::Painter, title: Rect, header: &Header, totals: Op
     let cy = title.center().y;
     let pad = Vec2::new(mm(1.6), mm(0.7));
     let mut x = title.left();
-    let crumbs: Vec<&str> = header.folder.split(" › ").collect();
+    // Un'intestazione scelta dall'utente è un'unica etichetta; altrimenti una per cartella.
+    let crumbs: Vec<&str> = match custom {
+        Some(text) => vec![text],
+        None => header.folder.split(" › ").collect(),
+    };
     for (i, crumb) in crumbs.iter().enumerate() {
         let color = CRUMB_COLORS
             .get(i % CRUMB_COLORS.len())

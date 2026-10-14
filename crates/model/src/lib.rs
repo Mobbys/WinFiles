@@ -187,6 +187,8 @@ pub struct PrintSettings {
     pub header: f64,
     /// Ogni cartella inizia su un foglio nuovo.
     pub page_break_per_folder: bool,
+    /// Titolo scritto in cima a ogni foglio (per esempio il cliente o l'ordine); vuoto = nessuno.
+    pub title: String,
 }
 
 impl Default for PrintSettings {
@@ -201,6 +203,7 @@ impl Default for PrintSettings {
             note_text: 8.0,
             header: 10.0,
             page_break_per_folder: false,
+            title: String::new(),
         }
     }
 }
@@ -214,6 +217,9 @@ pub struct Project {
     pub files: Vec<FileEntry>,
     /// Note per cartella, con il percorso della cartella come chiave.
     pub folder_notes: BTreeMap<PathBuf, String>,
+    /// Intestazioni scelte dall'utente al posto del nome della cartella, per percorso.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub folder_titles: BTreeMap<PathBuf, String>,
     pub print: PrintSettings,
     /// Unità in cui mostrare le misure.
     pub unit: Unit,
