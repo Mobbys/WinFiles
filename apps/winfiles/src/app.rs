@@ -121,6 +121,18 @@ pub struct WinFilesApp {
     layout_cache: Option<(Project, std::rc::Rc<Pages>)>,
     /// Nel nesting: la scala 1:N in uso (scelta o automatica).
     pub(crate) nesting_scale: Option<u32>,
+    /// Il modulo mostrato: miniature da stampare o modifica dei PDF.
+    pub(crate) module: Module,
+    /// Il modulo PDF (Fase 9), con il suo documento aperto.
+    pub(crate) pdf: crate::pdf::PdfModule,
+}
+
+/// I moduli di WinFiles, come le schede della 4.9.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Module {
+    #[default]
+    Thumbnails,
+    Pdf,
 }
 
 impl WinFilesApp {
@@ -129,6 +141,7 @@ impl WinFilesApp {
         paths: Vec<PathBuf>,
         batch_pdf: Option<PathBuf>,
         batch_calibration: Option<(Paper, PathBuf)>,
+        edit_pdf: Option<PathBuf>,
         prefs: crate::prefs::Prefs,
     ) -> Self {
         let blank = blank_project(&prefs);
@@ -195,12 +208,19 @@ impl WinFilesApp {
             prefs_checked: 0.0,
             nesting_scale: None,
             layout_cache: None,
+            module: Module::Thumbnails,
+            pdf: crate::pdf::PdfModule::new(ctx),
         };
         // Le stampanti si cercano subito, così Stampa le trova già pronte.
         if app.batch_pdf.is_none() && app.batch_calibration.is_none() {
             app.scan_printers();
             // Come la 4.9: all'avvio si chiede a GitHub se c'è una versione nuova, senza aspettare.
             app.check_updates(false);
+        }
+        // `--modifica-pdf file.pdf` apre quel PDF nel modulo PDF ("Apri con" di Windows).
+        if let Some(path) = edit_pdf {
+            app.module = Module::Pdf;
+            app.pdf.open(&path);
         }
         // Un file .winfiles sulla riga di comando (doppio clic in Esplora file) apre il lavoro;
         // gli altri file e cartelle si aggiungono all'elenco.
@@ -949,9 +969,21 @@ impl WinFilesApp {
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     brand(ui);
-                    ui.add_space(10.0);
+                    ui.add_space(12.0);
+                    // I moduli, come le schede della 4.9: miniature da stampare e modifica dei PDF.
+                    segmented(
+                        ui,
+                        "modulo",
+                        &mut self.module,
+                        &[(Module::Thumbnails, "Miniature"), (Module::Pdf, "Modifica PDF")],
+                    );
+                    ui.add_space(12.0);
                     egui::MenuBar::new().ui(ui, |ui| {
                         ui.menu_button("File", |ui| {
+                            if self.module == Module::Pdf {
+                                self.pdf.file_menu(ui);
+                                return;
+                            }
                             let ctx = ui.ctx().clone();
                             let item = |ui: &mut egui::Ui, text: &str, keys: &str| {
                                 ui.add(egui::Button::new(text).shortcut_text(keys)).clicked()
@@ -1100,25 +1132,27 @@ impl WinFilesApp {
                                 }
                             }
                         });
-                        ui.menu_button("Finestra", |ui| {
-                            for panel in PanelId::TOOLS {
-                                if ui
-                                    .add(crate::fluent::checkbox(
-                                        &mut self.dock.contains(&panel),
-                                        panel.label(),
-                                    ))
-                                    .clicked()
-                                {
-                                    self.toggle_panel(panel);
+                        if self.module == Module::Thumbnails {
+                            ui.menu_button("Finestra", |ui| {
+                                for panel in PanelId::TOOLS {
+                                    if ui
+                                        .add(crate::fluent::checkbox(
+                                            &mut self.dock.contains(&panel),
+                                            panel.label(),
+                                        ))
+                                        .clicked()
+                                    {
+                                        self.toggle_panel(panel);
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                if ui.button("Ripristina la disposizione").clicked() {
+                                    self.dock = dock::default_layout();
                                     ui.close();
                                 }
-                            }
-                            ui.separator();
-                            if ui.button("Ripristina la disposizione").clicked() {
-                                self.dock = dock::default_layout();
-                                ui.close();
-                            }
-                        });
+                            });
+                        }
                         ui.menu_button("Aiuto", |ui| {
                             ui.label(concat!("WinFiles ", env!("CARGO_PKG_VERSION")));
                             if ui.button("Controlla aggiornamenti").clicked() {
@@ -2073,32 +2107,52 @@ impl eframe::App for WinFilesApp {
                 .map(|f| f.path().to_path_buf())
                 .collect()
         });
-        let (projects, dropped): (Vec<PathBuf>, Vec<PathBuf>) =
-            dropped.into_iter().partition(|p| document::is_project(p));
-        if !dropped.is_empty() {
-            self.add_paths(dropped);
+        let pdf_mode = self.module == Module::Pdf;
+        if pdf_mode {
+            if !dropped.is_empty() {
+                self.pdf.dropped(&ctx, dropped);
+            }
+            self.pdf.shortcuts(&ctx);
+        } else {
+            let (projects, dropped): (Vec<PathBuf>, Vec<PathBuf>) =
+                dropped.into_iter().partition(|p| document::is_project(p));
+            if !dropped.is_empty() {
+                self.add_paths(dropped);
+            }
+            if let Some(p) = projects.into_iter().next() {
+                self.guard(&ctx, Then::Open(Some(p)));
+            }
+            self.shortcuts(&ctx);
         }
-        if let Some(p) = projects.into_iter().next() {
-            self.guard(&ctx, Then::Open(Some(p)));
-        }
-        self.shortcuts(&ctx);
         self.remember_prefs(&ctx, false);
-        // Chiudere la finestra con modifiche non salvate chiede prima di perderle.
+        // Chiudere la finestra con modifiche non salvate chiede prima di perderle: prima il PDF in
+        // modifica, poi il lavoro delle miniature.
         if ctx.input(|i| i.viewport().close_requested()) {
             // Alla chiusura le scelte si scrivono subito, anche se è passato meno di un secondo.
             self.remember_prefs(&ctx, true);
         }
-        if ctx.input(|i| i.viewport().close_requested()) && !self.closing && self.is_dirty() {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.closing && !self.pdf.can_quit() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.module = Module::Pdf;
+        } else if ctx.input(|i| i.viewport().close_requested()) && !self.closing && self.is_dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.asking = Some(Then::Close);
+            self.module = Module::Thumbnails;
         }
-        let title = self.window_title();
+        let title = match self.module {
+            Module::Pdf => self
+                .pdf
+                .title()
+                .unwrap_or_else(|| "Modifica PDF — WinFiles".into()),
+            Module::Thumbnails => self.window_title(),
+        };
         if title != self.shown_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.shown_title = title;
         }
         // Canc toglie dall'elenco i file scelti, se non si sta scrivendo in un campo.
-        if !self.marked.is_empty()
+        if !pdf_mode
+            && !self.marked.is_empty()
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|i| i.key_pressed(egui::Key::Delete))
         {
@@ -2106,7 +2160,8 @@ impl eframe::App for WinFilesApp {
             self.remove_files(&marked);
         }
         // Spazio mette o toglie dalla stampa i file scelti, come la spunta delle miniature della 4.9.
-        if !self.marked.is_empty()
+        if !pdf_mode
+            && !self.marked.is_empty()
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|i| i.key_pressed(egui::Key::Space))
         {
@@ -2152,9 +2207,6 @@ impl eframe::App for WinFilesApp {
         self.print_window(&ctx, sheets);
         self.calibrate_window(&ctx);
         self.app_bar(ui);
-        self.control_bar(ui);
-        self.update_bar(ui);
-        self.status_bar(ui);
         let t = Tokens::get(ui.ctx());
         let frame = egui::Frame::NONE.fill(t.app_bar).inner_margin(egui::Margin {
             left: 10,
@@ -2162,6 +2214,27 @@ impl eframe::App for WinFilesApp {
             top: 0,
             bottom: 0,
         });
+        if self.module == Module::Pdf {
+            self.pdf.control_bar(ui);
+            self.update_bar(ui);
+            self.pdf.status_bar(ui);
+            let unit = self.project.unit;
+            egui::CentralPanel::default()
+                .frame(frame.inner_margin(egui::Margin {
+                    left: 10,
+                    right: 10,
+                    top: 0,
+                    bottom: 2,
+                }))
+                .show(ui, |ui| self.pdf.body(ui, unit));
+            self.pdf.windows(&ctx);
+            self.notes_window(&ctx);
+            self.unsaved_dialog(&ctx);
+            return;
+        }
+        self.control_bar(ui);
+        self.update_bar(ui);
+        self.status_bar(ui);
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             let layout = self.dock.clone();
             let style = dock::style(ui);

@@ -25,6 +25,7 @@ winfiles-formats.workspace = true
 winfiles-thumbs.workspace = true
 winfiles-scene.workspace = true
 winfiles-pdf-out.workspace = true
+winfiles-pdf-edit.workspace = true
 eframe.workspace = true
 egui.workspace = true
 egui_extras.workspace = true

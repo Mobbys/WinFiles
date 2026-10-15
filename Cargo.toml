@@ -21,6 +21,7 @@ winfiles-formats = { path = "crates/formats", version = "0.1.0" }
 winfiles-thumbs = { path = "crates/thumbs", version = "0.1.0" }
 winfiles-scene = { path = "crates/scene", version = "0.1.0" }
 winfiles-pdf-out = { path = "crates/pdf_out", version = "0.1.0" }
+winfiles-pdf-edit = { path = "crates/pdf_edit", version = "0.1.0" }
 
 # base
 serde = { version = "1", features = ["derive"] }
@@ -41,6 +42,12 @@ photocraft-heif = { git = "https://github.com/storytold/photocraft", rev = "df05
 # PDF in uscita (vedi docs/adr/0008-esportazione-pdf.md): testi con i font incorporati, immagini
 # e pagine dei PDF originali incorporate come vettori.
 krilla = { version = "0.8", default-features = false, features = ["raster-images", "simple-text"] }
+
+# Modifica dei PDF (Fase 9, ADR 0015): il livello oggetti e le operazioni sulle pagine di PdfCraft
+# (rotazione, spostamento, eliminazione, import, estrazione, divisione, riquadri), che riscrivono
+# il file senza perdere annotazioni, segnalibri e livelli. A commit fissato. Licenza MIT/Apache.
+pdfcraft-cos = { git = "https://github.com/storytold/pdfcraft", rev = "afa8e1843cfed613f3d403119f6c2649bce824c9" }
+pdfcraft-organize = { git = "https://github.com/storytold/pdfcraft", rev = "afa8e1843cfed613f3d403119f6c2649bce824c9" }
 
 # interfaccia
 eframe = "0.36"

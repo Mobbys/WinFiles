@@ -226,39 +226,69 @@ fn shrink(img: DynamicImage, max_side: u32) -> Thumb {
 }
 
 fn pdf(data: Vec<u8>, page: usize, max_side: u32) -> Result<Thumb, ThumbError> {
-    let pdf = Pdf::new(data).map_err(|e| match e {
-        LoadPdfError::Decryption(_) => ThumbError::Encrypted,
-        LoadPdfError::Invalid => ThumbError::Pdf,
-    })?;
-    let page = pdf.pages().get(page).ok_or(ThumbError::NoPage(page + 1))?;
-    let (w, h) = page.render_dimensions();
-    let long = w.max(h);
-    if !(long.is_finite() && long > 0.0) {
-        return Err(ThumbError::Pdf);
+    PdfPages::open(data)?.render_inner(page, max_side)
+}
+
+/// Un PDF già letto, per disegnarne più pagine senza rileggerlo (modulo PDF).
+pub struct PdfPages(Pdf);
+
+impl PdfPages {
+    pub fn open(data: Vec<u8>) -> Result<Self, ThumbError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            Pdf::new(data).map(Self).map_err(|e| match e {
+                LoadPdfError::Decryption(_) => ThumbError::Encrypted,
+                LoadPdfError::Invalid => ThumbError::Pdf,
+            })
+        }))
+        .unwrap_or(Err(ThumbError::Crashed))
     }
-    let scale = (max_side as f32 / long).min(8.0);
-    let cache = RenderCache::new();
-    let pixmap = hayro::render(
-        page,
-        &cache,
-        &InterpreterSettings::default(),
-        &RenderSettings::default(),
-        &PixmapSettings {
-            x_scale: scale,
-            y_scale: scale,
-            bg_color: WHITE,
-        },
-    );
-    let (width, height) = (u32::from(pixmap.width()), u32::from(pixmap.height()));
-    if width == 0 || height == 0 {
-        return Err(ThumbError::Pdf);
+
+    pub fn len(&self) -> usize {
+        self.0.pages().len()
     }
-    // Sfondo bianco opaco: i pixel premoltiplicati coincidono con quelli normali.
-    Ok(Thumb {
-        width,
-        height,
-        rgba: pixmap.data_as_u8_slice().to_vec(),
-    })
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// La pagina `page` (da 0) con il lato lungo di al massimo `max_side` pixel.
+    pub fn render(&self, page: usize, max_side: u32) -> Result<Thumb, ThumbError> {
+        let max_side = max_side.clamp(16, MAX_SIDE);
+        catch_unwind(AssertUnwindSafe(|| self.render_inner(page, max_side)))
+            .unwrap_or(Err(ThumbError::Crashed))
+    }
+
+    fn render_inner(&self, page: usize, max_side: u32) -> Result<Thumb, ThumbError> {
+        let page = self.0.pages().get(page).ok_or(ThumbError::NoPage(page + 1))?;
+        let (w, h) = page.render_dimensions();
+        let long = w.max(h);
+        if !(long.is_finite() && long > 0.0) {
+            return Err(ThumbError::Pdf);
+        }
+        let scale = (max_side as f32 / long).min(8.0);
+        let cache = RenderCache::new();
+        let pixmap = hayro::render(
+            page,
+            &cache,
+            &InterpreterSettings::default(),
+            &RenderSettings::default(),
+            &PixmapSettings {
+                x_scale: scale,
+                y_scale: scale,
+                bg_color: WHITE,
+            },
+        );
+        let (width, height) = (u32::from(pixmap.width()), u32::from(pixmap.height()));
+        if width == 0 || height == 0 {
+            return Err(ThumbError::Pdf);
+        }
+        // Sfondo bianco opaco: i pixel premoltiplicati coincidono con quelli normali.
+        Ok(Thumb {
+            width,
+            height,
+            rgba: pixmap.data_as_u8_slice().to_vec(),
+        })
+    }
 }
 
 /// Inizio e lunghezza della parte PostScript di un EPS con intestazione DOS.

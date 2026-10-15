@@ -37,6 +37,19 @@ static ICONS: &[(&str, &[u8])] = icons![
     "trash-2",
     "x",
     "zoom-in",
+    // Modulo PDF
+    "copy-plus",
+    "crop",
+    "file-output",
+    "files",
+    "frame",
+    "redo-2",
+    "rotate-ccw",
+    "rotate-cw",
+    "save",
+    "scaling",
+    "scissors",
+    "undo-2",
 ];
 
 fn table() -> &'static SvgIconSet {

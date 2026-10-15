@@ -1556,7 +1556,7 @@ impl WinFilesApp {
 }
 
 /// Un campo numerico in millimetri con la virgola decimale, come si scrive in italiano.
-fn mm_field(value: &mut f64, max: f64) -> egui::DragValue<'_> {
+pub(crate) fn mm_field(value: &mut f64, max: f64) -> egui::DragValue<'_> {
     egui::DragValue::new(value)
         .range(0.0..=max)
         .speed(0.5)

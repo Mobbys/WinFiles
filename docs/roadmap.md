@@ -14,7 +14,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 | 6 | CSV, appunti, modelli salvati, HEIC, AI in PostScript | Ogni extra con i suoi criteri | Fatta e provata da Michel: CSV, appunti, sovrastampa, modelli salvati, HEIC, AI in PostScript |
 | 7 | Installer MSI, aggiornamenti, beta in parallelo con WinFile 4.9 | Liste Anteprime 4.9 messa a riposo | Fatta: installer provato da Michel, Liste Anteprime 4.9 non serve più, 0.1.0 pubblicata ([ADR 0014](adr/0014-installer-e-aggiornamenti.md)) |
 | 8 | Modulo Immagini: dati tecnici, calcolo DPI, ruota, specchia, ritaglia, RAW, HEIC | Tutto ciò che fa oggi Controllo Immagini | Da fare |
-| 9 | Modulo PDF: unisci, dividi, ruota, elimina, ritaglia, margini, adatta ad A4 o A3 | WinFile 4.9 messo a riposo | Da fare |
+| 9 | Modulo PDF: unisci, dividi, ruota, elimina, ritaglia, margini, adatta ad A4 o A3 | WinFile 4.9 messo a riposo | Fatta: modulo "Modifica PDF" nella finestra ([ADR 0015](adr/0015-modifica-pdf.md)), da provare |
 
 ## Fase 0 in dettaglio
 - [x] Workspace Cargo, lint "mai un crash", `cargo xtask ci`, controllo dei livelli
@@ -79,5 +79,17 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Rilascio automatico da un tag `vX.Y.Z`: MSI, eseguibile portatile e novità su GitHub
 - [x] Repository pubblico (Michel) e primo rilascio, 0.1.0
 - [x] Installer provato da Michel; Liste Anteprime della 4.9 non serve più (15 ottobre 2026)
+
+## Fase 9 in dettaglio
+- [x] Motore `crates/pdf_edit` sopra `pdfcraft`: apre, modifica la struttura, salva in modo atomico ([ADR 0015](adr/0015-modifica-pdf.md))
+- [x] Modulo "Modifica PDF" nella finestra (scheda in alto, `--modifica-pdf file.pdf` dalla riga di comando)
+- [x] Elenco delle pagine con miniature vere, misure in mm o cm, scelta multipla (Ctrl, Maiusc, Tutte, Nessuna)
+- [x] Anteprima grande della pagina scelta, con zoom (Adatta e scatti, Ctrl+rotella) e disegno progressivo
+- [x] Ruota a destra e a sinistra, elimina (mai l'ultima pagina), duplica, ordine a trascinamento
+- [x] Unisci più PDF, inserisci pagine da un altro PDF (all'inizio, dopo la pagina corrente, alla fine)
+- [x] Estrai le pagine scelte in un file nuovo; dividi in più file ai punti scelti
+- [x] Rifila al TrimBox, margini colorati, misura libera, adatta ad A4 o A3 senza ridisegnare la pagina
+- [x] Annulla e Ripeti con l'etichetta dell'operazione; "Salvare le modifiche?" prima di chiudere o aprire
+- [ ] Provata da Michel su file veri
 
 Dopo la Fase 7 viene la Fase 9 (PDF), poi la 8 (Immagini): l'ordine l'ha scelto Michel il 15 ottobre 2026.

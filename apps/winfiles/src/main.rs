@@ -18,6 +18,7 @@ mod icons;
 mod measure;
 mod paint;
 mod panels;
+mod pdf;
 mod prefs;
 mod presets;
 mod printing;
@@ -54,12 +55,16 @@ fn main() -> eframe::Result {
     // `--pdf uscita.pdf` esporta i fogli in quel file e chiude: per gli script e per le prove.
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
     // `--calibrazione A4 calibrazione.pdf` scrive la pagina di calibrazione in quel file e chiude.
+    // `--modifica-pdf file.pdf` apre il modulo PDF su quel file.
     let mut pdf = None;
     let mut calibration = None;
+    let mut edit_pdf = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--pdf" {
             pdf = args.next().map(Into::into);
+        } else if arg == "--modifica-pdf" {
+            edit_pdf = args.next().map(Into::into);
         } else if arg == "--calibrazione" {
             let paper = match args.next() {
                 Some(p) if p.eq_ignore_ascii_case("a3") => winfiles_geom::Paper::A3,
@@ -81,6 +86,7 @@ fn main() -> eframe::Result {
                 paths,
                 pdf,
                 calibration,
+                edit_pdf,
                 prefs,
             )))
         }),

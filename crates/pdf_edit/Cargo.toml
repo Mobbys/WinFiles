@@ -1,0 +1,20 @@
+[package]
+name = "winfiles-pdf-edit"
+description = "Modifica dei PDF (Fase 9): pagine da spostare, ruotare, eliminare, rifilare, unire e dividere, margini e nuove misure."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+winfiles-geom.workspace = true
+thiserror.workspace = true
+pdfcraft-cos.workspace = true
+pdfcraft-organize.workspace = true
+
+[dev-dependencies]
+hayro.workspace = true
+
+[lints]
+workspace = true

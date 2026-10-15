@@ -4,14 +4,20 @@ Stampa delle miniature di immagini, PDF, AI ed EPS su fogli A4 e A3, raggruppate
 sottocartella, con una nota per ogni file e per ogni cartella. È la riscrittura in Rust di
 WinFile 4.9.
 
-**Stato:** Fase 0, la base del progetto. Si trascinano file o cartelle nella finestra e si vede
-l'impaginazione su A4 o A3 con riquadri al posto delle miniature; le miniature vere arrivano nella
-Fase 2. Le fasi sono in [`docs/roadmap.md`](docs/roadmap.md).
+**Stato:** in uso. Si trascinano file o cartelle nella finestra, si vedono le miniature vere
+impaginate su A4 o A3 (griglia, elenco o nesting), si scrivono le note, si esporta in PDF e si
+stampa a scala esatta. Le fasi sono in [`docs/roadmap.md`](docs/roadmap.md).
 
-## Scaricare l'eseguibile
-Ogni modifica viene compilata per Windows da GitHub Actions: nella scheda **Actions** si apre
-l'ultima esecuzione verde di "CI" e si scarica l'artifact `winfiles-windows`, che contiene
-`winfiles.exe`. Con i rilasci arriverà anche l'installer nella pagina Releases.
+L'app ha due moduli, come le schede della 4.9:
+- **Miniature**: l'elenco dei file, l'impaginazione e la stampa.
+- **Modifica PDF**: unisci, dividi, ruota, elimina, duplica, estrai pagine, margini, rifila e
+  adatta ad A4 o A3 senza ridisegnare la pagina ([ADR 0015](docs/adr/0015-modifica-pdf.md)).
+
+## Installare
+Nella pagina **Releases** ci sono l'installer `WinFiles-X.Y.Z.msi` (si installa per l'utente, senza
+amministratore, e si aggiorna da solo) e l'eseguibile singolo `winfiles.exe` per chi lo vuole
+portatile. Per provare una modifica non ancora rilasciata: nella scheda **Actions** si apre
+l'ultima esecuzione verde di "CI" e si scarica l'artifact `winfiles-windows`.
 
 ## Compilare in locale
 1. Installare Rust da <https://rustup.rs> (su Windows serve anche "Desktop development with C++"

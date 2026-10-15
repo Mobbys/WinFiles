@@ -52,5 +52,5 @@ unknown-registry = "deny"
 unknown-git = "deny"
 # Le librerie ArtCraft, sempre a commit fissato.
 # winprint.rs è la copia del team ArtCraft usata da craft-print per stampare su Windows.
-# photocraft per il lettore HEIC (ADR 0012).
-allow-git = ["https://github.com/storytold/craft-libs", "https://github.com/storytold/winprint.rs", "https://github.com/storytold/photocraft"]
+# photocraft per il lettore HEIC (ADR 0012), pdfcraft per la modifica dei PDF (ADR 0015).
+allow-git = ["https://github.com/storytold/craft-libs", "https://github.com/storytold/winprint.rs", "https://github.com/storytold/photocraft", "https://github.com/storytold/pdfcraft"]
