@@ -89,6 +89,8 @@ pub struct Prefs {
     pub printing: PrintChoices,
     /// La correzione di ogni stampante calibrata, per nome.
     pub calibrations: BTreeMap<String, Calibration>,
+    /// I modelli di impaginazione salvati.
+    pub presets: Vec<crate::presets::Preset>,
     /// Misura interna della finestra, in punti.
     pub window: Option<[f32; 2]>,
     pub maximized: bool,
@@ -119,6 +121,7 @@ impl Prefs {
             .filter(|(name, c)| !name.is_empty() && !c.is_identity())
             .take(MAX_CALIBRATIONS)
             .collect();
+        self.presets = crate::presets::sanitized(std::mem::take(&mut self.presets));
         self
     }
 }
@@ -203,6 +206,13 @@ mod tests {
                     ..Calibration::IDENTITY
                 },
             )]),
+            presets: vec![crate::presets::Preset {
+                name: "Catalogo A3".into(),
+                print: PrintSettings {
+                    paper: winfiles_geom::Paper::A3,
+                    ..PrintSettings::default()
+                },
+            }],
             window: Some([1400.0, 900.0]),
             maximized: true,
         };

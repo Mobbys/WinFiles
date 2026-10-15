@@ -80,6 +80,10 @@ pub struct WinFilesApp {
     want_calibrate: bool,
     /// La correzione di ogni stampante calibrata, per nome.
     calibrations: std::collections::BTreeMap<String, winfiles_geom::Calibration>,
+    /// I modelli di impaginazione salvati.
+    pub(crate) presets: Vec<crate::presets::Preset>,
+    /// Il nome del modello che si sta scrivendo per salvarlo.
+    pub(crate) preset_name: Option<String>,
     /// `--calibrazione A4 uscita.pdf`: la pagina di calibrazione in PDF, poi chiudere.
     batch_calibration: Option<(Paper, PathBuf)>,
     /// La rotella sull'anteprima: il foglio era già al bordo alto/basso nel fotogramma prima, e
@@ -170,6 +174,8 @@ impl WinFilesApp {
             calibrate: None,
             want_calibrate: false,
             calibrations: prefs.calibrations.clone(),
+            presets: prefs.presets.clone(),
+            preset_name: None,
             batch_calibration,
             wheel_edges: (true, true),
             last_flip: 0.0,
@@ -1834,6 +1840,7 @@ impl WinFilesApp {
                 fit: self.last_print.fit,
             },
             calibrations: self.calibrations.clone(),
+            presets: self.presets.clone(),
             window,
             maximized,
         }

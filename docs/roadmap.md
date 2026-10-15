@@ -11,7 +11,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 | 3 | Griglia, elenco e nesting su A4 e A3, intestazioni cartella, export PDF | Parità con la stampa attuale, ±0,5 mm | In corso: griglia, elenco, nesting, riepilogo ed export PDF pronti |
 | 4 | Pannelli agganciabili, anteprima, note, ordine a trascinamento, filtri | Un lavoro vero fatto solo con la nuova app | In corso: pannelli, note, stampa sì/no per file e pagina, ricerca, filtri e ordine a trascinamento pronti |
 | 5 | Stampa Windows a scala 100%, area stampabile del driver, calibrazione | A4 e A3 esatti su due stampanti | Fatta: stampa diretta ([ADR 0009](adr/0009-stampa-diretta.md)) e calibrazione ([ADR 0010](adr/0010-calibrazione-stampante.md)), A4 e A3 esatti provati da Michel |
-| 6 | CSV, appunti, modelli salvati, segni di taglio, miniature vettoriali, HEIC | Ogni extra con i suoi criteri | In corso: CSV, appunti e anteprima della sovrastampa pronti |
+| 6 | CSV, appunti, modelli salvati, segni di taglio, miniature vettoriali, HEIC | Ogni extra con i suoi criteri | In corso: CSV, appunti, anteprima della sovrastampa e modelli salvati pronti |
 | 7 | Installer MSI, aggiornamenti, beta in parallelo con WinFile 4.9 | Liste Anteprime 4.9 messa a riposo | Da fare |
 | 8 | Modulo Immagini: dati tecnici, calcolo DPI, ruota, specchia, ritaglia, RAW, HEIC | Tutto ciò che fa oggi Controllo Immagini | Da fare |
 | 9 | Modulo PDF: unisci, dividi, ruota, elimina, ritaglia, margini, adatta ad A4 o A3 | WinFile 4.9 messo a riposo | Da fare |
@@ -66,7 +66,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Esporta tabella CSV (File): una riga per pagina in stampa, base e altezza in colonne, m², nota; per Excel in italiano
 - [x] Copia tabella (File, Ctrl+Maiusc+C; Ctrl+C con file scelti; clic destro): HTML con cartelle e totali per Excel, Word e posta, più testo a tabulazioni
 - [x] Anteprima della sovrastampa nelle miniature di PDF e AI ([ADR 0011](adr/0011-anteprima-sovrastampa.md))
-- [ ] Modelli di impaginazione salvati
+- [x] Modelli di impaginazione salvati (pannello Impaginazione › Modello: si salvano con un nome, il titolo resta del lavoro)
 - [ ] Segni di taglio
 - [ ] Miniature vettoriali nel PDF
 - [ ] HEIC

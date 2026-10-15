@@ -1333,7 +1333,126 @@ impl WinFilesApp {
         self.selected_page = page;
     }
 
+    /// In cima al pannello Impaginazione: il modello in uso, per sceglierne un altro, salvare le
+    /// impostazioni come modello o eliminarlo.
+    fn presets_section(&mut self, ui: &mut egui::Ui) {
+        let t = Tokens::get(ui.ctx());
+        let current = crate::presets::matching(&self.presets, &self.project.print).map(|p| p.name.clone());
+        dim_label(ui, "Modello");
+        let mut chosen = None;
+        let mut remove = false;
+        ui.horizontal(|ui| {
+            let width = (ui.available_width() - 118.0).max(80.0);
+            let shown = current.clone().unwrap_or_else(|| {
+                if self.presets.is_empty() {
+                    "Nessun modello".into()
+                } else {
+                    "A mano".into()
+                }
+            });
+            ui.add_enabled_ui(!self.presets.is_empty(), |ui| {
+                // Il nome lungo si tronca: senza un tetto la casella allargherebbe il pannello.
+                ui.set_max_width(width);
+                egui::ComboBox::from_id_salt("modello")
+                    .icon(fluent::combo_icon)
+                    .selected_text(shown)
+                    .width(width)
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        for (k, p) in self.presets.iter().enumerate() {
+                            if ui
+                                .selectable_label(current.as_deref() == Some(p.name.as_str()), &p.name)
+                                .clicked()
+                            {
+                                chosen = Some(k);
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(current.as_deref().unwrap_or("Scegli un modello salvato"));
+            });
+            if ui
+                .button("Salva…")
+                .on_hover_text("Salva l'impaginazione di adesso come modello (il titolo resta del lavoro)")
+                .clicked()
+            {
+                self.preset_name = Some(current.clone().unwrap_or_default());
+            }
+            if crate::icons::button(
+                ui,
+                "trash-2",
+                "Elimina questo modello",
+                false,
+                current.is_some(),
+                16.0,
+            )
+            .clicked()
+            {
+                remove = true;
+            }
+        });
+        if let Some(p) = chosen.and_then(|k| self.presets.get(k)) {
+            crate::presets::apply(p, &mut self.project.print);
+            self.status = format!("Impaginazione dal modello «{}»", p.name);
+        }
+        if remove && let Some(name) = &current {
+            self.presets.retain(|p| &p.name != name);
+            self.status = format!("Eliminato il modello «{name}»");
+        }
+        let mut done = None;
+        if let Some(name) = self.preset_name.as_mut() {
+            let edit = fluent::text_field(
+                ui,
+                egui::TextEdit::singleline(name)
+                    .desired_width(ui.available_width() - 8.0)
+                    .margin(fluent::MARGIN)
+                    .hint_text("Nome del modello"),
+            );
+            if !edit.lost_focus() && !edit.has_focus() && name.is_empty() {
+                edit.request_focus();
+            }
+            let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let ok = crate::presets::clean_name(name).is_some();
+            ui.horizontal(|ui| {
+                if ui.add_enabled(ok, egui::Button::new("Salva")).clicked() || (enter && ok) {
+                    done = Some(true);
+                }
+                if ui.button("Annulla").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    done = Some(false);
+                }
+            });
+            if self.presets.iter().any(|p| {
+                crate::presets::clean_name(name).is_some_and(|n| n.to_lowercase() == p.name.to_lowercase())
+            }) {
+                ui.label(
+                    egui::RichText::new("Sostituisce il modello con lo stesso nome")
+                        .size(12.0)
+                        .color(t.text_dim),
+                );
+            }
+        }
+        match done {
+            Some(true) => {
+                if let Some(name) = self.preset_name.take() {
+                    self.status = match crate::presets::save(&mut self.presets, &name, &self.project.print) {
+                        Some(n) => format!("Salvato il modello «{n}»"),
+                        None => format!(
+                            "Troppi modelli: ne tengo al massimo {}",
+                            crate::presets::MAX_PRESETS
+                        ),
+                    };
+                }
+            }
+            Some(false) => self.preset_name = None,
+            None => {}
+        }
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(6.0);
+    }
+
     pub(crate) fn layout_panel(&mut self, ui: &mut egui::Ui) {
+        self.presets_section(ui);
         let shown_scale = self.nesting_scale;
         let print = &mut self.project.print;
         let mm =

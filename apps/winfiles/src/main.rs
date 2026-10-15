@@ -19,6 +19,7 @@ mod measure;
 mod paint;
 mod panels;
 mod prefs;
+mod presets;
 mod printing;
 mod recent;
 mod reorder;
