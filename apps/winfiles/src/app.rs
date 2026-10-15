@@ -89,6 +89,8 @@ pub struct WinFilesApp {
     /// Le ultime scelte scritte in `impostazioni.json`, e quando si è controllato l'ultima volta.
     prefs: crate::prefs::Prefs,
     prefs_checked: f64,
+    /// L'ultima impaginazione e il lavoro da cui viene: si rifà solo quando il lavoro cambia.
+    layout_cache: Option<(Project, std::rc::Rc<Pages>)>,
     /// Nel nesting: la scala 1:N in uso (scelta o automatica).
     pub(crate) nesting_scale: Option<u32>,
 }
@@ -149,6 +151,7 @@ impl WinFilesApp {
             prefs,
             prefs_checked: 0.0,
             nesting_scale: None,
+            layout_cache: None,
         };
         // Un file .winfiles sulla riga di comando (doppio clic in Esplora file) apre il lavoro;
         // gli altri file e cartelle si aggiungono all'elenco.
@@ -1392,6 +1395,41 @@ fn paint_tabs(ui: &egui::Ui, panels: &[PanelId], active: usize, floating: bool, 
     }
 }
 
+impl WinFilesApp {
+    /// I fogli del lavoro. Si impaginano di nuovo solo quando il lavoro cambia (file, misure,
+    /// note, impostazioni): con migliaia di file misurare tutti i testi a ogni fotogramma
+    /// rallenterebbe l'anteprima.
+    fn pages(&mut self, ctx: &egui::Context) -> std::rc::Rc<Pages> {
+        if let Some((key, pages)) = &self.layout_cache
+            && *key == self.project
+        {
+            return pages.clone();
+        }
+        self.slots = captions::slots(&self.project);
+        // L'altezza delle intestazioni segue il corpo del loro testo.
+        let mut print = self.project.print.clone();
+        print.header = captions::header_height(print.header_text);
+        let width = winfiles_geom::sheet_size(print.paper, print.orientation).w
+            - print.margins.left
+            - print.margins.right;
+        let title = captions::title_height(ctx, &print.title, print.title_text, width);
+        let items = captions::items(ctx, &self.project, &self.slots);
+        self.nesting_scale = (print.view == View::Nesting && !items.is_empty())
+            .then(|| winfiles_layout::nesting_denominator(&print, &items));
+        let pages = grid_with_title(&print, &items, title).and_then(|grid| {
+            let summary = if print.show_summary && !self.project.files.is_empty() {
+                Some(crate::summary::layout(ctx, &self.project, title)?)
+            } else {
+                None
+            };
+            Ok(Sheets { summary, grid })
+        });
+        let pages = std::rc::Rc::new(pages);
+        self.layout_cache = Some((self.project.clone(), pages.clone()));
+        pages
+    }
+}
+
 /// Tutti i fogli del lavoro: il riepilogo (se richiesto) e poi le miniature.
 pub(crate) struct Sheets {
     pub summary: Option<crate::summary::Summary>,
@@ -1572,25 +1610,8 @@ impl eframe::App for WinFilesApp {
         self.receive_measures();
         self.thumbs.receive(ui.ctx());
 
-        self.slots = captions::slots(&self.project);
-        // L'altezza delle intestazioni segue il corpo del loro testo.
-        let mut print = self.project.print.clone();
-        print.header = captions::header_height(print.header_text);
-        let width = winfiles_geom::sheet_size(print.paper, print.orientation).w
-            - print.margins.left
-            - print.margins.right;
-        let title = captions::title_height(ui.ctx(), &print.title, print.title_text, width);
-        let items = captions::items(ui.ctx(), &self.project, &self.slots);
-        self.nesting_scale = (print.view == View::Nesting && !items.is_empty())
-            .then(|| winfiles_layout::nesting_denominator(&print, &items));
-        let sheets = grid_with_title(&print, &items, title).and_then(|grid| {
-            let summary = if print.show_summary && !self.project.files.is_empty() {
-                Some(crate::summary::layout(ui.ctx(), &self.project, title)?)
-            } else {
-                None
-            };
-            Ok(Sheets { summary, grid })
-        });
+        let sheets = self.pages(ui.ctx());
+        let sheets: &Pages = &sheets;
         if std::mem::take(&mut self.want_export) {
             self.export_pdf(&ctx, &sheets, None);
         }

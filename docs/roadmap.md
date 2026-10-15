@@ -40,7 +40,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Note per pagina e foglio di riepilogo in cima
 - [x] Ricerca dei file in background con conteggio e Annulla
 - [x] Prova con un lavoro da 10.000 file: JSON 2,6 MB letto e scritto in 60 ms, impaginazione in 5 ms per fotogramma (625 fogli A4)
-- [ ] Ricalcolare l'impaginazione solo quando il lavoro cambia, non a ogni fotogramma
+- [x] Ricalcolare l'impaginazione solo quando il lavoro cambia, non a ogni fotogramma
 - [x] Lavori recenti nel menu File (in `%APPDATA%\WinFiles\recenti.json`)
 - [x] Ultime scelte ricordate: pannelli, tema, unità, impaginazione, stampante, finestra (`impostazioni.json`)
 
