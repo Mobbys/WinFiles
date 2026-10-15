@@ -5,6 +5,7 @@ use craft_print::{Duplex, Job, Printer, Scaling};
 use egui::vec2;
 
 use crate::app::{dim_label, segmented, stepper};
+use crate::fluent;
 use crate::theme::{Tokens, semibold};
 
 /// Quali fogli stampare.
@@ -134,6 +135,7 @@ impl PrintDialog {
                         } else {
                             let shown = self.printer.clone().unwrap_or_default();
                             egui::ComboBox::from_id_salt("stampante")
+                                .icon(crate::fluent::combo_icon)
                                 .selected_text(shown)
                                 .width(300.0)
                                 .show_ui(ui, |ui| {
@@ -169,18 +171,23 @@ impl PrintDialog {
 
                     dim_label(ui, "Fogli");
                     ui.vertical(|ui| {
-                        ui.radio_value(&mut self.range, Range::All, format!("Tutti ({count})"));
-                        ui.radio_value(
-                            &mut self.range,
-                            Range::Current,
-                            format!("Solo quello in anteprima ({})", current + 1),
-                        );
+                        let choices = [
+                            (Range::All, format!("Tutti ({count})")),
+                            (Range::Current, format!("Solo quello in anteprima ({})", current + 1)),
+                        ];
+                        for (range, label) in choices {
+                            if fluent::radio(ui, self.range == range, label).clicked() {
+                                self.range = range;
+                            }
+                        }
                         ui.horizontal(|ui| {
-                            ui.radio_value(&mut self.range, Range::Some, "Dal foglio");
+                            if fluent::radio(ui, self.range == Range::Some, "Dal foglio").clicked() {
+                                self.range = Range::Some;
+                            }
                             let max = u32::try_from(count.max(1)).unwrap_or(u32::MAX);
-                            let a = ui.add(egui::DragValue::new(&mut self.from).range(1..=max));
+                            let a = fluent::number(ui, 56.0, egui::DragValue::new(&mut self.from).range(1..=max));
                             ui.label("al");
-                            let b = ui.add(egui::DragValue::new(&mut self.to).range(1..=max));
+                            let b = fluent::number(ui, 56.0, egui::DragValue::new(&mut self.to).range(1..=max));
                             if a.changed() || b.changed() {
                                 self.range = Range::Some;
                             }
@@ -205,12 +212,12 @@ impl PrintDialog {
                     ui.end_row();
 
                     dim_label(ui, "Colore");
-                    ui.checkbox(&mut self.gray, "Bianco e nero");
+                    ui.add(fluent::checkbox(&mut self.gray, "Bianco e nero"));
                     ui.end_row();
 
                     dim_label(ui, "Scala");
                     ui.vertical(|ui| {
-                        ui.checkbox(&mut self.fit, "Riduci all'area stampabile");
+                        ui.add(fluent::checkbox(&mut self.fit, "Riduci all'area stampabile"));
                         let hint = if self.fit {
                             "I fogli si rimpiccioliscono quanto basta per i margini della stampante: le misure non sono più esatte."
                         } else {

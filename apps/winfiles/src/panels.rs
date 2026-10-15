@@ -9,6 +9,7 @@ use winfiles_model::{FileEntry, FileKind, PrintState, Totals, View};
 
 use crate::app::{WinFilesApp, dim_label};
 use crate::filter::Found;
+use crate::fluent;
 use crate::icons;
 use crate::reorder;
 use crate::theme::{Tokens, semibold};
@@ -185,7 +186,7 @@ fn print_section(ui: &mut egui::Ui, f: &FileEntry) -> Option<(Option<usize>, boo
     if pages == 1 {
         let mut on = f.printed(0);
         if ui
-            .checkbox(&mut on, "In stampa")
+            .add(fluent::checkbox(&mut on, "In stampa"))
             .on_hover_text("Tolto dalla stampa, il file resta nell'elenco con le sue note. Tasto Spazio.")
             .changed()
         {
@@ -219,8 +220,7 @@ fn print_section(ui: &mut egui::Ui, f: &FileEntry) -> Option<(Option<usize>, boo
         ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
         for p in 0..pages.min(500) {
             let on = f.printed(p);
-            let chip = egui::Button::selectable(on, format!("{}", p + 1)).min_size(vec2(30.0, 22.0));
-            if ui.add(chip).clicked() {
+            if fluent::toggle(ui, on, format!("{}", p + 1)).clicked() {
                 out = Some((Some(p), !on));
             }
         }
@@ -332,11 +332,11 @@ impl WinFilesApp {
             .margin(egui::Margin {
                 left: 28,
                 right: 26,
-                top: 5,
-                bottom: 5,
+                top: 7,
+                bottom: 7,
             })
             .desired_width(f32::INFINITY);
-        let resp = ui.add(edit).on_hover_text("Ctrl+F. Esc svuota la ricerca.");
+        let resp = fluent::text_field(ui, edit).on_hover_text("Ctrl+F. Esc svuota la ricerca.");
         if std::mem::take(&mut self.focus_search) {
             resp.request_focus();
         }
@@ -367,16 +367,12 @@ impl WinFilesApp {
             ui.add_space(2.0);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-                if ui
-                    .add(egui::Button::selectable(self.filter.kinds.is_empty(), "Tutti"))
-                    .clicked()
-                {
+                if fluent::toggle(ui, self.filter.kinds.is_empty(), "Tutti").clicked() {
                     self.filter.kinds.clear();
                 }
                 for (kind, label) in present {
                     let on = self.filter.kinds.contains(kind);
-                    if ui
-                        .add(egui::Button::selectable(on, *label))
+                    if fluent::toggle(ui, on, *label)
                         .on_hover_text("Clic per mostrare anche questo tipo; \"Tutti\" toglie il filtro")
                         .clicked()
                     {
@@ -577,13 +573,16 @@ impl WinFilesApp {
                                 if let Some((_, text)) = &mut self.renaming {
                                     // In una Ui figlia, così il campo non sposta le righe sotto.
                                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
-                                    let edit = child.add_sized(
-                                        field.size(),
-                                        egui::TextEdit::singleline(text)
-                                            .font(semibold(12.5))
-                                            .margin(egui::Margin::symmetric(6, 1))
-                                            .hint_text(labels.get(*path).map_or("", String::as_str)),
-                                    );
+                                    let edit = fluent::field_scope(&mut child, |ui| {
+                                        ui.add_sized(
+                                            field.size(),
+                                            egui::TextEdit::singleline(text)
+                                                .font(semibold(12.5))
+                                                .margin(egui::Margin::symmetric(6, 1))
+                                                .hint_text(labels.get(*path).map_or("", String::as_str)),
+                                        )
+                                    });
+                                    fluent::field_edge(&child, edit.rect, edit.has_focus());
                                     if !edit.has_focus() && !edit.lost_focus() {
                                         edit.request_focus();
                                     }
@@ -1260,12 +1259,13 @@ impl WinFilesApp {
                 section(ui, "Nota del file");
             }
             let mut text = file.note(page).to_string();
-            let edit = ui.add(
+            let edit = fluent::text_field(
+                ui,
                 egui::TextEdit::multiline(&mut text)
                     .id_salt(("nota-pagina", page))
                     .desired_rows(3)
                     .desired_width(ui.available_width() - 8.0)
-                    .margin(egui::Margin::symmetric(10, 8))
+                    .margin(fluent::MARGIN)
                     .hint_text("Per esempio: verificare il colore"),
             );
             if edit.changed() {
@@ -1290,12 +1290,13 @@ impl WinFilesApp {
                 .get(&folder)
                 .cloned()
                 .unwrap_or_default();
-            let edit = ui.add(
+            let edit = fluent::text_field(
+                ui,
                 egui::TextEdit::multiline(&mut note)
                     .id_salt("nota-cartella")
                     .desired_rows(3)
                     .desired_width(ui.available_width() - 8.0)
-                    .margin(egui::Margin::symmetric(10, 8))
+                    .margin(fluent::MARGIN)
                     .hint_text("Vale per tutti i file della cartella"),
             );
             if edit.changed() {
@@ -1312,31 +1313,30 @@ impl WinFilesApp {
     pub(crate) fn layout_panel(&mut self, ui: &mut egui::Ui) {
         let shown_scale = self.nesting_scale;
         let print = &mut self.project.print;
-        let mm = |ui: &mut egui::Ui, value: &mut f64, max: f64| ui.add(mm_field(value, max));
+        let mm =
+            |ui: &mut egui::Ui, value: &mut f64, max: f64| fluent::number(ui, 96.0, mm_field(value, max));
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             dim_label(ui, "Titolo in cima ai fogli");
-            ui.add(
+            fluent::text_field(
+                ui,
                 egui::TextEdit::singleline(&mut print.title)
                     .desired_width(ui.available_width() - 8.0)
-                    .margin(egui::Margin::symmetric(10, 7))
+                    .margin(fluent::MARGIN)
                     .hint_text("Per esempio: Cliente Rossi, ordine 124"),
             );
             ui.add_space(8.0);
             dim_label(ui, "Testo del titolo");
             ui.add(text_slider(&mut print.title_text, MIN_TITLE_PT..=MAX_TITLE_PT));
             ui.add_space(8.0);
-            // Il cursore occupa la larghezza del pannello, lasciando posto al numero.
-            ui.spacing_mut().slider_width = (ui.available_width() - 64.0).max(60.0);
             match print.view {
                 View::Grid => {
                     dim_label(ui, "Colonne");
-                    ui.add(egui::Slider::new(&mut print.columns, 1..=10));
+                    ui.add(fluent::Slider::new(&mut print.columns, 1..=10));
                 }
                 View::List => {
                     dim_label(ui, "Larghezza delle miniature");
-                    ui.spacing_mut().slider_width = (ui.available_width() - 84.0).max(60.0);
                     ui.add(
-                        egui::Slider::new(&mut print.list_thumb, winfiles_layout::LIST_THUMB_MM)
+                        fluent::Slider::new(&mut print.list_thumb, winfiles_layout::LIST_THUMB_MM)
                             .step_by(1.0)
                             .fixed_decimals(0)
                             .suffix(" mm"),
@@ -1381,17 +1381,23 @@ impl WinFilesApp {
                     ui.end_row();
                 });
             ui.add_space(6.0);
-            ui.checkbox(&mut print.show_sizes, "Misure con abbondanza e crocini")
-                .on_hover_text("Il formato pagina del file e la sua area, sotto ogni miniatura");
-            ui.checkbox(&mut print.show_trim, "Misure al vivo")
+            ui.add(fluent::checkbox(
+                &mut print.show_sizes,
+                "Misure con abbondanza e crocini",
+            ))
+            .on_hover_text("Il formato pagina del file e la sua area, sotto ogni miniatura");
+            ui.add(fluent::checkbox(&mut print.show_trim, "Misure al vivo"))
                 .on_hover_text("In rosso, il formato finito (TrimBox) quando è diverso dalla pagina");
-            ui.checkbox(&mut print.show_summary, "Foglio di riepilogo in cima")
-                .on_hover_text("Un foglio con l'elenco di cartelle e file, pagine, misure, m² e note");
-            ui.checkbox(
+            ui.add(fluent::checkbox(
+                &mut print.show_summary,
+                "Foglio di riepilogo in cima",
+            ))
+            .on_hover_text("Un foglio con l'elenco di cartelle e file, pagine, misure, m² e note");
+            ui.add(fluent::checkbox(
                 &mut print.page_break_per_folder,
                 "Ogni cartella su un foglio nuovo",
-            );
-            ui.checkbox(&mut print.show_notes, "Stampa le note")
+            ));
+            ui.add(fluent::checkbox(&mut print.show_notes, "Stampa le note"))
                 .on_hover_text("Spento: le note restano nel lavoro ma non vanno sul foglio");
             ui.add_space(8.0);
             let sheet = winfiles_geom::sheet_size(print.paper, print.orientation);
@@ -1432,10 +1438,10 @@ pub(crate) const MAX_TITLE_PT: f64 = 40.0;
 pub(crate) const MAX_NOTE_PT: f64 = 30.0;
 
 /// Un cursore per il corpo di un testo, in punti tipografici con la virgola decimale.
-pub(crate) fn text_slider(value: &mut f64, range: std::ops::RangeInclusive<f64>) -> egui::Slider<'_> {
-    egui::Slider::new(value, range)
+pub(crate) fn text_slider(value: &mut f64, range: std::ops::RangeInclusive<f64>) -> fluent::Slider<'_> {
+    fluent::Slider::new(value, range)
         .step_by(0.5)
-        .custom_formatter(|v, _| format!("{} pt", format_number(v, 1, true)))
+        .custom_formatter(|v| format!("{} pt", format_number(v, 1, true)))
         .custom_parser(|text| {
             let clean = text.trim().trim_end_matches("pt").trim().replace(',', ".");
             clean.parse::<f64>().ok()

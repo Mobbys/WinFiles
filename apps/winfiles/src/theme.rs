@@ -51,6 +51,16 @@ pub struct Tokens {
     pub panel_darker: Color32,
     pub input: Color32,
     pub input_border: Color32,
+    /// Fondo dei campi (testo, numeri, menu a tendina) come in Windows 11: appena staccato dalla
+    /// scheda, più chiaro nel tema scuro.
+    pub field: Color32,
+    pub field_hover: Color32,
+    /// Bordo sottile dei campi e dei pulsanti.
+    pub field_border: Color32,
+    /// Il bordo inferiore dei campi, più scuro: diventa la riga d'accento quando il campo è attivo.
+    pub field_bottom: Color32,
+    /// Il pallino dei cursori, attorno al punto d'accento.
+    pub thumb: Color32,
     pub border: Color32,
     pub divider: Color32,
     pub text: Color32,
@@ -91,6 +101,11 @@ pub const DARK: Tokens = Tokens {
     panel_darker: hex(0x2c2c30),
     input: hex(0x1b1b1e),
     input_border: hex(0x5c5c66),
+    field: hex(0x2c2c31),
+    field_hover: hex(0x323238),
+    field_border: hex(0x3e3e46),
+    field_bottom: hex(0x9a9aa3),
+    thumb: hex(0x45454c),
     border: hex(0x33333a),
     divider: hex(0x34343a),
     text: hex(0xe8e8ea),
@@ -106,12 +121,12 @@ pub const DARK: Tokens = Tokens {
     on_primary: hex(0xffffff),
     selection: hex(0x1e3a5f),
     pasteboard: hex(0x1b1b1e),
-    button: hex(0x2f2f34),
-    button_border: hex(0x5c5c66),
+    button: hex(0x2e2e33),
+    button_border: hex(0x45454d),
     warning: hex(0xffb547),
     error: hex(0xff7a7a),
-    radius: 6,
-    card_radius: 10,
+    radius: 4,
+    card_radius: 8,
 };
 
 /// Tema chiaro: fondo grigio perla, schede bianche, accento blu.
@@ -122,6 +137,11 @@ pub const LIGHT: Tokens = Tokens {
     panel_darker: hex(0xf3f4f7),
     input: hex(0xffffff),
     input_border: hex(0xa3a9b3),
+    field: hex(0xfdfdfd),
+    field_hover: hex(0xf5f6f8),
+    field_border: hex(0xdcdfe4),
+    field_bottom: hex(0x868b94),
+    thumb: hex(0xffffff),
     border: hex(0xdfe2e7),
     divider: hex(0xe4e6ea),
     text: hex(0x1d1f23),
@@ -137,12 +157,12 @@ pub const LIGHT: Tokens = Tokens {
     on_primary: hex(0xffffff),
     selection: hex(0xdbe7fd),
     pasteboard: hex(0xe4e6eb),
-    button: hex(0xf3f4f7),
-    button_border: hex(0xa3a9b3),
+    button: hex(0xfbfbfc),
+    button_border: hex(0xd5d8de),
     warning: hex(0x955700),
     error: hex(0xc62828),
-    radius: 6,
-    card_radius: 10,
+    radius: 4,
+    card_radius: 8,
 };
 
 impl Tokens {
@@ -257,14 +277,21 @@ pub fn apply(ctx: &egui::Context, t: Tokens) {
     w.inactive.weak_bg_fill = t.button;
     w.hovered.bg_fill = t.hover;
     w.hovered.weak_bg_fill = t.hover;
-    w.hovered.bg_stroke = Stroke::new(1.0, t.input_border);
-    w.active.bg_stroke = Stroke::new(1.0, t.accent);
-    w.open.bg_stroke = Stroke::new(1.0, t.input_border);
+    // Pulsanti come in Windows 11: bordo sottile in ogni stato, il fondo dice il passaggio del
+    // mouse e la pressione.
+    w.hovered.bg_stroke = Stroke::new(1.0, t.button_border);
+    w.active.bg_stroke = Stroke::new(1.0, t.button_border);
+    w.active.bg_fill = t.pressed;
+    w.active.weak_bg_fill = t.pressed;
+    w.active.fg_stroke = Stroke::new(1.0, t.text_dim);
+    w.open.bg_stroke = Stroke::new(1.0, t.button_border);
     ctx.set_visuals(v);
     ctx.global_style_mut(|s| {
         s.spacing.item_spacing = egui::vec2(8.0, 8.0);
-        s.spacing.button_padding = egui::vec2(12.0, 5.0);
-        s.spacing.interact_size = egui::vec2(32.0, 30.0);
+        s.spacing.button_padding = egui::vec2(12.0, 6.0);
+        s.spacing.interact_size = egui::vec2(32.0, 32.0);
+        // Barre di scorrimento sottili che si allargano sotto il puntatore, come in Windows 11.
+        s.spacing.scroll = egui::style::ScrollStyle::floating();
         s.spacing.icon_width = 16.0;
         s.spacing.icon_width_inner = 9.0;
         s.spacing.icon_spacing = 8.0;
@@ -320,6 +347,8 @@ mod tests {
                 t.pressed,
                 t.selection,
                 t.button,
+                t.field,
+                t.field_hover,
             ];
             for bg in all {
                 for (name, fg) in [("text", t.text), ("text_strong", t.text_strong)] {
@@ -330,7 +359,16 @@ mod tests {
                     );
                 }
             }
-            let main = [t.app_bar, t.panel, t.panel_darker, t.input, t.hover, t.button];
+            let main = [
+                t.app_bar,
+                t.panel,
+                t.panel_darker,
+                t.input,
+                t.hover,
+                t.button,
+                t.field,
+                t.field_hover,
+            ];
             for bg in main {
                 for (name, fg, min) in [
                     ("text_dim", t.text_dim, 4.5),
@@ -356,6 +394,14 @@ mod tests {
                 "accent_text (scuro: {})",
                 t.dark
             );
+            // Il bordo inferiore dice dov'è il campo (WCAG 1.4.11: 3:1 per i componenti).
+            for bg in [t.panel, t.field, t.field_hover] {
+                assert!(
+                    contrast(t.field_bottom, bg) >= 3.0,
+                    "field_bottom su {bg:?} (scuro: {})",
+                    t.dark
+                );
+            }
             // I bordi dei campi si vedono sul pannello (WCAG 1.4.11: 3:1 per i componenti).
             assert!(
                 contrast(t.input_border, t.panel) >= 2.0,

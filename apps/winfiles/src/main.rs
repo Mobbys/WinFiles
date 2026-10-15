@@ -12,6 +12,7 @@ mod dock;
 mod document;
 mod export;
 mod filter;
+mod fluent;
 mod icons;
 mod measure;
 mod paint;

@@ -683,7 +683,7 @@ impl WinFilesApp {
                             ui.separator();
                             for choice in ThemeChoice::ALL {
                                 let label = format!("Tema: {}", choice.label().to_lowercase());
-                                if ui.radio(self.theme == choice, label).clicked() {
+                                if crate::fluent::radio(ui, self.theme == choice, label).clicked() {
                                     self.theme = choice;
                                     ui.close();
                                 }
@@ -694,7 +694,7 @@ impl WinFilesApp {
                                     Unit::Mm => "Misure in millimetri",
                                     Unit::Cm => "Misure in centimetri",
                                 };
-                                if ui.radio(self.project.unit == unit, label).clicked() {
+                                if crate::fluent::radio(ui, self.project.unit == unit, label).clicked() {
                                     self.project.unit = unit;
                                     ui.close();
                                 }
@@ -703,7 +703,10 @@ impl WinFilesApp {
                         ui.menu_button("Finestra", |ui| {
                             for panel in PanelId::TOOLS {
                                 if ui
-                                    .checkbox(&mut self.dock.contains(&panel), panel.label())
+                                    .add(crate::fluent::checkbox(
+                                        &mut self.dock.contains(&panel),
+                                        panel.label(),
+                                    ))
                                     .clicked()
                                 {
                                     self.toggle_panel(panel);
@@ -949,6 +952,7 @@ impl WinFilesApp {
         bar.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             let percent = self.shown_zoom / POINTS_PER_MM * 100.0;
             egui::ComboBox::from_id_salt("zoom")
+                .icon(crate::fluent::combo_icon)
                 .selected_text(if self.zoom.is_none() {
                     format!("Adatta ({percent:.0}%)")
                 } else {
@@ -1280,7 +1284,7 @@ pub(crate) fn scale_stepper(ui: &mut egui::Ui, scale: &mut u32, shown: Option<u3
     }
     let mut auto = *scale == 0;
     if ui
-        .checkbox(&mut auto, "Auto")
+        .add(crate::fluent::checkbox(&mut auto, "Auto"))
         .on_hover_text("Il file più grande largo un terzo del foglio")
         .changed()
     {
@@ -1291,16 +1295,19 @@ pub(crate) fn scale_stepper(ui: &mut egui::Ui, scale: &mut u32, shown: Option<u3
 /// Un campo con − e + ai lati e `text` al centro; dice di quanto cambiare (−1, 0 o +1).
 fn stepper_with(ui: &mut egui::Ui, id: &str, text: &str, can_dec: bool, can_inc: bool) -> i32 {
     let t = Tokens::get(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(vec2(96.0, 30.0), Sense::hover());
-    ui.painter().rect_filled(rect, t.radius, t.input);
-    ui.painter().rect_stroke(
+    // Come il campo numerico di Windows 11: fondo e bordi dei campi, − e + dentro.
+    let (rect, _) = ui.allocate_exact_size(vec2(100.0, crate::fluent::HEIGHT), Sense::hover());
+    ui.painter().rect(
         rect,
-        t.radius,
-        Stroke::new(1.0, t.input_border),
+        crate::fluent::RADIUS,
+        t.field,
+        Stroke::new(1.0, t.field_border),
         egui::StrokeKind::Inside,
     );
-    let minus = Rect::from_min_size(rect.min, vec2(30.0, 30.0));
-    let plus = Rect::from_min_size(egui::pos2(rect.right() - 30.0, rect.top()), vec2(30.0, 30.0));
+    crate::fluent::field_edge(ui, rect, false);
+    let side = vec2(30.0, rect.height());
+    let minus = Rect::from_min_size(rect.min, side);
+    let plus = Rect::from_min_size(egui::pos2(rect.right() - side.x, rect.top()), side);
     let mut out = 0;
     for (r, icon, enabled, delta) in [(minus, "minus", can_dec, -1), (plus, "plus", can_inc, 1)] {
         let resp = ui.interact(
@@ -1309,7 +1316,7 @@ fn stepper_with(ui: &mut egui::Ui, id: &str, text: &str, can_dec: bool, can_inc:
             if enabled { Sense::click() } else { Sense::hover() },
         );
         if enabled && resp.hovered() {
-            ui.painter().rect_filled(r.shrink(2.0), t.radius, t.hover);
+            ui.painter().rect_filled(r.shrink(3.0), 3.0, t.field_hover);
         }
         let tint = if enabled { t.icon } else { t.text_disabled };
         icons::paint(
@@ -1332,7 +1339,8 @@ fn stepper_with(ui: &mut egui::Ui, id: &str, text: &str, can_dec: bool, can_inc:
     out
 }
 
-/// Pulsanti uniti a scelta singola: la scelta attiva è evidenziata in blu tenue.
+/// Pulsanti uniti a scelta singola: la scelta attiva è evidenziata in blu tenue, con la piccola
+/// barra d'accento sotto come le schede di Windows 11.
 pub(crate) fn segmented<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
     id: &str,
@@ -1352,12 +1360,12 @@ pub(crate) fn segmented<T: PartialEq + Copy>(
         })
         .collect();
     let total: f32 = widths.iter().sum::<f32>() + 4.0;
-    let (rect, _) = ui.allocate_exact_size(vec2(total, 30.0), Sense::hover());
-    ui.painter().rect_filled(rect, t.radius + 2, t.input);
-    ui.painter().rect_stroke(
+    let (rect, _) = ui.allocate_exact_size(vec2(total, crate::fluent::HEIGHT), Sense::hover());
+    ui.painter().rect(
         rect,
         t.radius + 2,
-        Stroke::new(1.0, t.input_border),
+        t.field,
+        Stroke::new(1.0, t.field_border),
         egui::StrokeKind::Inside,
     );
     let mut x = rect.left() + 2.0;
@@ -1367,8 +1375,13 @@ pub(crate) fn segmented<T: PartialEq + Copy>(
         let on = *value == *option;
         if on {
             ui.painter().rect_filled(r, t.radius, t.selection);
+            let bar = Rect::from_center_size(
+                egui::pos2(r.center().x, r.bottom() - 2.5),
+                vec2(16.0_f32.min(r.width() - 8.0), 3.0),
+            );
+            ui.painter().rect_filled(bar, 1.5, t.accent);
         } else if resp.hovered() {
-            ui.painter().rect_filled(r, t.radius, t.hover);
+            ui.painter().rect_filled(r, t.radius, t.field_hover);
         }
         let (color, f) = if on {
             (t.accent_text, semibold(13.0))
