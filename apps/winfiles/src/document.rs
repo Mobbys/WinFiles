@@ -109,6 +109,7 @@ impl WinFilesApp {
         self.unselect();
         self.sheet = 0;
         self.renaming = None;
+        self.filter = Default::default();
         self.saved = project.clone();
         self.project = project;
         self.path = path;

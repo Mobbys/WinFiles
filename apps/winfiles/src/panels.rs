@@ -15,7 +15,8 @@ use crate::thumbs::ThumbState;
 const ROW: f32 = 38.0;
 
 enum Row<'a> {
-    Folder(&'a Path, String, Totals, PrintState),
+    /// Una cartella con i totali, lo stato di stampa e i file che l'elenco mostra.
+    Folder(&'a Path, String, Totals, PrintState, Vec<usize>),
     File(usize),
 }
 
@@ -243,16 +244,16 @@ fn section(ui: &mut egui::Ui, title: &str) {
 enum FileAction {
     /// Toglie dall'elenco i file scelti.
     RemoveMarked,
-    /// Toglie dall'elenco tutti i file di una cartella.
-    RemoveFolder(std::path::PathBuf),
+    /// Toglie dall'elenco i file di una cartella che l'elenco mostra.
+    RemoveSet(std::collections::BTreeSet<usize>),
     Open(std::path::PathBuf),
     Reveal(std::path::PathBuf),
     /// Mette in stampa (o ne toglie) i file scelti.
     PrintMarked(bool),
     /// Mette in stampa (o ne toglie) un file solo, dalla sua casella.
     PrintFile(usize, bool),
-    /// Mette in stampa (o ne toglie) tutti i file di una cartella.
-    PrintFolder(std::path::PathBuf, bool),
+    /// Mette in stampa (o ne toglie) i file di una cartella che l'elenco mostra.
+    PrintSet(std::collections::BTreeSet<usize>, bool),
 }
 
 /// Cosa fare dell'intestazione di una cartella nell'elenco.
@@ -264,44 +265,130 @@ enum Rename {
 }
 
 impl WinFilesApp {
+    /// In cima all'elenco: il campo di ricerca (Ctrl+F, Esc lo svuota) e i tipi da mostrare.
+    fn search_bar(&mut self, ui: &mut egui::Ui) {
+        let t = Tokens::get(ui.ctx());
+        let edit = egui::TextEdit::singleline(&mut self.filter.text)
+            .hint_text("Cerca per nome o cartella")
+            .margin(egui::Margin {
+                left: 28,
+                right: 26,
+                top: 5,
+                bottom: 5,
+            })
+            .desired_width(f32::INFINITY);
+        let resp = ui.add(edit).on_hover_text("Ctrl+F. Esc svuota la ricerca.");
+        if std::mem::take(&mut self.focus_search) {
+            resp.request_focus();
+        }
+        let icon = Rect::from_center_size(resp.rect.left_center() + vec2(15.0, 0.0), Vec2::splat(14.0));
+        icons::paint(ui, "search", icon, t.text_dim);
+        if !self.filter.text.is_empty() {
+            let x = Rect::from_center_size(resp.rect.right_center() - vec2(14.0, 0.0), Vec2::splat(18.0));
+            let clear = ui
+                .interact(x, ui.id().with("svuota-ricerca"), Sense::click())
+                .on_hover_text("Svuota la ricerca");
+            if clear.hovered() {
+                ui.painter().rect_filled(x, 3.0, t.hover);
+            }
+            icons::paint(ui, "x", x.shrink(3.0), t.text_dim);
+            // Esc toglie il fuoco al campo prima che lo si veda qui: conta anche il fuoco appena perso.
+            let esc =
+                (resp.has_focus() || resp.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if clear.clicked() || esc {
+                self.filter.text.clear();
+            }
+        }
+        // I tipi, solo se il lavoro ne ha più di uno.
+        let present: Vec<_> = crate::filter::KINDS
+            .iter()
+            .filter(|(k, _)| self.project.files.iter().any(|f| f.kind == *k))
+            .collect();
+        if present.len() > 1 {
+            ui.add_space(2.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                if ui
+                    .add(egui::Button::selectable(self.filter.kinds.is_empty(), "Tutti"))
+                    .clicked()
+                {
+                    self.filter.kinds.clear();
+                }
+                for (kind, label) in present {
+                    let on = self.filter.kinds.contains(kind);
+                    if ui
+                        .add(egui::Button::selectable(on, *label))
+                        .on_hover_text("Clic per mostrare anche questo tipo; \"Tutti\" toglie il filtro")
+                        .clicked()
+                    {
+                        self.filter.toggle(*kind);
+                    }
+                }
+            });
+        }
+        ui.add_space(4.0);
+    }
+
     pub(crate) fn files_panel(&mut self, ui: &mut egui::Ui) {
         let t = Tokens::get(ui.ctx());
         if self.project.files.is_empty() {
             dim_label(ui, "Nessun file. Trascina file o cartelle nella finestra.");
             return;
         }
-        let totals = self.project.folder_totals();
-        let labels = self.project.folder_labels();
-        let mut rows = Vec::with_capacity(self.project.files.len() + totals.len());
-        let mut last: Option<&Path> = None;
-        for (i, f) in self.project.files.iter().enumerate() {
-            let folder = f.folder();
-            if last != Some(folder) {
-                let label = self
-                    .project
-                    .folder_titles
-                    .get(folder)
-                    .map(|t| t.trim())
-                    .filter(|t| !t.is_empty())
-                    .map(str::to_string)
-                    .or_else(|| labels.get(folder).cloned())
-                    .unwrap_or_else(|| folder_name(folder));
-                let state = group_state(
-                    self.project
-                        .files
-                        .iter()
-                        .filter(|g| g.folder() == folder)
-                        .map(FileEntry::print_state),
-                );
-                rows.push(Row::Folder(
-                    folder,
-                    label,
-                    totals.get(folder).copied().unwrap_or_default(),
-                    state,
-                ));
-                last = Some(folder);
+        self.search_bar(ui);
+        let filter = &self.filter;
+        let files = &self.project.files;
+        let visible: Vec<usize> = files
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| filter.matches(f))
+            .map(|(i, _)| i)
+            .collect();
+        if filter.is_active() {
+            // Canc e Spazio non devono toccare file che l'elenco non mostra.
+            self.marked.retain(|i| visible.binary_search(i).is_ok());
+            ui.horizontal(|ui| {
+                dim_label(ui, &format!("{} di {} file", visible.len(), files.len()));
+                if ui.small_button("Mostra tutti").clicked() {
+                    self.filter = Default::default();
+                }
+            });
+            if visible.is_empty() {
+                dim_label(ui, "Nessun file corrisponde alla ricerca.");
+                return;
             }
-            rows.push(Row::File(i));
+        }
+        let files = &self.project.files;
+        // I file visibili raggruppati per cartella, nell'ordine del lavoro.
+        let mut groups: Vec<(&Path, Vec<usize>)> = Vec::new();
+        for &i in &visible {
+            let Some(folder) = files.get(i).map(FileEntry::folder) else {
+                continue;
+            };
+            match groups.last_mut() {
+                Some((last, list)) if *last == folder => list.push(i),
+                _ => groups.push((folder, vec![i])),
+            }
+        }
+        let labels = self.project.folder_labels();
+        let mut rows = Vec::with_capacity(visible.len() + groups.len());
+        for (folder, list) in groups {
+            let label = self
+                .project
+                .folder_titles
+                .get(folder)
+                .map(|t| t.trim())
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+                .or_else(|| labels.get(folder).cloned())
+                .unwrap_or_else(|| folder_name(folder));
+            let members = || list.iter().filter_map(|i| files.get(*i));
+            let totals = Totals::of(members());
+            let state = group_state(members().map(FileEntry::print_state));
+            rows.extend(
+                std::iter::once(Row::Folder(folder, label, totals, state, list.clone()))
+                    .chain(list.iter().map(|i| Row::File(*i))),
+            );
         }
         let unit = self.project.unit;
         let mut clicked = None;
@@ -317,7 +404,7 @@ impl WinFilesApp {
                     let (rect, resp) =
                         ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
                     match row {
-                        Row::Folder(path, label, tot, state) => {
+                        Row::Folder(path, label, tot, state, members) => {
                             ui.painter()
                                 .rect_filled(rect.shrink2(vec2(0.0, 1.0)), t.radius, t.panel_darker);
                             let check = check_rect(rect);
@@ -330,8 +417,8 @@ impl WinFilesApp {
                                 .on_hover_text("In stampa: togli o rimetti tutta la cartella");
                             paint_print_check(ui, check, *state, check_resp.hovered());
                             if check_resp.clicked() {
-                                action = Some(FileAction::PrintFolder(
-                                    path.to_path_buf(),
+                                action = Some(FileAction::PrintSet(
+                                    members.iter().copied().collect(),
                                     *state != PrintState::All,
                                 ));
                             }
@@ -425,7 +512,8 @@ impl WinFilesApp {
                                         "Togli dalla stampa tutta la cartella"
                                     };
                                     if ui.button(text).clicked() {
-                                        action = Some(FileAction::PrintFolder(path.to_path_buf(), on));
+                                        action =
+                                            Some(FileAction::PrintSet(members.iter().copied().collect(), on));
                                         ui.close();
                                     }
                                     if ui.button("Mostra la cartella").clicked() {
@@ -435,11 +523,12 @@ impl WinFilesApp {
                                     if ui
                                         .button(format!(
                                             "Togli dall'elenco i {} file della cartella",
-                                            tot.files
+                                            members.len()
                                         ))
                                         .clicked()
                                     {
-                                        action = Some(FileAction::RemoveFolder(path.to_path_buf()));
+                                        action =
+                                            Some(FileAction::RemoveSet(members.iter().copied().collect()));
                                         ui.close();
                                     }
                                 });
@@ -609,17 +698,7 @@ impl WinFilesApp {
                 let marked = std::mem::take(&mut self.marked);
                 self.remove_files(&marked);
             }
-            Some(FileAction::RemoveFolder(folder)) => {
-                let set = self
-                    .project
-                    .files
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, f)| f.folder() == folder)
-                    .map(|(i, _)| i)
-                    .collect();
-                self.remove_files(&set);
-            }
+            Some(FileAction::RemoveSet(set)) => self.remove_files(&set),
             Some(FileAction::PrintMarked(on)) => {
                 let marked = self.marked.clone();
                 self.set_printed(&marked, on);
@@ -633,17 +712,7 @@ impl WinFilesApp {
                 };
                 self.set_printed(&set, on);
             }
-            Some(FileAction::PrintFolder(folder, on)) => {
-                let set = self
-                    .project
-                    .files
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, f)| f.folder() == folder)
-                    .map(|(i, _)| i)
-                    .collect();
-                self.set_printed(&set, on);
-            }
+            Some(FileAction::PrintSet(set, on)) => self.set_printed(&set, on),
             Some(FileAction::Open(path)) => {
                 if let Err(e) = crate::shell::open(&path) {
                     self.status = format!("Non riesco ad aprire {}: {e}", path.display());

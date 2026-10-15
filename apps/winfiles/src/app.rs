@@ -49,6 +49,10 @@ pub struct WinFilesApp {
     slots: Vec<Slot>,
     /// Cartella di cui si sta rinominando l'intestazione nell'elenco, con il testo in modifica.
     pub(crate) renaming: Option<(PathBuf, String)>,
+    /// Cosa mostra l'elenco dei file: cerca per nome e filtra per tipo.
+    pub(crate) filter: crate::filter::FileFilter,
+    /// Ctrl+F: il campo di ricerca prende il fuoco al prossimo disegno.
+    pub(crate) focus_search: bool,
     pub(crate) status: String,
     /// I lavori aperti di recente, il più recente per primo.
     pub(crate) recent: Vec<PathBuf>,
@@ -134,6 +138,8 @@ impl WinFilesApp {
             thumbs: Thumbnails::start(move || wake2.request_repaint()),
             slots: Vec::new(),
             renaming: None,
+            filter: Default::default(),
+            focus_search: false,
             status: String::new(),
             scans: Vec::new(),
             export: None,
@@ -388,7 +394,7 @@ impl WinFilesApp {
         self.anchor = None;
     }
 
-    /// Ctrl+N, Ctrl+O, Ctrl+S e Ctrl+Maiusc+S, come in ogni programma.
+    /// Ctrl+N, Ctrl+O, Ctrl+S e Ctrl+Maiusc+S, come in ogni programma; Ctrl+F cerca nell'elenco.
     fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};
         let pressed = |mods, key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(mods, key)));
@@ -404,6 +410,8 @@ impl WinFilesApp {
             self.guard(ctx, Then::Open(None));
         } else if pressed(Modifiers::COMMAND, Key::N) {
             self.guard(ctx, Then::New);
+        } else if pressed(Modifiers::COMMAND, Key::F) {
+            self.focus_search = true;
         }
     }
 

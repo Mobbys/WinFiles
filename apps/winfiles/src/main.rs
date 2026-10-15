@@ -11,6 +11,7 @@ mod captions;
 mod dock;
 mod document;
 mod export;
+mod filter;
 mod icons;
 mod measure;
 mod paint;
