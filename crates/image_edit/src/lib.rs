@@ -21,6 +21,36 @@ mod tests;
 
 pub use save::{Format, SaveOptions};
 
+/// Le estensioni dei file che si aprono, per la finestra di sistema.
+pub fn extensions() -> Vec<&'static str> {
+    const IMAGES: [&str; 11] = [
+        "jpg", "jpeg", "png", "tif", "tiff", "bmp", "gif", "webp", "heic", "heif", "hif",
+    ];
+    IMAGES
+        .into_iter()
+        .chain(winfiles_photo::PSD_EXTENSIONS.iter().copied())
+        .chain(winfiles_photo::RAW_EXTENSIONS.iter().copied())
+        .collect()
+}
+
+/// Il formato in cui si propone di salvare un file aperto: il suo, se si sa scrivere; i file di
+/// Photoshop in TIFF (senza perdite, come l'originale); tutto il resto, RAW compresi, in JPEG.
+pub fn default_format(path: &Path) -> Format {
+    let name = path.to_string_lossy();
+    if let Some(format) = Format::from_extension(&name) {
+        return format;
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if winfiles_photo::PSD_EXTENSIONS
+        .iter()
+        .any(|e| e.eq_ignore_ascii_case(ext))
+    {
+        Format::Tiff
+    } else {
+        Format::Jpeg
+    }
+}
+
 /// Pixel massimi di un'immagine aperta o creata da un ridimensionamento: a 4 byte l'uno sono
 /// 1 GiB di memoria.
 pub const MAX_PIXELS: u64 = 268_000_000;
@@ -44,6 +74,8 @@ pub enum ImageEditError {
     Decode(#[from] image::ImageError),
     #[error("foto HEIC non leggibile")]
     Heif,
+    #[error("{0}")]
+    Photo(#[from] winfiles_photo::PhotoError),
     #[error("il file è troppo grande ({0} byte)")]
     TooLarge(u64),
     #[error("immagine troppo grande: {0} pixel")]
@@ -150,6 +182,10 @@ pub struct Picture {
     icc: Option<Vec<u8>>,
     color: ColorMode,
     bits: u8,
+    /// Da dove vengono i pixel, quando non è ovvio: "RAW NEF sviluppato, NIKON D3S".
+    origin: Option<String>,
+    /// Il nome del profilo ICC, letto una volta all'apertura.
+    icc_name: Option<String>,
 }
 
 impl Picture {
@@ -174,6 +210,16 @@ impl Picture {
     }
 
     /// Bit per canale del file di partenza (8 o 16).
+    /// Il nome del profilo colore incorporato, se ne ha uno.
+    pub fn icc_name(&self) -> Option<&str> {
+        self.icc_name.as_deref()
+    }
+
+    /// Da dove vengono i pixel, per le foto RAW e i file di Photoshop.
+    pub fn origin(&self) -> Option<&str> {
+        self.origin.as_deref()
+    }
+
     pub fn bits(&self) -> u8 {
         self.bits
     }
@@ -439,7 +485,8 @@ pub fn dpi_for_mm(px: u32, mm: f64) -> Option<f64> {
     (mm > 0.0 && px > 0).then(|| f64::from(px) * 25.4 / mm)
 }
 
-/// Legge il file: immagini con `image`, foto HEIC con il lettore di PhotoCraft. L'orientamento
+/// Legge il file: immagini con `image`, foto HEIC, RAW e file di Photoshop con i lettori di
+/// PhotoCraft (gli ultimi due tramite `winfiles-photo`). L'orientamento
 /// EXIF si applica subito, così quello che si vede è quello che è.
 fn load(path: &Path) -> Result<Picture, ImageEditError> {
     let data = std::fs::read(path)?;
@@ -448,6 +495,10 @@ fn load(path: &Path) -> Result<Picture, ImageEditError> {
             return Err(ImageEditError::TooLarge(data.len() as u64));
         }
         return heif(&data);
+    }
+    // Prima dei TIFF: un RAW comincia come un TIFF, ma il TIFF che si vedrebbe è la miniatura.
+    if winfiles_photo::sniff(&data).is_some() {
+        return photo(&data, path);
     }
     let reader = ImageReader::new(std::io::Cursor::new(&data)).with_guessed_format()?;
     let mut limits = Limits::default();
@@ -474,7 +525,38 @@ fn load(path: &Path) -> Result<Picture, ImageEditError> {
         bits: bits_per_channel(&image),
         image: Arc::new(image),
         dpi,
+        icc_name: icc.as_deref().and_then(winfiles_photo::icc_name),
         icc,
+        origin: None,
+    })
+}
+
+/// Una foto RAW (sviluppata) o un file di Photoshop (l'immagine unita).
+fn photo(data: &[u8], path: &Path) -> Result<Picture, ImageEditError> {
+    let photo = winfiles_photo::decode(data, winfiles_photo::Quality::Full)?;
+    check_size(photo.image.width(), photo.image.height())?;
+    let alpha = photo.image.color().has_alpha();
+    let color = match photo.mode {
+        winfiles_photo::Mode::Gray if alpha => ColorMode::GrayAlpha,
+        winfiles_photo::Mode::Gray => ColorMode::Gray,
+        winfiles_photo::Mode::Cmyk => ColorMode::Cmyk,
+        winfiles_photo::Mode::Indexed => ColorMode::Indexed,
+        winfiles_photo::Mode::Rgb if alpha => ColorMode::Rgba,
+        winfiles_photo::Mode::Rgb => ColorMode::Rgb,
+    };
+    // La risoluzione: quella del PSD, o per i RAW quella in testa al file (come le misure).
+    let dpi = photo
+        .dpi
+        .filter(|d| (MIN_DPI..=MAX_DPI).contains(d))
+        .unwrap_or_else(|| file_dpi(path));
+    Ok(Picture {
+        color,
+        bits: bits_per_channel(&photo.image),
+        image: Arc::new(photo.image),
+        dpi,
+        icc_name: photo.icc.as_deref().and_then(winfiles_photo::icc_name),
+        icc: photo.icc,
+        origin: Some(photo.origin),
     })
 }
 
@@ -573,5 +655,7 @@ fn heif(data: &[u8]) -> Result<Picture, ImageEditError> {
         image: Arc::new(image),
         dpi: DEFAULT_DPI,
         icc: None,
+        origin: None,
+        icc_name: None,
     })
 }

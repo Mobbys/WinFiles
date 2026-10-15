@@ -50,5 +50,5 @@ rifare i pixel — in modo che spesso non fa nulla.
   e la qualità del JPEG, apre le foto HEIC.
 - Una dipendenza in più, `tiff` (MIT), che era già nell'albero sotto `image`.
 - Si salva sempre in RGB o in grigio: un JPEG CMYK si legge (convertito) ma non si riscrive in
-  CMYK, e il modo di partenza si dice nei dati. Il CMYK, i RAW e i PSD restano per quando
-  entrerà PhotoCraft.
+  CMYK, e il modo di partenza si dice nei dati. Il CMYK in uscita resta per quando servirà;
+  i RAW e i PSD si aprono con PhotoCraft (ADR 0017).

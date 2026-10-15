@@ -12,13 +12,16 @@ use winfiles_model::{FileKind, ImageInfo, PageInfo};
 mod eps;
 mod heif;
 mod pdf;
+mod psd;
 mod raster;
+mod raw;
 mod source;
 mod tiff;
 
 #[cfg(test)]
 mod tests;
 
+pub use raw::is_raw_path;
 pub use source::Source;
 
 /// Risoluzione usata quando un'immagine non la dichiara (la stessa della versione 4.9).
@@ -55,12 +58,25 @@ pub struct Probe {
 /// sull'estensione: un `.ai` salvato con compatibilità PDF si legge come PDF.
 pub fn probe(path: &Path, kind: FileKind) -> Result<Probe, ProbeError> {
     let mut src = source::FileSource::open(path)?;
+    // I NEF, gli ARW, i DNG… hanno l'intestazione di un TIFF qualsiasi: li distingue il nome.
+    if is_raw_path(path) {
+        let head = src.read_prefix(16)?;
+        if tiff::sniff(&head) || raw::sniff(&head) {
+            return raw::probe(&mut src);
+        }
+    }
     probe_source(&mut src, kind)
 }
 
 /// Come [`probe`], su una sorgente qualsiasi (per esempio dati in memoria).
 pub fn probe_source(src: &mut dyn Source, kind: FileKind) -> Result<Probe, ProbeError> {
     let head = src.read_prefix(1024)?;
+    if raw::sniff(&head) {
+        return raw::probe(src);
+    }
+    if psd::sniff(&head) {
+        return psd::probe(src);
+    }
     if raster::sniff(&head) {
         return raster::probe(src);
     }

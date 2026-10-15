@@ -7,6 +7,7 @@ mod dialogs;
 mod render;
 
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 
 use egui::{Align, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use winfiles_geom::{Size, Unit, format_area, format_number, format_size};
@@ -130,7 +131,23 @@ pub struct ImagesModule {
     shown_zoom: f32,
     /// L'unità scelta nell'app (mm o cm): la usano i campi e i dati.
     unit: Unit,
+    /// Le immagini si aprono in un thread a parte (sviluppare un RAW richiede un paio di
+    /// secondi): arrivano da qui, una alla volta.
+    loading: Loading,
     pub quit_confirmed: bool,
+}
+
+/// Le aperture in corso.
+struct Loading {
+    tx: mpsc::Sender<(PathBuf, Result<Editor, String>)>,
+    rx: mpsc::Receiver<(PathBuf, Result<Editor, String>)>,
+    wake: egui::Context,
+    /// File chiesti e non ancora arrivati.
+    pending: usize,
+    /// Della richiesta in corso: quante aperte, quali no, e se la prima è già stata mostrata.
+    opened: usize,
+    failed: Vec<String>,
+    shown: bool,
 }
 
 impl ImagesModule {
@@ -150,6 +167,18 @@ impl ImagesModule {
             zoom: None,
             shown_zoom: 1.0,
             unit: Unit::Mm,
+            loading: {
+                let (tx, rx) = mpsc::channel();
+                Loading {
+                    tx,
+                    rx,
+                    wake: ctx.clone(),
+                    pending: 0,
+                    opened: 0,
+                    failed: Vec::new(),
+                    shown: false,
+                }
+            },
             quit_confirmed: false,
         }
     }
@@ -179,14 +208,51 @@ impl ImagesModule {
 
     // --- Immagini aperte -------------------------------------------------------------------
 
-    /// Apre le immagini e sceglie la prima.
+    /// Apre le immagini in un thread a parte; arrivano con [`Self::receive`] e si mostra la
+    /// prima appena è pronta.
     pub fn open(&mut self, paths: &[PathBuf]) {
-        let mut opened = 0;
-        let mut failed: Vec<String> = Vec::new();
-        for path in paths {
-            match Editor::open(path) {
+        if paths.is_empty() {
+            return;
+        }
+        let l = &mut self.loading;
+        if l.pending == 0 {
+            l.opened = 0;
+            l.failed.clear();
+            l.shown = false;
+        }
+        l.pending += paths.len();
+        self.status = match paths {
+            [one] => format!("Apertura di {}…", file_name(one)),
+            many => format!("Apertura di {} immagini…", many.len()),
+        };
+        let tx = l.tx.clone();
+        let wake = l.wake.clone();
+        let paths = paths.to_vec();
+        let spawned = std::thread::Builder::new()
+            .name("apri-immagini".into())
+            .spawn(move || {
+                for path in paths {
+                    let result = Editor::open(&path).map_err(|e| e.to_string());
+                    if tx.send((path, result)).is_err() {
+                        return;
+                    }
+                    wake.request_repaint();
+                }
+            });
+        if let Err(e) = spawned {
+            self.loading.pending = 0;
+            self.status = format!("Impossibile aprire le immagini: {e}");
+        }
+    }
+
+    /// Le immagini aperte dal thread: si aggiungono all'elenco, la prima si mostra subito.
+    fn receive(&mut self) {
+        while let Ok((path, result)) = self.loading.rx.try_recv() {
+            let l = &mut self.loading;
+            l.pending = l.pending.saturating_sub(1);
+            match result {
                 Ok(editor) => {
-                    let format = Format::from_extension(&editor.file_name()).unwrap_or(Format::Jpeg);
+                    let format = winfiles_image_edit::default_format(editor.path());
                     self.docs.push(Doc {
                         editor,
                         generation: 0,
@@ -196,25 +262,30 @@ impl ImagesModule {
                             ..SaveOptions::default()
                         },
                     });
-                    opened += 1;
+                    l.opened += 1;
+                    if !l.shown {
+                        l.shown = true;
+                        self.current = self.docs.len() - 1;
+                        self.crop = None;
+                        self.fields.owner = None;
+                    }
                 }
-                Err(e) => failed.push(format!("{}: {e}", file_name(path))),
+                Err(e) => l.failed.push(format!("{}: {e}", file_name(&path))),
             }
-        }
-        if opened > 0 {
-            self.current = self.docs.len() - opened;
-            self.crop = None;
-            self.fields.owner = None;
-            self.status = match opened {
-                1 => format!("Aperta {}", self.name_of(self.current)),
-                n => format!("Aperte {n} immagini"),
-            };
-        }
-        if let Some(first) = failed.first() {
-            self.status = if failed.len() > 1 {
-                format!("{first} (e altre {} non aperte)", failed.len() - 1)
+            let l = &self.loading;
+            self.status = if l.pending > 0 {
+                format!("Apertura… ne mancano {}", l.pending)
+            } else if let Some(first) = l.failed.first() {
+                if l.failed.len() > 1 {
+                    format!("{first} (e altre {} non aperte)", l.failed.len() - 1)
+                } else {
+                    first.clone()
+                }
             } else {
-                first.clone()
+                match l.opened {
+                    1 => format!("Aperta {}", self.name_of(self.current)),
+                    n => format!("Aperte {n} immagini"),
+                }
             };
         }
     }
@@ -734,6 +805,7 @@ impl ImagesModule {
 
     pub fn body(&mut self, ui: &mut egui::Ui, unit: Unit) {
         self.unit = unit;
+        self.receive();
         self.renderer.receive(ui.ctx());
         let full = ui.max_rect();
         if self.docs.is_empty() {
@@ -763,6 +835,18 @@ impl ImagesModule {
             Rect::from_center_size(c - vec2(0.0, 64.0), Vec2::splat(48.0)),
             t.text_dim,
         );
+        if self.loading.pending > 0 {
+            let spinner = Rect::from_center_size(c + vec2(0.0, 6.0), Vec2::splat(28.0));
+            ui.put(spinner, egui::Spinner::new().size(28.0).color(t.primary));
+            ui.painter().text(
+                c + vec2(0.0, 44.0),
+                egui::Align2::CENTER_CENTER,
+                &self.status,
+                egui::FontId::proportional(13.5),
+                t.text_dim,
+            );
+            return;
+        }
         let p = ui.painter();
         p.text(
             c - vec2(0.0, 16.0),
@@ -774,7 +858,7 @@ impl ImagesModule {
         p.text(
             c + vec2(0.0, 10.0),
             egui::Align2::CENTER_CENTER,
-            "Foto, scansioni, JPEG, PNG, TIFF e HEIC di iPhone",
+            "JPEG, PNG, TIFF, HEIC di iPhone, foto RAW e file di Photoshop",
             egui::FontId::proportional(13.5),
             t.text_dim,
         );
@@ -930,7 +1014,7 @@ impl ImagesModule {
         let dpi = p.dpi();
         let unit = self.unit;
         let version = d.generation;
-        let icc = p.icc().map(|i| i.len());
+        let icc = p.icc().map(|i| (i.len(), p.icc_name()));
         let rows = [
             (
                 "Pixel",
@@ -944,7 +1028,8 @@ impl ImagesModule {
             (
                 "Profilo",
                 match icc {
-                    Some(bytes) => format!("incorporato ({} kB)", bytes / 1024),
+                    Some((_, Some(name))) => name.to_string(),
+                    Some((bytes, None)) => format!("incorporato ({})", bytes_text(bytes as u64)),
                     None => "nessuno".into(),
                 },
             ),
@@ -963,10 +1048,15 @@ impl ImagesModule {
             .show(ui, |ui| {
                 for (name, value) in rows {
                     ui.label(egui::RichText::new(name).color(t.text_dim));
-                    ui.label(egui::RichText::new(value).color(t.text));
+                    ui.add(egui::Label::new(egui::RichText::new(value).color(t.text)).truncate());
                     ui.end_row();
                 }
             });
+        // Foto RAW e file di Photoshop: da dove vengono i pixel che si vedono.
+        if let Some(origin) = d.editor.original().origin() {
+            ui.add_space(4.0);
+            ui.add(egui::Label::new(egui::RichText::new(origin).size(12.0).color(t.text_dim)).wrap());
+        }
         ui.add_space(12.0);
         ui.label(
             egui::RichText::new("Misura di stampa")
@@ -1115,19 +1205,11 @@ impl ImagesModule {
                 .max_rect(header)
                 .layout(egui::Layout::left_to_right(Align::Center)),
         );
-        bar.label(
-            egui::RichText::new(d.editor.file_name())
-                .font(semibold(14.0))
-                .color(t.text_strong),
-        );
-        bar.label(egui::RichText::new(format_size(p.size_mm(), unit)).color(t.text_dim));
-        if self.crop.is_none() {
-            bar.label(
-                egui::RichText::new("·  trascina per ritagliare")
-                    .size(12.5)
-                    .color(t.text_dim),
-            );
-        }
+        // Prima il menu dello zoom a destra, poi nome e misura nello spazio che resta: un nome
+        // lungo si accorcia con "…" invece di finire sotto il menu.
+        let name = d.editor.file_name();
+        let size = format_size(p.size_mm(), unit);
+        let hint = self.crop.is_none();
         bar.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             egui::ComboBox::from_id_salt("img-zoom")
                 .icon(crate::fluent::combo_icon)
@@ -1152,6 +1234,25 @@ impl ImagesModule {
                         }
                     }
                 });
+            ui.add_space(8.0);
+            ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(name)
+                            .font(semibold(14.0))
+                            .color(t.text_strong),
+                    )
+                    .truncate(),
+                );
+                ui.add(egui::Label::new(egui::RichText::new(size).color(t.text_dim)).truncate());
+                if hint && ui.available_width() > 160.0 {
+                    ui.label(
+                        egui::RichText::new("·  trascina per ritagliare")
+                            .size(12.5)
+                            .color(t.text_dim),
+                    );
+                }
+            });
         });
 
         let board = Rect::from_min_max(
@@ -1483,17 +1584,17 @@ fn field(ui: &mut egui::Ui, value: &mut String, suffix: &str) -> egui::Response 
     resp.unwrap_or_else(|| ui.label(""))
 }
 
-/// I formati che si aprono, per la finestra di sistema.
+/// I formati che si aprono, per la finestra di sistema (in minuscolo e in maiuscolo: su Linux il
+/// filtro distingue).
 fn pick_images() -> Vec<PathBuf> {
+    let mut extensions: Vec<String> = Vec::new();
+    for e in winfiles_image_edit::extensions() {
+        extensions.push(e.to_string());
+        extensions.push(e.to_ascii_uppercase());
+    }
     rfd::FileDialog::new()
         .set_title("Apri immagini")
-        .add_filter(
-            "Immagini",
-            &[
-                "jpg", "jpeg", "png", "tif", "tiff", "bmp", "gif", "webp", "heic", "heif", "JPG", "JPEG",
-                "PNG", "TIF", "TIFF", "HEIC",
-            ],
-        )
+        .add_filter("Immagini, foto RAW e Photoshop", &extensions)
         .pick_files()
         .unwrap_or_default()
 }

@@ -279,3 +279,19 @@ fn ai_in_postscript_rovinati_non_bloccano() {
     let f = Temp::new("rumore.ai", &noise);
     let _ = render(&f.0, FileKind::Ai, 0, 100);
 }
+
+#[test]
+fn psd_and_raw_have_a_thumbnail() {
+    let mut b = photocraft_psd::PsdBuilder::new(400, 200);
+    b.composite(photocraft_psd::PixelData::Rgba8(vec![90; 400 * 200 * 4]));
+    let f = Temp::new("d.psd", &b.to_bytes().unwrap());
+    let t = render(&f.0, FileKind::from_path(&f.0), 0, 100).unwrap();
+    assert_eq!((t.width, t.height), (100, 50));
+
+    // Un DNG senza anteprima: si sviluppa.
+    let spec = photocraft_raw::testgen::DngSpec::cfa(64, 32, vec![20_000; 64 * 32]);
+    let f = Temp::new("e.nef", &spec.build());
+    assert_eq!(FileKind::from_path(&f.0), FileKind::Image);
+    let t = render(&f.0, FileKind::Image, 0, 32).unwrap();
+    assert_eq!((t.width, t.height), (32, 16));
+}

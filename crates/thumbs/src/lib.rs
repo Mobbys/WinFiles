@@ -1,6 +1,6 @@
 //! Miniature (livello L1): un'immagine RGBA piccola per l'anteprima a schermo. Le immagini si
 //! decodificano con `image`, le foto HEIC con il lettore di PhotoCraft, PDF e AI con `hayro`
-//! (prima pagina), gli EPS mostrano l'anteprima TIFF che hanno dentro, se c'è. Gli AI in
+//! (prima pagina), le foto RAW e i file di Photoshop con `winfiles-photo`, gli EPS mostrano l'anteprima TIFF che hanno dentro, se c'è. Gli AI in
 //! PostScript ("legacy") e gli EPS di Illustrator senza anteprima si disegnano traducendo le loro
 //! forme in PDF (`legacy_ai`).
 //!
@@ -29,6 +29,8 @@ const MAX_HEIF_BYTES: u64 = 512 * 1024 * 1024;
 /// Pixel massimi di una foto HEIC: a 16 bit con trasparenza sono 8 byte l'uno, sotto
 /// [`MAX_DECODE_BYTES`].
 const MAX_HEIF_PIXELS: u64 = 120_000_000;
+/// File di Photoshop o foto RAW più grande che si apre per la miniatura.
+const MAX_PHOTO_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Lato massimo di una miniatura.
 pub const MAX_SIDE: u32 = 4096;
 
@@ -38,6 +40,8 @@ pub enum ThumbError {
     Io(#[from] std::io::Error),
     #[error("immagine non leggibile: {0}")]
     Image(#[from] image::ImageError),
+    #[error("{0}")]
+    Photo(#[from] winfiles_photo::PhotoError),
     #[error("{}", heif_text(.0))]
     Heif(photocraft_heif::Error),
     #[error("PDF non leggibile")]
@@ -116,6 +120,19 @@ fn render_inner(path: &Path, kind: FileKind, page: usize, max_side: u32) -> Resu
     if head.starts_with(b"%!") && legacy_ai::is_illustrator(head) {
         let len = file.metadata()?.len();
         return illustrator(&mut file, Some((0, len)), max_side);
+    }
+    // File di Photoshop e foto RAW (che cominciano come un TIFF qualsiasi: li distingue il
+    // nome). Dei RAW basta l'anteprima della fotocamera, che si legge in un attimo.
+    if winfiles_photo::is_psd(head) || (kind == FileKind::Image && winfiles_formats::is_raw_path(path)) {
+        let len = file.metadata()?.len();
+        if len > MAX_PHOTO_BYTES {
+            return Err(ThumbError::TooLarge(len));
+        }
+        file.seek(SeekFrom::Start(0))?;
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)?;
+        let photo = winfiles_photo::decode(&data, winfiles_photo::Quality::Preview)?;
+        return Ok(shrink(photo.image, max_side));
     }
     if is_heif(head) {
         let len = file.metadata()?.len();

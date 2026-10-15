@@ -342,3 +342,96 @@ fn heic_rovinate_danno_errori() {
     tiny.extend([0; 8]);
     assert!(run(&tiny, FileKind::Image).is_err());
 }
+
+/// PSD minimo: intestazione, nessun dato di colore, le risorse date, nient'altro.
+fn psd(version: u16, w: u32, h: u32, resources: &[(u16, &[u8], Vec<u8>)]) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend(b"8BPS");
+    b.extend(version.to_be_bytes());
+    b.extend([0; 6]);
+    b.extend(3u16.to_be_bytes());
+    b.extend(h.to_be_bytes());
+    b.extend(w.to_be_bytes());
+    b.extend(8u16.to_be_bytes());
+    b.extend(3u16.to_be_bytes());
+    b.extend(0u32.to_be_bytes());
+    let mut section = Vec::new();
+    for (id, name, data) in resources {
+        section.extend(b"8BIM");
+        section.extend(id.to_be_bytes());
+        section.push(u8::try_from(name.len()).unwrap());
+        section.extend(*name);
+        if (1 + name.len()) % 2 == 1 {
+            section.push(0);
+        }
+        section.extend(u32::try_from(data.len()).unwrap().to_be_bytes());
+        section.extend(data);
+        if data.len() % 2 == 1 {
+            section.push(0);
+        }
+    }
+    b.extend(u32::try_from(section.len()).unwrap().to_be_bytes());
+    b.extend(section);
+    b
+}
+
+/// La risorsa 1005: risoluzione in 16.16 per pollice.
+fn resolution(dpi: u32) -> Vec<u8> {
+    let mut r = Vec::new();
+    for _ in 0..2 {
+        r.extend((dpi << 16).to_be_bytes());
+        r.extend(1u16.to_be_bytes());
+        r.extend(1u16.to_be_bytes());
+    }
+    r
+}
+
+#[test]
+fn psd_with_resolution_after_other_resources() {
+    // Una risorsa con nome di lunghezza dispari e dati dispari prima: il riempimento conta.
+    let bytes = psd(
+        1,
+        2480,
+        3508,
+        &[(1036, b"abc", vec![1, 2, 3]), (1005, b"", resolution(300))],
+    );
+    let p = run(&bytes, FileKind::Image).unwrap();
+    let i = p.image.unwrap();
+    assert_eq!((i.width_px, i.height_px), (2480, 3508));
+    assert!(i.dpi_from_file && close(i.dpi_x, 300.0));
+    let size = p.pages[0].size;
+    assert!(close(size.w, 209.97) && close(size.h, 297.01), "{size:?}");
+}
+
+#[test]
+fn psb_without_resolution_uses_the_default() {
+    let p = run(&psd(2, 100, 50, &[]), FileKind::Image).unwrap();
+    let i = p.image.unwrap();
+    assert_eq!((i.width_px, i.height_px), (100, 50));
+    assert!(!i.dpi_from_file && close(i.dpi_x, DEFAULT_DPI));
+}
+
+#[test]
+fn damaged_psd_is_an_error_or_has_no_resolution() {
+    let mut bytes = psd(1, 10, 10, &[(1005, b"", resolution(300))]);
+    bytes.truncate(40);
+    let p = run(&bytes, FileKind::Image).unwrap();
+    assert!(!p.image.unwrap().dpi_from_file);
+    assert!(run(&bytes[..20], FileKind::Image).is_err());
+}
+
+#[test]
+fn raw_without_preview_is_measured_from_the_sensor() {
+    let mut spec = photocraft_raw::testgen::DngSpec::cfa(64, 32, vec![1000; 64 * 32]);
+    spec.orientation = 6;
+    let dir = std::env::temp_dir().join(format!("winfiles-formats-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("foto.DNG");
+    std::fs::write(&path, spec.build()).unwrap();
+    assert!(crate::is_raw_path(&path));
+    let p = crate::probe(&path, FileKind::Image).unwrap();
+    let i = p.image.unwrap();
+    // Orientamento 6: si mostra in verticale.
+    assert_eq!((i.width_px, i.height_px), (32, 64));
+    std::fs::remove_dir_all(&dir).unwrap();
+}

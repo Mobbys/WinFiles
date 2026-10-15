@@ -13,7 +13,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 | 5 | Stampa Windows a scala 100%, area stampabile del driver, calibrazione | A4 e A3 esatti su due stampanti | Fatta: stampa diretta ([ADR 0009](adr/0009-stampa-diretta.md)) e calibrazione ([ADR 0010](adr/0010-calibrazione-stampante.md)), A4 e A3 esatti provati da Michel |
 | 6 | CSV, appunti, modelli salvati, HEIC, AI in PostScript | Ogni extra con i suoi criteri | Fatta e provata da Michel: CSV, appunti, sovrastampa, modelli salvati, HEIC, AI in PostScript |
 | 7 | Installer MSI, aggiornamenti, beta in parallelo con WinFile 4.9 | Liste Anteprime 4.9 messa a riposo | Fatta: installer provato da Michel, Liste Anteprime 4.9 non serve più, 0.1.0 pubblicata ([ADR 0014](adr/0014-installer-e-aggiornamenti.md)) |
-| 8 | Modulo Immagini: dati tecnici, calcolo DPI, ruota, specchia, ritaglia, RAW, HEIC | Tutto ciò che fa oggi Controllo Immagini | Fatta: modulo "Modifica immagini" nella finestra ([ADR 0016](adr/0016-modifica-immagini.md)), da provare |
+| 8 | Modulo Immagini: dati tecnici, calcolo DPI, ruota, specchia, ritaglia, RAW, HEIC | Tutto ciò che fa oggi Controllo Immagini | Fatta: modulo "Modifica immagini" nella finestra ([ADR 0016](adr/0016-modifica-immagini.md)), con RAW e PSD ([ADR 0017](adr/0017-raw-e-psd.md)), da provare |
 | 9 | Modulo PDF: unisci, dividi, ruota, elimina, ritaglia, margini, adatta ad A4 o A3 | WinFile 4.9 messo a riposo | Fatta: modulo "Modifica PDF" nella finestra ([ADR 0015](adr/0015-modifica-pdf.md)), da provare |
 
 ## Fase 0 in dettaglio
@@ -104,7 +104,9 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Orientamento EXIF applicato all'apertura, risoluzione letta dal file
 - [x] Salva con formato (JPEG, PNG, TIFF, WebP), qualità del JPEG e profilo colore mantenuto; scrittura atomica
 - [x] Annulla e Ripeti senza copiare i pixel
-- [ ] RAW e PSD (con PhotoCraft) e CMYK: quando serviranno
+- [x] Foto RAW (sviluppate con i colori della fotocamera) e file di Photoshop, anche CMYK, aperti
+  e mostrati tra le miniature ([ADR 0017](adr/0017-raw-e-psd.md))
+- [ ] Salvataggio in CMYK: quando servirà
 - [ ] Provata da Michel su file veri
 
 Dopo la Fase 7 viene la Fase 9 (PDF), poi la 8 (Immagini): l'ordine l'ha scelto Michel il 15 ottobre 2026.

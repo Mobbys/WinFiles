@@ -43,6 +43,8 @@ fn picture(width: u32, height: u32, dpi: f64) -> Picture {
         icc: None,
         color: ColorMode::Rgb,
         bits: 8,
+        origin: None,
+        icc_name: None,
     }
 }
 
@@ -315,6 +317,8 @@ fn il_jpeg_appiattisce_la_trasparenza_sul_bianco() {
         icc: None,
         color: ColorMode::Rgba,
         bits: 8,
+        origin: None,
+        icc_name: None,
     };
     let path = dir.join("alfa.jpg");
     save::write(
@@ -474,4 +478,48 @@ fn il_nome_proposto_dice_cosa_e_cambiato() {
     assert_eq!(ed.file_name(), "foto vacanza.png");
     assert_eq!(Format::from_extension("x.TIFF"), Some(Format::Tiff));
     assert_eq!(Format::from_extension("x.doc"), None);
+}
+
+#[test]
+fn apre_un_raw_sviluppato_e_propone_il_jpeg() {
+    let dir = TempDir::new("raw");
+    let spec = photocraft_raw::testgen::DngSpec::cfa(48, 32, vec![30_000; 48 * 32]);
+    let path = dir.join("scatto.dng");
+    std::fs::write(&path, spec.build()).unwrap();
+    let editor = Editor::open(&path).unwrap();
+    let p = editor.picture();
+    assert_eq!((p.width(), p.height()), (48, 32));
+    assert_eq!(p.bits(), 16);
+    assert!(p.icc().is_some(), "sviluppato in sRGB, con il profilo");
+    assert!(p.origin().unwrap().contains("DNG"));
+    assert_eq!(default_format(&path), Format::Jpeg);
+    // Si salva in JPEG e in TIFF a 16 bit come qualsiasi immagine.
+    let out = dir.join("scatto.tif");
+    let mut editor = editor;
+    editor
+        .save(
+            &out,
+            SaveOptions {
+                format: Format::Tiff,
+                ..SaveOptions::default()
+            },
+        )
+        .unwrap();
+    let back = Editor::open(&out).unwrap();
+    assert_eq!(back.picture().width(), 48);
+}
+
+#[test]
+fn apre_un_psd_con_risoluzione_e_propone_il_tiff() {
+    let dir = TempDir::new("psd");
+    let mut b = photocraft_psd::PsdBuilder::new(30, 20).resolution(150.0);
+    b.composite(photocraft_psd::PixelData::Rgba8(vec![200; 30 * 20 * 4]));
+    let path = dir.join("manifesto.psd");
+    std::fs::write(&path, b.to_bytes().unwrap()).unwrap();
+    let editor = Editor::open(&path).unwrap();
+    let p = editor.picture();
+    assert_eq!((p.width(), p.height()), (30, 20));
+    assert!((p.dpi() - 150.0).abs() < 0.01);
+    assert_eq!(default_format(&path), Format::Tiff);
+    assert!(extensions().contains(&"psd") && extensions().contains(&"nef"));
 }

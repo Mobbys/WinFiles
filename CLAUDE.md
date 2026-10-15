@@ -37,6 +37,7 @@ stampa leggono il suo risultato e non ricalcolano nulla.
 | L1 | `crates/model` | progetto `.winfiles`: file, pagine, note, impostazioni di stampa |
 | L1 | `crates/formats` | misure dei file dalle intestazioni (pixel, DPI, pagine, TrimBox, BoundingBox) |
 | L1 | `crates/thumbs` | miniature per l'anteprima (immagini, prima pagina di PDF/AI, anteprima degli EPS) |
+| L1 | `crates/photo` | foto RAW e file di Photoshop in immagini (PhotoCraft, ADR 0017) |
 | L1 | `crates/scene` | la scena di un foglio in mm: ciò che anteprima, PDF e stampa disegnano |
 | L2 | `crates/layout` | impaginazione in fogli A4/A3 |
 | L2 | `crates/pdf_out` | scene dei fogli in un PDF (krilla), vedi ADR 0008 |

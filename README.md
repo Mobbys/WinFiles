@@ -8,13 +8,14 @@ WinFile 4.9.
 impaginate su A4 o A3 (griglia, elenco o nesting), si scrivono le note, si esporta in PDF e si
 stampa a scala esatta. Le fasi sono in [`docs/roadmap.md`](docs/roadmap.md).
 
-L'app ha due moduli, come le schede della 4.9:
+L'app ha tre moduli, come le schede della 4.9:
 - **Miniature**: l'elenco dei file, l'impaginazione e la stampa.
 - **Modifica PDF**: unisci, dividi, ruota, elimina, duplica, estrai pagine, margini, rifila e
   adatta ad A4 o A3 senza ridisegnare la pagina ([ADR 0015](docs/adr/0015-modifica-pdf.md)).
 - **Modifica immagini**: dati tecnici, misura di stampa e risoluzione, ritaglio con la lente,
   rotazione, specchio, ridimensionamento e salvataggio che tiene il profilo colore
-  ([ADR 0016](docs/adr/0016-modifica-immagini.md)).
+  ([ADR 0016](docs/adr/0016-modifica-immagini.md)). Apre anche le foto RAW delle fotocamere e i
+  file di Photoshop ([ADR 0017](docs/adr/0017-raw-e-psd.md)).
 
 ## Installare
 Nella pagina **Releases** ci sono l'installer `WinFiles-X.Y.Z.msi` (si installa per l'utente, senza
