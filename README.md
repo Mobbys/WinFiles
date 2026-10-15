@@ -21,3 +21,7 @@ l'ultima esecuzione verde di "CI" e si scarica l'artifact `winfiles-windows`, ch
 3. `cargo xtask ci` esegue tutti i controlli che la CI farà sulla PR.
 
 Le regole di sviluppo sono in [`CLAUDE.md`](CLAUDE.md).
+
+## Licenza
+Codice pubblicato da leggere, tutti i diritti riservati: vedi [LICENSE](LICENSE). I programmi dei
+rilasci ufficiali si possono scaricare e usare.
