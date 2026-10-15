@@ -207,30 +207,34 @@ impl WinFilesApp {
             ui.add_space(6.0);
             ui.label("Se non salvi, l'elenco, le note e l'impaginazione cambiati andranno persi.");
             ui.add_space(14.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let save = egui::Button::new(
-                    egui::RichText::new("Salva")
-                        .font(semibold(13.0))
-                        .color(t.on_primary),
-                )
-                .fill(t.primary)
-                .min_size(egui::vec2(90.0, 30.0));
-                if ui.add(save).clicked() {
-                    answer = Some(true);
-                }
-                if ui
-                    .add(egui::Button::new("Non salvare").min_size(egui::vec2(100.0, 30.0)))
-                    .clicked()
-                {
-                    answer = Some(false);
-                }
-                if ui
-                    .add(egui::Button::new("Annulla").min_size(egui::vec2(80.0, 30.0)))
-                    .clicked()
-                {
-                    self.asking = None;
-                }
-            });
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), 36.0),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    let save = egui::Button::new(
+                        egui::RichText::new("Salva")
+                            .font(semibold(13.0))
+                            .color(t.on_primary),
+                    )
+                    .fill(t.primary)
+                    .min_size(egui::vec2(90.0, 30.0));
+                    if ui.add(save).clicked() {
+                        answer = Some(true);
+                    }
+                    if ui
+                        .add(egui::Button::new("Non salvare").min_size(egui::vec2(100.0, 30.0)))
+                        .clicked()
+                    {
+                        answer = Some(false);
+                    }
+                    if ui
+                        .add(egui::Button::new("Annulla").min_size(egui::vec2(80.0, 30.0)))
+                        .clicked()
+                    {
+                        self.asking = None;
+                    }
+                },
+            );
         });
         if modal.should_close() && answer.is_none() {
             self.asking = None;

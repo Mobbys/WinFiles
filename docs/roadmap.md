@@ -10,7 +10,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 | 2 | Decodificatori in processo separato, profili ICC, cache su disco | Corpus completo senza crash | Da fare |
 | 3 | Griglia, elenco e nesting su A4 e A3, intestazioni cartella, export PDF | Parità con la stampa attuale, ±0,5 mm | In corso: griglia, riepilogo ed export PDF pronti |
 | 4 | Pannelli agganciabili, anteprima, note, ordine a trascinamento, filtri | Un lavoro vero fatto solo con la nuova app | Da fare |
-| 5 | Stampa Windows a scala 100%, area stampabile del driver, calibrazione | A4 e A3 esatti su due stampanti | Da fare |
+| 5 | Stampa Windows a scala 100%, area stampabile del driver, calibrazione | A4 e A3 esatti su due stampanti | In corso: stampa diretta pronta ([ADR 0009](adr/0009-stampa-diretta.md)) |
 | 6 | CSV, appunti, modelli salvati, segni di taglio, miniature vettoriali, HEIC | Ogni extra con i suoi criteri | Da fare |
 | 7 | Installer MSI, aggiornamenti, beta in parallelo con WinFile 4.9 | Liste Anteprime 4.9 messa a riposo | Da fare |
 | 8 | Modulo Immagini: dati tecnici, calcolo DPI, ruota, specchia, ritaglia, RAW, HEIC | Tutto ciò che fa oggi Controllo Immagini | Da fare |
@@ -28,7 +28,8 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Miniature vere di immagini, PDF/AI ed EPS con anteprima; tema scuro, chiaro e automatico con test del contrasto ([ADR 0006](adr/0006-miniature-e-temi.md))
 - [ ] Prototipo rendering PDF/AI con `hayro`, misura dei tempi sul corpus
 - [ ] Prototipo EPS con il crate di VectorCraft
-- [ ] Prototipo stampa con `craft-print` e pagina di calibrazione
+- [x] Stampa con `craft-print`: stampante, copie, fronte e retro, fogli, 100% o riduzione ([ADR 0009](adr/0009-stampa-diretta.md))
+- [ ] Pagina di calibrazione
 - [ ] Corpus di file di prova difficili
 
 ## Fase 1 in dettaglio

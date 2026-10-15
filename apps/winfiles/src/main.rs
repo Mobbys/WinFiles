@@ -15,6 +15,7 @@ mod icons;
 mod measure;
 mod paint;
 mod panels;
+mod printing;
 mod recent;
 mod scan;
 mod shell;

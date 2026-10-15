@@ -45,8 +45,8 @@ stampa leggono il suo risultato e non ricalcolano nulla.
 
 L'app usa già i pannelli agganciabili di `craft-ui` e il tema di VectorCraft (`apps/winfiles/src/theme.rs`):
 nessun colore scritto a mano nei widget, e ogni testo deve passare il test di contrasto in
-`theme.rs` sia nel tema scuro sia in quello chiaro. In arrivo: decodificatori in processo separato (Fase 2), il crate `ui` (Fase 4), stampa con
-`craft-print` (Fase 5), che disegnerà le stesse scene del PDF.
+`theme.rs` sia nel tema scuro sia in quello chiaro. In arrivo: decodificatori in processo separato (Fase 2), il crate `ui` (Fase 4), pagina di calibrazione
+(Fase 5). La stampa usa già `craft-print` con lo stesso PDF dell'esportazione (ADR 0009).
 `cargo xtask layers` vieta egui, eframe, winit e rfd sotto l'interfaccia.
 
 ## Dipendenze

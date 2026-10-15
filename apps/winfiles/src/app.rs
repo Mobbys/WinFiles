@@ -58,6 +58,12 @@ pub struct WinFilesApp {
     export: Option<crate::export::Export>,
     /// Esportare al prossimo fotogramma, quando i fogli sono pronti.
     want_export: bool,
+    /// Aprire la finestra Stampa al prossimo fotogramma.
+    want_print: bool,
+    /// La finestra Stampa aperta.
+    print_dialog: Option<crate::printing::PrintDialog>,
+    /// Le scelte dell'ultima stampa, per la prossima.
+    last_print: crate::printing::PrintDialog,
     /// La rotella sull'anteprima: il foglio era già al bordo alto/basso nel fotogramma prima, e
     /// quando ha cambiato foglio l'ultima volta.
     wheel_edges: (bool, bool),
@@ -112,6 +118,9 @@ impl WinFilesApp {
             scans: Vec::new(),
             export: None,
             want_export: false,
+            want_print: false,
+            print_dialog: None,
+            last_print: crate::printing::PrintDialog::default(),
             batch_pdf,
             batch_running: false,
             wheel_edges: (true, true),
@@ -168,26 +177,80 @@ impl WinFilesApp {
         if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
             path.as_mut_os_string().push(".pdf");
         }
-        let mut pages = Vec::with_capacity(sheets.len());
-        if let Some(summary) = &sheets.summary {
-            pages.extend(
-                summary
+        let pages = self.compose(ctx, sheets, 0..=sheets.len().saturating_sub(1));
+        self.start_job(pages, crate::export::Target::File(path));
+    }
+
+    /// Le scene dei fogli `range` (da 0): prima il riepilogo, poi le miniature.
+    fn compose(
+        &self,
+        ctx: &egui::Context,
+        sheets: &Sheets,
+        range: std::ops::RangeInclusive<usize>,
+    ) -> Vec<winfiles_scene::Page> {
+        let summary_sheets = sheets.summary.as_ref().map_or(0, |s| s.sheets.len());
+        range
+            .filter_map(|i| match &sheets.summary {
+                Some(summary) if i < summary_sheets => summary
                     .sheets
-                    .iter()
+                    .get(i)
                     .map(|s| crate::summary::compose(ctx, s, summary, &self.project)),
-            );
-        }
-        pages.extend(
-            sheets
-                .grid
-                .iter()
-                .map(|s| canvas::compose(ctx, s, &self.project, &self.slots)),
-        );
+                _ => sheets
+                    .grid
+                    .get(i - summary_sheets)
+                    .map(|s| canvas::compose(ctx, s, &self.project, &self.slots)),
+            })
+            .collect()
+    }
+
+    fn start_job(&mut self, pages: Vec<winfiles_scene::Page>, target: crate::export::Target) {
         let wake = self.ctx.clone();
-        match crate::export::Export::start(pages, path, move || wake.request_repaint()) {
+        match crate::export::Export::start(pages, target, move || wake.request_repaint()) {
             Ok(job) => self.export = Some(job),
-            Err(e) => self.status = format!("Non riesco a esportare: {e}"),
+            Err(e) => self.status = format!("Non riesco ad avviare il lavoro: {e}"),
         }
+    }
+
+    /// Apre la finestra Stampa, se si può stampare.
+    fn open_print(&mut self) {
+        if self.export.is_some() || self.print_dialog.is_some() {
+            return;
+        }
+        if self.project.files.is_empty() {
+            self.status = "Non ci sono file da stampare".into();
+            return;
+        }
+        if !self.scans.is_empty() || self.measurer.pending() > 0 {
+            self.status = "Aspetta che finisca la lettura dei file, poi stampa".into();
+            return;
+        }
+        let mut dialog = self.last_print.clone();
+        dialog.refresh();
+        self.print_dialog = Some(dialog);
+    }
+
+    /// La finestra Stampa aperta; alla conferma i fogli scelti vanno alla stampante.
+    fn print_window(&mut self, ctx: &egui::Context, sheets: &Pages) {
+        let count = sheets.as_ref().map_or(0, Sheets::len);
+        let title = self.document_name();
+        let current = self.sheet;
+        let Some(dialog) = self.print_dialog.as_mut() else {
+            return;
+        };
+        let Some(answer) = dialog.show(ctx, &title, count, current) else {
+            return;
+        };
+        if let Some(d) = self.print_dialog.take() {
+            self.last_print = d;
+        }
+        let crate::printing::Answer::Print(job, range) = answer else {
+            return;
+        };
+        let Ok(sheets) = sheets else {
+            return;
+        };
+        let pages = self.compose(ctx, sheets, range);
+        self.start_job(pages, crate::export::Target::Printer(job));
     }
 
     /// A esportazione finita: il messaggio nella barra di stato e il PDF aperto.
@@ -198,7 +261,15 @@ impl WinFilesApp {
         let Some(result) = job.poll() else {
             return;
         };
-        self.status = crate::export::outcome(&job.path, &result);
+        let path = match &job.target {
+            crate::export::Target::File(path) => path.clone(),
+            crate::export::Target::Printer(print) => {
+                self.status = crate::export::print_outcome(print, job.total, &result);
+                self.export = None;
+                return;
+            }
+        };
+        self.status = crate::export::outcome(&path, &result);
         if self.batch_running {
             eprintln!("{}", self.status);
             self.export = None;
@@ -207,7 +278,7 @@ impl WinFilesApp {
             return;
         }
         if result.is_ok()
-            && let Err(e) = crate::shell::open(&job.path)
+            && let Err(e) = crate::shell::open(&path)
         {
             self.status = format!("{}; non riesco ad aprirlo: {e}", self.status);
         }
@@ -303,6 +374,8 @@ impl WinFilesApp {
             self.save(false);
         } else if pressed(Modifiers::COMMAND, Key::E) {
             self.want_export = true;
+        } else if pressed(Modifiers::COMMAND, Key::P) {
+            self.want_print = true;
         } else if pressed(Modifiers::COMMAND, Key::O) {
             self.guard(ctx, Then::Open(None));
         } else if pressed(Modifiers::COMMAND, Key::N) {
@@ -497,6 +570,13 @@ impl WinFilesApp {
                                 ui.close();
                                 self.want_export = true;
                             }
+                            if ui
+                                .add_enabled(can_export, egui::Button::new("Stampa…").shortcut_text("Ctrl+P"))
+                                .clicked()
+                            {
+                                ui.close();
+                                self.want_print = true;
+                            }
                             ui.separator();
                             if ui
                                 .add_enabled(
@@ -625,6 +705,26 @@ impl WinFilesApp {
                     );
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         let enabled = !self.project.files.is_empty() && self.export.is_none();
+                        // Stampa: il pulsante principale dell'app, grande e blu.
+                        let (fill, ink) = if enabled {
+                            (t.primary, t.on_primary)
+                        } else {
+                            (t.button, t.text_disabled)
+                        };
+                        let print = egui::Button::image_and_text(
+                            icons::image("printer", 18.0, ink),
+                            egui::RichText::new("Stampa").font(semibold(14.0)).color(ink),
+                        )
+                        .fill(fill)
+                        .min_size(vec2(118.0, 34.0));
+                        if ui
+                            .add_enabled(enabled, print)
+                            .on_hover_text("Stampa i fogli alla misura vera (Ctrl+P)")
+                            .clicked()
+                        {
+                            self.want_print = true;
+                        }
+                        ui.add_space(4.0);
                         let tint = if enabled { t.text_strong } else { t.text_disabled };
                         let button = egui::Button::image_and_text(
                             icons::image("file-down", 17.0, tint),
@@ -665,10 +765,10 @@ impl WinFilesApp {
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         let pending = self.measurer.pending();
                         if let Some(job) = &self.export {
-                            if ui.button("Annulla").clicked() {
+                            if job.can_cancel() && ui.button("Annulla").clicked() {
                                 job.cancel();
                             }
-                            let text = format!("Esporto il PDF… foglio {} di {}", job.done(), job.total);
+                            let text = job.progress_text();
                             ui.label(egui::RichText::new(text).size(12.0));
                             ui.add(egui::Spinner::new().size(13.0).color(t.accent));
                         } else if !self.scans.is_empty() {
@@ -1329,7 +1429,11 @@ impl eframe::App for WinFilesApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
+        if std::mem::take(&mut self.want_print) {
+            self.open_print();
+        }
         self.receive_export();
+        self.print_window(&ctx, &sheets);
         self.app_bar(ui);
         self.control_bar(ui);
         self.status_bar(ui);

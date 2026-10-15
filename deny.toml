@@ -15,6 +15,9 @@ ignore = [
     # versione, e legge solo Inter incorporato nell'app, mai font presi dai file dei clienti.
     # Da togliere quando krilla passa a harfrust (vedi ADR 0008).
     { id = "RUSTSEC-2026-0206", reason = "non mantenuto; usato da krilla solo con Inter incorporato" },
+    # proc-macro-error non è più mantenuto (avviso, non una falla): è una macro che gira solo in
+    # compilazione, per winprint (stampa su Windows via craft-print). Vedi ADR 0009.
+    { id = "RUSTSEC-2024-0370", reason = "macro di compilazione di winprint, non entra nell'eseguibile" },
 ]
 
 [licenses]
@@ -30,6 +33,9 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "Zlib",
+    # I certificati radice di Mozilla come dati (webpki-root-certs): licenza permissiva per dati,
+    # usata solo da uno strumento di compilazione di winprint (craft-print). Vedi ADR 0009.
+    "CDLA-Permissive-2.0",
     "Unicode-3.0",
     "BSL-1.0",
     "OFL-1.1",
@@ -45,4 +51,5 @@ allow-wildcard-paths = true
 unknown-registry = "deny"
 unknown-git = "deny"
 # Le librerie ArtCraft, sempre a commit fissato.
-allow-git = ["https://github.com/storytold/craft-libs"]
+# winprint.rs è la copia del team ArtCraft usata da craft-print per stampare su Windows.
+allow-git = ["https://github.com/storytold/craft-libs", "https://github.com/storytold/winprint.rs"]
