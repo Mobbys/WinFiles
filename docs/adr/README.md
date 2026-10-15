@@ -16,3 +16,4 @@ Una decisione si cambia con un nuovo ADR che sostituisce il precedente, mai risc
 | [0009](0009-stampa-diretta.md) | Stampa diretta con `craft-print`, dallo stesso PDF | Accettata |
 | [0010](0010-calibrazione-stampante.md) | Calibrazione della stampante con una pagina da misurare | Accettata |
 | [0011](0011-anteprima-sovrastampa.md) | Anteprima della sovrastampa nelle miniature | Accettata |
+| [0012](0012-foto-heic.md) | Foto HEIC con il lettore di PhotoCraft | Accettata |

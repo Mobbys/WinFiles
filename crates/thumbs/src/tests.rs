@@ -168,3 +168,37 @@ fn la_sovrastampa_si_vede_come_in_stampa() {
     let (r, g, _) = px(&t, 250);
     assert!(r > 200 && g < 80);
 }
+
+#[test]
+fn foto_heic() {
+    // Tre strisce rosso, verde e blu (testdata/heic, foto di prova di heic-rs).
+    let f = Temp::new(
+        "strisce.heic",
+        include_bytes!("../../../testdata/heic/rgb-strips-96.heic"),
+    );
+    let t = render(&f.0, FileKind::Image, 0, 48).unwrap();
+    assert_eq!((t.width, t.height), (48, 16));
+    let px = |x: u32, y: u32| {
+        let i = ((y * t.width + x) * 4) as usize;
+        t.rgba[i..i + 4].to_vec()
+    };
+    for (x, want) in [(8, [255, 0, 0]), (24, [0, 255, 0]), (40, [0, 0, 255])] {
+        let got = px(x, 8);
+        for c in 0..3 {
+            assert!(got[c].abs_diff(want[c]) < 40, "x {x}: {got:?}");
+        }
+    }
+    // A tessere: 1024×1024 ridotta.
+    let f = Temp::new(
+        "scacchi.heic",
+        include_bytes!("../../../testdata/heic/checker-1024.heic"),
+    );
+    let t = render(&f.0, FileKind::Image, 0, 256).unwrap();
+    assert_eq!((t.width, t.height), (256, 256));
+    // Rovinata: un errore, mai un crash.
+    let f = Temp::new(
+        "rotta.heic",
+        &include_bytes!("../../../testdata/heic/checker-1024.heic")[..900],
+    );
+    assert!(render(&f.0, FileKind::Image, 0, 256).is_err());
+}

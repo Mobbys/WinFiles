@@ -53,7 +53,9 @@ impl FileKind {
             .unwrap_or("")
             .to_ascii_lowercase();
         match ext.as_str() {
-            "jpg" | "jpeg" | "png" | "tif" | "tiff" | "webp" | "bmp" | "gif" => FileKind::Image,
+            "jpg" | "jpeg" | "png" | "tif" | "tiff" | "webp" | "bmp" | "gif" | "heic" | "heif" | "hif" => {
+                FileKind::Image
+            }
             "pdf" => FileKind::Pdf,
             "ai" => FileKind::Ai,
             "eps" => FileKind::Eps,

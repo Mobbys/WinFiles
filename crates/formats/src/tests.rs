@@ -305,3 +305,40 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn heic_singola_e_a_tessere() {
+    // Foto di prova di heic-rs (testdata/heic, MIT/Apache): 96×32 in un pezzo, 1024×1024 in 2×2
+    // tessere. Le HEIC non dichiarano DPI: vale il predefinito, segnalato.
+    let p = run(
+        include_bytes!("../../../testdata/heic/rgb-strips-96.heic"),
+        FileKind::Image,
+    )
+    .unwrap();
+    let img = p.image.unwrap();
+    assert_eq!((img.width_px, img.height_px), (96, 32));
+    assert!(close(img.dpi_x, DEFAULT_DPI) && !img.dpi_from_file);
+    let p = run(
+        include_bytes!("../../../testdata/heic/checker-1024.heic"),
+        FileKind::Image,
+    )
+    .unwrap();
+    assert_eq!(p.image.map(|i| (i.width_px, i.height_px)), Some((1024, 1024)));
+}
+
+#[test]
+fn heic_rovinate_danno_errori() {
+    let good = include_bytes!("../../../testdata/heic/checker-1024.heic");
+    for cut in [12, 40, 200, 600, good.len() / 2] {
+        let _ = run(good.get(..cut).unwrap(), FileKind::Image);
+    }
+    let mut bad = good.to_vec();
+    for b in bad.iter_mut().skip(20).step_by(7) {
+        *b ^= 0x5A;
+    }
+    let _ = run(&bad, FileKind::Image);
+    // Un riquadro che dichiara 4 byte.
+    let mut tiny = b"\0\0\0\x04ftypheic".to_vec();
+    tiny.extend([0; 8]);
+    assert!(run(&tiny, FileKind::Image).is_err());
+}

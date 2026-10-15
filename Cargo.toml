@@ -34,6 +34,10 @@ hayro-syntax = { version = "0.8", default-features = false, features = ["std"] }
 hayro = "0.8"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "gif", "bmp", "webp"] }
 
+# Foto HEIC/HEIF (iPhone, Mac): il lettore di PhotoCraft, Rust puro senza unsafe, che avvolge
+# heic-rs (MIT/Apache) e trasforma i suoi panic in errori. A commit fissato (vedi ADR 0012).
+photocraft-heif = { git = "https://github.com/storytold/photocraft", rev = "df055f3dcb0bb0312af97548ee6c6f9628f21dd7" }
+
 # PDF in uscita (vedi docs/adr/0008-esportazione-pdf.md): testi con i font incorporati, immagini
 # e pagine dei PDF originali incorporate come vettori.
 krilla = { version = "0.8", default-features = false, features = ["raster-images", "simple-text"] }

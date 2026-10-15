@@ -23,12 +23,12 @@ pub(crate) fn sniff(head: &[u8]) -> bool {
 }
 
 /// Pixel letti e risoluzione dichiarata (se c'è).
-struct Raw {
-    width: u32,
-    height: u32,
-    dpi: Option<(f64, f64)>,
+pub(crate) struct Raw {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) dpi: Option<(f64, f64)>,
     /// L'immagine si mostra ruotata di 90° (orientamento EXIF da 5 a 8).
-    rotated: bool,
+    pub(crate) rotated: bool,
 }
 
 pub(crate) fn probe(src: &mut dyn Source) -> Result<Probe, ProbeError> {
@@ -61,7 +61,7 @@ pub(crate) fn probe(src: &mut dyn Source) -> Result<Probe, ProbeError> {
 }
 
 /// Controlla i numeri e calcola le misure.
-fn finish(raw: Raw) -> Result<Probe, ProbeError> {
+pub(crate) fn finish(raw: Raw) -> Result<Probe, ProbeError> {
     let Raw {
         mut width,
         mut height,

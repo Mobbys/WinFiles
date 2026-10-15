@@ -1,6 +1,6 @@
 //! Miniature (livello L1): un'immagine RGBA piccola per l'anteprima a schermo. Le immagini si
-//! decodificano con `image`, PDF e AI con `hayro` (prima pagina), gli EPS mostrano l'anteprima
-//! TIFF che hanno dentro, se c'è.
+//! decodificano con `image`, le foto HEIC con il lettore di PhotoCraft, PDF e AI con `hayro`
+//! (prima pagina), gli EPS mostrano l'anteprima TIFF che hanno dentro, se c'è.
 //!
 //! I decodificatori sono codice di terzi che legge file ostili: ogni chiamata ha tetti di memoria
 //! e passa da `catch_unwind`, così un file rovinato dà un errore e non chiude l'app.
@@ -20,6 +20,11 @@ use winfiles_model::FileKind;
 const MAX_DECODE_BYTES: u64 = 1024 * 1024 * 1024;
 /// File PDF più grande che si apre per la miniatura.
 const MAX_PDF_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Foto HEIC più grande che si apre per la miniatura.
+const MAX_HEIF_BYTES: u64 = 512 * 1024 * 1024;
+/// Pixel massimi di una foto HEIC: a 16 bit con trasparenza sono 8 byte l'uno, sotto
+/// [`MAX_DECODE_BYTES`].
+const MAX_HEIF_PIXELS: u64 = 120_000_000;
 /// Lato massimo di una miniatura.
 pub const MAX_SIDE: u32 = 4096;
 
@@ -29,6 +34,8 @@ pub enum ThumbError {
     Io(#[from] std::io::Error),
     #[error("immagine non leggibile: {0}")]
     Image(#[from] image::ImageError),
+    #[error("{}", heif_text(.0))]
+    Heif(photocraft_heif::Error),
     #[error("PDF non leggibile")]
     Pdf,
     #[error("il PDF è protetto da password")]
@@ -49,6 +56,16 @@ fn io_text(e: &std::io::Error) -> String {
         std::io::ErrorKind::NotFound => "file non trovato".into(),
         std::io::ErrorKind::PermissionDenied => "accesso al file negato".into(),
         _ => format!("impossibile leggere il file: {e}"),
+    }
+}
+
+fn heif_text(e: &photocraft_heif::Error) -> &'static str {
+    match e {
+        photocraft_heif::Error::Unsupported(_) => {
+            "foto HEIC senza un'immagine fissa (forse una sequenza o un video)"
+        }
+        photocraft_heif::Error::Limit(_) => "foto HEIC troppo grande",
+        photocraft_heif::Error::Malformed(_) => "foto HEIC danneggiata",
     }
 }
 
@@ -89,6 +106,16 @@ fn render_inner(path: &Path, kind: FileKind, page: usize, max_side: u32) -> Resu
     if head.starts_with(&[0xC5, 0xD0, 0xD3, 0xC6]) {
         return eps_preview(&mut file, head, max_side);
     }
+    if is_heif(head) {
+        let len = file.metadata()?.len();
+        if len > MAX_HEIF_BYTES {
+            return Err(ThumbError::TooLarge(len));
+        }
+        file.seek(SeekFrom::Start(0))?;
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)?;
+        return heif(&data, max_side);
+    }
     match kind {
         FileKind::Image => {
             file.seek(SeekFrom::Start(0))?;
@@ -99,6 +126,49 @@ fn render_inner(path: &Path, kind: FileKind, page: usize, max_side: u32) -> Resu
         }
         _ => Err(ThumbError::NoPreview),
     }
+}
+
+/// Il contenitore di una foto HEIC/HEIF (marchi HEVC nel riquadro `ftyp`).
+fn is_heif(head: &[u8]) -> bool {
+    const BRANDS: [&[u8; 4]; 8] = [
+        b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"mif1", b"msf1",
+    ];
+    head.get(4..8) == Some(b"ftyp")
+        && head
+            .get(8..12)
+            .is_some_and(|b| BRANDS.iter().any(|m| m.as_slice() == b))
+}
+
+/// Miniatura di una foto HEIC, già girata come la mostra il telefono.
+fn heif(data: &[u8], max_side: u32) -> Result<Thumb, ThumbError> {
+    let options = photocraft_heif::Options {
+        max_pixels: MAX_HEIF_PIXELS,
+        apply_transforms: true,
+    };
+    let decoded = photocraft_heif::decode(data, &options).map_err(ThumbError::Heif)?;
+    let samples = if decoded.sixteen_bit {
+        decoded
+            .data
+            .chunks_exact(2)
+            .map(|b| {
+                let v = <[u8; 2]>::try_from(b).map(u16::from_ne_bytes).unwrap_or_default();
+                (v >> 8) as u8
+            })
+            .collect()
+    } else {
+        decoded.data
+    };
+    let broken = || ThumbError::Heif(photocraft_heif::Error::Malformed("pixel mancanti".into()));
+    let img = if decoded.has_alpha {
+        DynamicImage::ImageRgba8(
+            image::RgbaImage::from_raw(decoded.width, decoded.height, samples).ok_or_else(broken)?,
+        )
+    } else {
+        DynamicImage::ImageRgb8(
+            image::RgbImage::from_raw(decoded.width, decoded.height, samples).ok_or_else(broken)?,
+        )
+    };
+    Ok(shrink(img, max_side))
 }
 
 fn read_up_to(file: &mut std::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -126,17 +196,22 @@ fn image_thumb<R: std::io::BufRead + Seek>(
     let orientation = decoder.orientation()?;
     let mut img = DynamicImage::from_decoder(decoder)?;
     img.apply_orientation(orientation);
+    Ok(shrink(img, max_side))
+}
+
+/// L'immagine ridotta a `max_side` pixel sul lato lungo, in RGBA.
+fn shrink(img: DynamicImage, max_side: u32) -> Thumb {
     let small = if img.width() > max_side || img.height() > max_side {
         img.thumbnail(max_side, max_side)
     } else {
         img
     };
     let rgba = small.to_rgba8();
-    Ok(Thumb {
+    Thumb {
         width: rgba.width(),
         height: rgba.height(),
         rgba: rgba.into_raw(),
-    })
+    }
 }
 
 fn pdf(data: Vec<u8>, page: usize, max_side: u32) -> Result<Thumb, ThumbError> {

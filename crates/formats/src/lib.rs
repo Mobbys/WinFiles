@@ -10,6 +10,7 @@ use std::path::Path;
 use winfiles_model::{FileKind, ImageInfo, PageInfo};
 
 mod eps;
+mod heif;
 mod pdf;
 mod raster;
 mod source;
@@ -62,6 +63,9 @@ pub fn probe_source(src: &mut dyn Source, kind: FileKind) -> Result<Probe, Probe
     let head = src.read_prefix(1024)?;
     if raster::sniff(&head) {
         return raster::probe(src);
+    }
+    if heif::sniff(&head) {
+        return heif::probe(src);
     }
     if pdf::sniff(&head) {
         return pdf::probe(src);

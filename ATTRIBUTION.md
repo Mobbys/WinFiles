@@ -33,3 +33,5 @@ Il font dell'interfaccia è Inter (SIL OFL); le icone sono Lucide (ISC), le stes
 | `apps/winfiles/assets/icons/x.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
 | `apps/winfiles/assets/icons/zoom-in.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
 | `vendor/hayro-interpret/` (codice, copia modificata) | Laurenz Stampfl | https://github.com/LaurenzV/hayro (crate `hayro-interpret` 0.8.0, modifiche in `vendor/README.md`) | Apache-2.0 o MIT (`vendor/hayro-interpret/LICENSE-*`) |
+| `testdata/heic/rgb-strips-96.heic` (foto di prova) | Thomas Braun | https://github.com/tbraun96/heic-rs (`tests/fixtures`, pixel sintetici codificati con `sips` di macOS) | MIT o Apache-2.0 |
+| `testdata/heic/checker-1024.heic` (foto di prova) | Thomas Braun | https://github.com/tbraun96/heic-rs (`tests/fixtures`, pixel sintetici codificati con `sips` di macOS) | MIT o Apache-2.0 |

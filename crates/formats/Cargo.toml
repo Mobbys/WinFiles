@@ -11,6 +11,7 @@ publish = false
 winfiles-geom.workspace = true
 winfiles-model.workspace = true
 thiserror.workspace = true
+photocraft-heif.workspace = true
 hayro-syntax.workspace = true
 
 [lints]

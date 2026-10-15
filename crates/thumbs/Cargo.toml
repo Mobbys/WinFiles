@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 winfiles-model.workspace = true
 thiserror.workspace = true
+photocraft-heif.workspace = true
 image.workspace = true
 hayro.workspace = true
 
