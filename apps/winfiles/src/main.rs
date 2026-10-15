@@ -15,6 +15,7 @@ mod icons;
 mod measure;
 mod paint;
 mod panels;
+mod prefs;
 mod printing;
 mod recent;
 mod scan;
@@ -25,11 +26,14 @@ mod theme;
 mod thumbs;
 
 fn main() -> eframe::Result {
+    // Le ultime scelte: pannelli, tema, impaginazione, stampante e misura della finestra.
+    let prefs = prefs::load();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(concat!("WinFiles ", env!("CARGO_PKG_VERSION")))
-            .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size([800.0, 560.0]),
+            .with_inner_size(prefs.window.unwrap_or([1280.0, 800.0]))
+            .with_min_inner_size(prefs::MIN_WINDOW)
+            .with_maximized(prefs.maximized),
         #[cfg(feature = "opengl")]
         renderer: eframe::Renderer::Glow,
         ..Default::default()
@@ -52,7 +56,7 @@ fn main() -> eframe::Result {
         Box::new(|cc| {
             theme::install_fonts(&cc.egui_ctx);
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            Ok(Box::new(app::WinFilesApp::new(&cc.egui_ctx, paths, pdf)))
+            Ok(Box::new(app::WinFilesApp::new(&cc.egui_ctx, paths, pdf, prefs)))
         }),
     )
 }

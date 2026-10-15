@@ -44,7 +44,7 @@ egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
 # comune di Esplora file, su Linux il portale XDG. Licenza MIT.
 rfd = "0.17"
 # Pannelli agganciabili e icone delle app ArtCraft, a commit fissato (vedi CLAUDE.md).
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "457a078809690994b22debdffb703ff36d3129df" }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "457a078809690994b22debdffb703ff36d3129df", features = ["serde"] }
 # Stampa (Fase 5): il PDF dei fogli allo spooler, alla misura vera. Su Windows nel processo, senza
 # script né programmi esterni; su Linux e macOS con CUPS. Stesso commit di craft-ui (ADR 0009).
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "457a078809690994b22debdffb703ff36d3129df" }

@@ -11,13 +11,7 @@ const MAX_BYTES: u64 = 256 * 1024;
 
 /// Dove sta l'elenco.
 fn store() -> Option<PathBuf> {
-    #[cfg(windows)]
-    let base = std::env::var_os("APPDATA").map(PathBuf::from);
-    #[cfg(not(windows))]
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
-    base.map(|b| b.join("WinFiles").join("recenti.json"))
+    crate::prefs::config_dir().map(|d| d.join("recenti.json"))
 }
 
 /// Legge l'elenco da `file`.

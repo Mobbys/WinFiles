@@ -64,7 +64,7 @@ impl WinFilesApp {
     fn run(&mut self, ctx: &egui::Context, then: Then) {
         match then {
             Then::New => {
-                self.reset(Project::new("Senza titolo"), None);
+                self.reset(self.blank(), None);
                 self.status = "Nuovo lavoro".into();
             }
             Then::Open(path) => {

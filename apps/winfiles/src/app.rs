@@ -86,15 +86,31 @@ pub struct WinFilesApp {
     pub(crate) closing: bool,
     /// L'ultimo titolo dato alla finestra.
     shown_title: String,
+    /// Le ultime scelte scritte in `impostazioni.json`, e quando si è controllato l'ultima volta.
+    prefs: crate::prefs::Prefs,
+    prefs_checked: f64,
 }
 
 impl WinFilesApp {
-    pub fn new(ctx: &egui::Context, paths: Vec<PathBuf>, batch_pdf: Option<PathBuf>) -> Self {
+    pub fn new(
+        ctx: &egui::Context,
+        paths: Vec<PathBuf>,
+        batch_pdf: Option<PathBuf>,
+        prefs: crate::prefs::Prefs,
+    ) -> Self {
+        let blank = blank_project(&prefs);
+        let last_print = crate::printing::PrintDialog {
+            printer: prefs.printing.printer.clone(),
+            duplex: prefs.printing.sides.duplex(),
+            gray: prefs.printing.gray,
+            fit: prefs.printing.fit,
+            ..crate::printing::PrintDialog::default()
+        };
         let wake = ctx.clone();
         let wake2 = ctx.clone();
         let mut app = Self {
-            project: Project::new("Senza titolo"),
-            saved: Project::new("Senza titolo"),
+            project: blank.clone(),
+            saved: blank,
             path: None,
             asking: None,
             closing: false,
@@ -107,9 +123,9 @@ impl WinFilesApp {
             zoom: None,
             shown_zoom: 1.0,
             errors: HashMap::new(),
-            theme: ThemeChoice::System,
+            theme: prefs.theme,
             applied: None,
-            dock: dock::default_layout(),
+            dock: prefs.dock.clone().unwrap_or_else(dock::default_layout),
             measurer: Measurer::start(move || wake.request_repaint()),
             thumbs: Thumbnails::start(move || wake2.request_repaint()),
             slots: Vec::new(),
@@ -120,7 +136,7 @@ impl WinFilesApp {
             want_export: false,
             want_print: false,
             print_dialog: None,
-            last_print: crate::printing::PrintDialog::default(),
+            last_print,
             batch_pdf,
             batch_running: false,
             wheel_edges: (true, true),
@@ -128,6 +144,8 @@ impl WinFilesApp {
             flip_to: None,
             recent: crate::recent::load(),
             ctx: ctx.clone(),
+            prefs,
+            prefs_checked: 0.0,
         };
         // Un file .winfiles sulla riga di comando (doppio clic in Esplora file) apre il lavoro;
         // gli altri file e cartelle si aggiungono all'elenco.
@@ -1354,6 +1372,69 @@ impl DockContent<PanelId> for Content<'_> {
     }
 }
 
+/// Un lavoro nuovo, con l'impaginazione e l'unità delle ultime scelte.
+pub(crate) fn blank_project(prefs: &crate::prefs::Prefs) -> Project {
+    let mut p = Project::new("Senza titolo");
+    p.print = prefs.print.clone();
+    p.print.title.clear();
+    p.unit = prefs.unit;
+    p
+}
+
+impl WinFilesApp {
+    /// Un lavoro nuovo con le ultime scelte.
+    pub(crate) fn blank(&self) -> Project {
+        blank_project(&self.prefs)
+    }
+
+    /// Le scelte di adesso, da ricordare alla prossima apertura.
+    fn current_prefs(&self, ctx: &egui::Context) -> crate::prefs::Prefs {
+        let (inner, maximized) = ctx.input(|i| {
+            let v = i.viewport();
+            (v.inner_rect, v.maximized.unwrap_or(false))
+        });
+        let mut print = self.project.print.clone();
+        print.title.clear();
+        // Da massimizzata la finestra tiene la misura di prima, per quando si rimpicciolisce.
+        let window = match inner {
+            Some(r) if !maximized => Some([r.width(), r.height()]),
+            _ => self.prefs.window,
+        };
+        crate::prefs::Prefs {
+            dock: Some(self.dock.clone()),
+            theme: self.theme,
+            unit: self.project.unit,
+            print,
+            printing: crate::prefs::PrintChoices {
+                printer: self.last_print.printer.clone(),
+                sides: crate::prefs::Sides::from_duplex(self.last_print.duplex),
+                gray: self.last_print.gray,
+                fit: self.last_print.fit,
+            },
+            window,
+            maximized,
+        }
+    }
+
+    /// Scrive le scelte se sono cambiate; si controlla al più una volta al secondo, così anche
+    /// una chiusura improvvisa le lascia salvate.
+    fn remember_prefs(&mut self, ctx: &egui::Context, now: bool) {
+        let time = ctx.input(|i| i.time);
+        if !now && time - self.prefs_checked < 1.0 {
+            return;
+        }
+        self.prefs_checked = time;
+        if self.batch_pdf.is_some() || self.batch_running {
+            return;
+        }
+        let current = self.current_prefs(ctx);
+        if current != self.prefs {
+            crate::prefs::save(&current);
+            self.prefs = current;
+        }
+    }
+}
+
 impl eframe::App for WinFilesApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -1373,7 +1454,12 @@ impl eframe::App for WinFilesApp {
             self.guard(&ctx, Then::Open(Some(p)));
         }
         self.shortcuts(&ctx);
+        self.remember_prefs(&ctx, false);
         // Chiudere la finestra con modifiche non salvate chiede prima di perderle.
+        if ctx.input(|i| i.viewport().close_requested()) {
+            // Alla chiusura le scelte si scrivono subito, anche se è passato meno di un secondo.
+            self.remember_prefs(&ctx, true);
+        }
         if ctx.input(|i| i.viewport().close_requested()) && !self.closing && self.is_dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.asking = Some(Then::Close);

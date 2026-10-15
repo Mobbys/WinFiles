@@ -7,7 +7,7 @@ use craft_ui::layout::{SplitAxis, SplitSize};
 
 use crate::theme::{Tokens, semibold};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum PanelId {
     Canvas,
     Files,

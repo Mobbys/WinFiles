@@ -10,7 +10,7 @@ use egui::{
 };
 
 /// Tema scelto dall'utente.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ThemeChoice {
     /// Segue il tema di Windows.
     #[default]
