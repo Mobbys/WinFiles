@@ -125,6 +125,8 @@ pub struct WinFilesApp {
     pub(crate) module: Module,
     /// Il modulo PDF (Fase 9), con il suo documento aperto.
     pub(crate) pdf: crate::pdf::PdfModule,
+    /// Il modulo immagini (Fase 8), con le immagini aperte.
+    pub(crate) images: crate::images::ImagesModule,
 }
 
 /// I moduli di WinFiles, come le schede della 4.9.
@@ -133,6 +135,7 @@ pub enum Module {
     #[default]
     Thumbnails,
     Pdf,
+    Images,
 }
 
 impl WinFilesApp {
@@ -142,6 +145,7 @@ impl WinFilesApp {
         batch_pdf: Option<PathBuf>,
         batch_calibration: Option<(Paper, PathBuf)>,
         edit_pdf: Option<PathBuf>,
+        edit_images: Vec<PathBuf>,
         prefs: crate::prefs::Prefs,
     ) -> Self {
         let blank = blank_project(&prefs);
@@ -210,6 +214,7 @@ impl WinFilesApp {
             layout_cache: None,
             module: Module::Thumbnails,
             pdf: crate::pdf::PdfModule::new(ctx),
+            images: crate::images::ImagesModule::new(ctx),
         };
         // Le stampanti si cercano subito, così Stampa le trova già pronte.
         if app.batch_pdf.is_none() && app.batch_calibration.is_none() {
@@ -221,6 +226,11 @@ impl WinFilesApp {
         if let Some(path) = edit_pdf {
             app.module = Module::Pdf;
             app.pdf.open(&path);
+        }
+        // `--modifica-immagini foto.jpg …` apre quelle immagini nel modulo immagini.
+        if !edit_images.is_empty() {
+            app.module = Module::Images;
+            app.images.open(&edit_images);
         }
         // Un file .winfiles sulla riga di comando (doppio clic in Esplora file) apre il lavoro;
         // gli altri file e cartelle si aggiungono all'elenco.
@@ -975,13 +985,21 @@ impl WinFilesApp {
                         ui,
                         "modulo",
                         &mut self.module,
-                        &[(Module::Thumbnails, "Miniature"), (Module::Pdf, "Modifica PDF")],
+                        &[
+                            (Module::Thumbnails, "Miniature"),
+                            (Module::Pdf, "Modifica PDF"),
+                            (Module::Images, "Modifica immagini"),
+                        ],
                     );
                     ui.add_space(12.0);
                     egui::MenuBar::new().ui(ui, |ui| {
                         ui.menu_button("File", |ui| {
                             if self.module == Module::Pdf {
                                 self.pdf.file_menu(ui);
+                                return;
+                            }
+                            if self.module == Module::Images {
+                                self.images.file_menu(ui);
                                 return;
                             }
                             let ctx = ui.ctx().clone();
@@ -2108,11 +2126,17 @@ impl eframe::App for WinFilesApp {
                 .collect()
         });
         let pdf_mode = self.module == Module::Pdf;
+        let images_mode = self.module == Module::Images;
         if pdf_mode {
             if !dropped.is_empty() {
                 self.pdf.dropped(&ctx, dropped);
             }
             self.pdf.shortcuts(&ctx);
+        } else if images_mode {
+            if !dropped.is_empty() {
+                self.images.dropped(dropped);
+            }
+            self.images.shortcuts(&ctx);
         } else {
             let (projects, dropped): (Vec<PathBuf>, Vec<PathBuf>) =
                 dropped.into_iter().partition(|p| document::is_project(p));
@@ -2134,6 +2158,9 @@ impl eframe::App for WinFilesApp {
         if ctx.input(|i| i.viewport().close_requested()) && !self.closing && !self.pdf.can_quit() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.module = Module::Pdf;
+        } else if ctx.input(|i| i.viewport().close_requested()) && !self.closing && !self.images.can_quit() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.module = Module::Images;
         } else if ctx.input(|i| i.viewport().close_requested()) && !self.closing && self.is_dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.asking = Some(Then::Close);
@@ -2144,6 +2171,10 @@ impl eframe::App for WinFilesApp {
                 .pdf
                 .title()
                 .unwrap_or_else(|| "Modifica PDF — WinFiles".into()),
+            Module::Images => self
+                .images
+                .title()
+                .unwrap_or_else(|| "Modifica immagini — WinFiles".into()),
             Module::Thumbnails => self.window_title(),
         };
         if title != self.shown_title {
@@ -2152,6 +2183,7 @@ impl eframe::App for WinFilesApp {
         }
         // Canc toglie dall'elenco i file scelti, se non si sta scrivendo in un campo.
         if !pdf_mode
+            && !images_mode
             && !self.marked.is_empty()
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|i| i.key_pressed(egui::Key::Delete))
@@ -2161,6 +2193,7 @@ impl eframe::App for WinFilesApp {
         }
         // Spazio mette o toglie dalla stampa i file scelti, come la spunta delle miniature della 4.9.
         if !pdf_mode
+            && !images_mode
             && !self.marked.is_empty()
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|i| i.key_pressed(egui::Key::Space))
@@ -2229,6 +2262,23 @@ impl eframe::App for WinFilesApp {
                 .show(ui, |ui| self.pdf.body(ui, unit));
             self.pdf.windows(&ctx);
             self.notes_window(&ctx);
+            self.unsaved_dialog(&ctx);
+            return;
+        }
+        if self.module == Module::Images {
+            self.images.control_bar(ui);
+            self.update_bar(ui);
+            self.images.status_bar(ui);
+            let unit = self.project.unit;
+            egui::CentralPanel::default()
+                .frame(frame.inner_margin(egui::Margin {
+                    left: 10,
+                    right: 10,
+                    top: 0,
+                    bottom: 2,
+                }))
+                .show(ui, |ui| self.images.body(ui, unit));
+            self.images.windows(&ctx);
             self.unsaved_dialog(&ctx);
             return;
         }

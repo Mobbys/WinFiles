@@ -20,3 +20,4 @@ Una decisione si cambia con un nuovo ADR che sostituisce il precedente, mai risc
 | [0013](0013-ai-in-postscript.md) | Miniature degli AI in PostScript e degli EPS di Illustrator senza anteprima | Accettata |
 | [0014](0014-installer-e-aggiornamenti.md) | Installer MSI e aggiornamenti dai rilasci di GitHub | Accettata |
 | [0015](0015-modifica-pdf.md) | Modifica dei PDF con pdfcraft, senza ridisegnare le pagine | Accettata |
+| [0016](0016-modifica-immagini.md) | Modifica delle immagini: misura e ricampionamento separati, colore conservato | Accettata |

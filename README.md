@@ -12,6 +12,9 @@ L'app ha due moduli, come le schede della 4.9:
 - **Miniature**: l'elenco dei file, l'impaginazione e la stampa.
 - **Modifica PDF**: unisci, dividi, ruota, elimina, duplica, estrai pagine, margini, rifila e
   adatta ad A4 o A3 senza ridisegnare la pagina ([ADR 0015](docs/adr/0015-modifica-pdf.md)).
+- **Modifica immagini**: dati tecnici, misura di stampa e risoluzione, ritaglio con la lente,
+  rotazione, specchio, ridimensionamento e salvataggio che tiene il profilo colore
+  ([ADR 0016](docs/adr/0016-modifica-immagini.md)).
 
 ## Installare
 Nella pagina **Releases** ci sono l'installer `WinFiles-X.Y.Z.msi` (si installa per l'utente, senza

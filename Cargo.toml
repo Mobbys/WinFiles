@@ -22,6 +22,7 @@ winfiles-thumbs = { path = "crates/thumbs", version = "0.1.0" }
 winfiles-scene = { path = "crates/scene", version = "0.1.0" }
 winfiles-pdf-out = { path = "crates/pdf_out", version = "0.1.0" }
 winfiles-pdf-edit = { path = "crates/pdf_edit", version = "0.1.0" }
+winfiles-image-edit = { path = "crates/image_edit", version = "0.1.0" }
 
 # base
 serde = { version = "1", features = ["derive"] }
@@ -34,6 +35,11 @@ hayro-syntax = { version = "0.8", default-features = false, features = ["std"] }
 # miniature (vedi docs/adr/0006-miniature.md)
 hayro = "0.8"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "gif", "bmp", "webp"] }
+# Modifica delle immagini (Fase 8, ADR 0016): il codificatore TIFF di `image` non scrive la
+# risoluzione né il profilo ICC, e un TIFF senza risoluzione in tipografia si stampa alla misura
+# sbagliata. È la stessa libreria che `image` usa per i TIFF, quindi nessuna copia in più. MIT.
+tiff = "0.11"
+
 
 # Foto HEIC/HEIF (iPhone, Mac): il lettore di PhotoCraft, Rust puro senza unsafe, che avvolge
 # heic-rs (MIT/Apache) e trasforma i suoi panic in errori. A commit fissato (vedi ADR 0012).

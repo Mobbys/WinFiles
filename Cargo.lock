@@ -6242,11 +6242,13 @@ dependencies = [
  "eframe",
  "egui",
  "egui_extras",
+ "image",
  "rfd",
  "serde",
  "serde_json",
  "winfiles-formats",
  "winfiles-geom",
+ "winfiles-image-edit",
  "winfiles-layout",
  "winfiles-model",
  "winfiles-pdf-edit",
@@ -6274,6 +6276,19 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "serde",
+]
+
+[[package]]
+name = "winfiles-image-edit"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "photocraft-heif",
+ "thiserror 2.0.21",
+ "tiff",
+ "winfiles-formats",
+ "winfiles-geom",
+ "winfiles-model",
 ]
 
 [[package]]
