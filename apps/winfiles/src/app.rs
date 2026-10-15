@@ -1613,12 +1613,12 @@ impl eframe::App for WinFilesApp {
         let sheets = self.pages(ui.ctx());
         let sheets: &Pages = &sheets;
         if std::mem::take(&mut self.want_export) {
-            self.export_pdf(&ctx, &sheets, None);
+            self.export_pdf(&ctx, sheets, None);
         }
         if self.batch_pdf.is_some() && self.scans.is_empty() && self.measurer.pending() == 0 {
             let path = self.batch_pdf.take();
             self.batch_running = path.is_some();
-            self.export_pdf(&ctx, &sheets, path);
+            self.export_pdf(&ctx, sheets, path);
             if self.export.is_none() {
                 eprintln!("{}", self.status);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1628,7 +1628,7 @@ impl eframe::App for WinFilesApp {
             self.open_print();
         }
         self.receive_export();
-        self.print_window(&ctx, &sheets);
+        self.print_window(&ctx, sheets);
         self.app_bar(ui);
         self.control_bar(ui);
         self.status_bar(ui);
@@ -1658,10 +1658,7 @@ impl eframe::App for WinFilesApp {
                         ..Default::default()
                     },
                 },
-                &mut Content {
-                    app: self,
-                    sheets: &sheets,
-                },
+                &mut Content { app: self, sheets },
             );
             if let Some(e) = output.error {
                 self.status = format!("Disposizione dei pannelli non valida ({e}): ripristinata");
