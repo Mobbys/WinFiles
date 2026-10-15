@@ -74,6 +74,8 @@ pub struct WinFilesApp {
     print_dialog: Option<crate::printing::PrintDialog>,
     /// Le scelte dell'ultima stampa, per la prossima.
     last_print: crate::printing::PrintDialog,
+    /// Le stampanti del sistema, lette in un thread a parte.
+    printer_scan: crate::printing::PrinterScan,
     /// La finestra "Calibra la stampante" aperta.
     calibrate: Option<crate::calibrate::CalibrateDialog>,
     /// Aprire la finestra della calibrazione al prossimo fotogramma.
@@ -169,6 +171,7 @@ impl WinFilesApp {
             want_print: false,
             print_dialog: None,
             last_print,
+            printer_scan: crate::printing::PrinterScan::default(),
             batch_pdf,
             batch_running: false,
             calibrate: None,
@@ -187,6 +190,10 @@ impl WinFilesApp {
             nesting_scale: None,
             layout_cache: None,
         };
+        // Le stampanti si cercano subito, così Stampa le trova già pronte.
+        if app.batch_pdf.is_none() && app.batch_calibration.is_none() {
+            app.scan_printers();
+        }
         // Un file .winfiles sulla riga di comando (doppio clic in Esplora file) apre il lavoro;
         // gli altri file e cartelle si aggiungono all'elenco.
         let (projects, files): (Vec<PathBuf>, Vec<PathBuf>) =
@@ -269,6 +276,25 @@ impl WinFilesApp {
         }
     }
 
+    /// Rilegge le stampanti in un thread a parte; arrivano con [`Self::receive_printers`].
+    fn scan_printers(&mut self) {
+        let wake = self.ctx.clone();
+        self.printer_scan.start(move || wake.request_repaint());
+    }
+
+    /// Porta le stampanti appena lette nelle finestre aperte.
+    fn receive_printers(&mut self) {
+        let Some(list) = self.printer_scan.poll() else {
+            return;
+        };
+        if let Some(d) = self.print_dialog.as_mut() {
+            d.set_printers(list.clone());
+        }
+        if let Some(d) = self.calibrate.as_mut() {
+            d.set_printers(list);
+        }
+    }
+
     /// Apre la finestra Stampa, se si può stampare.
     fn open_print(&mut self) {
         if self.export.is_some() || self.print_dialog.is_some() {
@@ -283,8 +309,9 @@ impl WinFilesApp {
             return;
         }
         let mut dialog = self.last_print.clone();
-        dialog.refresh();
+        dialog.set_printers(self.printer_scan.list());
         self.print_dialog = Some(dialog);
+        self.scan_printers();
     }
 
     /// La finestra Stampa aperta; alla conferma i fogli scelti vanno alla stampante.
@@ -295,7 +322,8 @@ impl WinFilesApp {
         let Some(dialog) = self.print_dialog.as_mut() else {
             return;
         };
-        let Some(answer) = dialog.show(ctx, &title, count, current, &self.calibrations) else {
+        let searching = self.printer_scan.searching();
+        let Some(answer) = dialog.show(ctx, &title, count, current, &self.calibrations, searching) else {
             return;
         };
         if let Some(d) = self.print_dialog.take() {
@@ -324,9 +352,11 @@ impl WinFilesApp {
         }
         let paper = self.project.print.paper;
         self.calibrate = Some(crate::calibrate::CalibrateDialog::new(
+            self.printer_scan.list(),
             self.last_print.printer.clone(),
             paper,
         ));
+        self.scan_printers();
     }
 
     /// La finestra della calibrazione aperta.
@@ -334,7 +364,8 @@ impl WinFilesApp {
         let Some(dialog) = self.calibrate.as_mut() else {
             return;
         };
-        let Some(action) = dialog.show(ctx, &self.calibrations, &mut self.thumbs) else {
+        let searching = self.printer_scan.searching();
+        let Some(action) = dialog.show(ctx, &self.calibrations, &mut self.thumbs, searching) else {
             return;
         };
         use crate::calibrate::Action;
@@ -1950,6 +1981,7 @@ impl eframe::App for WinFilesApp {
             }
         }
         self.receive_export();
+        self.receive_printers();
         self.print_window(&ctx, sheets);
         self.calibrate_window(&ctx);
         self.app_bar(ui);

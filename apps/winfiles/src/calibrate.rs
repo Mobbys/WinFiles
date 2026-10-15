@@ -283,28 +283,27 @@ pub struct CalibrateDialog {
 }
 
 impl CalibrateDialog {
-    pub fn new(printer: Option<String>, paper: Paper) -> Self {
+    /// La finestra con le stampanti già lette (possono arrivare dopo, con [`Self::set_printers`]).
+    pub fn new(printers: Vec<Printer>, printer: Option<String>, paper: Paper) -> Self {
         let mut d = Self {
-            printers: craft_print::printers(),
+            printers: Vec::new(),
             printer,
             paper,
             with_current: true,
             measured: CalibrationSheet::new(paper).expected(),
             measured_for: paper,
         };
-        let there = d
-            .printer
-            .as_ref()
-            .is_some_and(|name| d.printers.iter().any(|p| &p.name == name));
-        if !there {
-            d.printer = d
-                .printers
-                .iter()
-                .find(|p| p.default)
-                .or(d.printers.first())
-                .map(|p| p.name.clone());
-        }
+        d.set_printers(printers);
         d
+    }
+
+    /// Le stampanti del sistema: tiene la scelta se c'è ancora, altrimenti la predefinita.
+    pub fn set_printers(&mut self, printers: Vec<Printer>) {
+        // Un elenco vuoto (non ancora letto, o lo spooler fermo) non fa dimenticare la scelta.
+        if !printers.is_empty() {
+            self.printer = crate::printing::pick(&printers, self.printer.take());
+        }
+        self.printers = printers;
     }
 
     /// La correzione salvata per la stampante scelta.
@@ -360,6 +359,7 @@ impl CalibrateDialog {
         ctx: &egui::Context,
         calibrations: &BTreeMap<String, Calibration>,
         thumbs: &mut crate::thumbs::Thumbnails,
+        searching: bool,
     ) -> Option<Action> {
         let t = Tokens::get(ctx);
         if self.measured_for != self.paper {
@@ -394,7 +394,9 @@ impl CalibrateDialog {
                         .spacing([14.0, 10.0])
                         .show(ui, |ui| {
                             dim_label(ui, "Stampante");
-                            if self.printers.is_empty() {
+                            if self.printers.is_empty() && searching {
+                                ui.label(egui::RichText::new("Cerco le stampanti…").color(t.text));
+                            } else if self.printers.is_empty() {
                                 ui.label(egui::RichText::new("Nessuna stampante trovata").color(t.warning));
                             } else {
                                 egui::ComboBox::from_id_salt("calibra-stampante")

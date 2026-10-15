@@ -2,6 +2,7 @@
 //! stampano alla misura vera (100%), come nel PDF; la riduzione all'area stampabile è una scelta.
 
 use std::collections::BTreeMap;
+use std::sync::mpsc::{Receiver, channel};
 
 use craft_print::{Duplex, Job, Printer, Scaling};
 use egui::vec2;
@@ -59,23 +60,78 @@ pub enum Answer {
     Cancel,
 }
 
-impl PrintDialog {
-    /// Rilegge le stampanti del sistema e tiene la scelta precedente se c'è ancora, altrimenti la
-    /// predefinita.
-    pub fn refresh(&mut self) {
-        self.printers = craft_print::printers();
-        let still_there = self
-            .printer
-            .as_ref()
-            .is_some_and(|name| self.printers.iter().any(|p| &p.name == name));
-        if !still_there {
-            self.printer = self
-                .printers
-                .iter()
-                .find(|p| p.default)
-                .or(self.printers.first())
-                .map(|p| p.name.clone());
+/// La stampante da proporre fra `printers`: `wanted` se c'è ancora, altrimenti la predefinita del
+/// sistema, altrimenti la prima.
+pub fn pick(printers: &[Printer], wanted: Option<String>) -> Option<String> {
+    match wanted {
+        Some(name) if printers.iter().any(|p| p.name == name) => Some(name),
+        _ => printers
+            .iter()
+            .find(|p| p.default)
+            .or(printers.first())
+            .map(|p| p.name.clone()),
+    }
+}
+
+/// Le stampanti del sistema, lette in un thread a parte. Su Windows per ogni stampante si chiede
+/// al driver se stampa fronte e retro, e con stampanti di rete o spente la risposta può tardare
+/// secondi: letta qui, bloccava la finestra e il clic su Stampa sembrava perso.
+#[derive(Default)]
+pub struct PrinterScan {
+    /// L'ultimo elenco letto; `None` finché non ne è arrivato nessuno.
+    list: Option<Vec<Printer>>,
+    rx: Option<Receiver<Vec<Printer>>>,
+}
+
+impl PrinterScan {
+    /// Rilegge le stampanti, se non le sta già leggendo; `wake` ridisegna quando arrivano.
+    pub fn start(&mut self, wake: impl Fn() + Send + 'static) {
+        if self.rx.is_some() {
+            return;
         }
+        let (tx, rx) = channel();
+        let spawned = std::thread::Builder::new()
+            .name("stampanti".into())
+            .spawn(move || {
+                // Se l'app è già chiusa non c'è più nessuno a cui dirlo.
+                let _ = tx.send(craft_print::printers());
+                wake();
+            });
+        match spawned {
+            Ok(_) => self.rx = Some(rx),
+            // Senza thread si legge qui, bloccando un momento la finestra.
+            Err(_) => self.list = Some(craft_print::printers()),
+        }
+    }
+
+    /// Il nuovo elenco, la volta che arriva.
+    pub fn poll(&mut self) -> Option<Vec<Printer>> {
+        let list = self.rx.as_ref()?.try_recv().ok()?;
+        self.rx = None;
+        self.list = Some(list.clone());
+        Some(list)
+    }
+
+    /// L'ultimo elenco letto, vuoto se non ne è ancora arrivato nessuno.
+    pub fn list(&self) -> Vec<Printer> {
+        self.list.clone().unwrap_or_default()
+    }
+
+    /// Sta ancora leggendo le stampanti.
+    pub fn searching(&self) -> bool {
+        self.rx.is_some()
+    }
+}
+
+impl PrintDialog {
+    /// Le stampanti del sistema: tiene la scelta precedente se c'è ancora, altrimenti la
+    /// predefinita.
+    pub fn set_printers(&mut self, printers: Vec<Printer>) {
+        // Un elenco vuoto (non ancora letto, o lo spooler fermo) non fa dimenticare la scelta.
+        if !printers.is_empty() {
+            self.printer = pick(&printers, self.printer.take());
+        }
+        self.printers = printers;
     }
 
     fn chosen(&self) -> Option<&Printer> {
@@ -127,6 +183,7 @@ impl PrintDialog {
         count: usize,
         current: usize,
         calibrations: &BTreeMap<String, Calibration>,
+        searching: bool,
     ) -> Option<Answer> {
         let t = Tokens::get(ctx);
         let mut answer = None;
@@ -140,7 +197,9 @@ impl PrintDialog {
                 .show(ui, |ui| {
                     dim_label(ui, "Stampante");
                     ui.vertical(|ui| {
-                        if self.printers.is_empty() {
+                        if self.printers.is_empty() && searching {
+                            ui.label(egui::RichText::new("Cerco le stampanti…").color(t.text));
+                        } else if self.printers.is_empty() {
                             ui.label(
                                 egui::RichText::new("Nessuna stampante trovata").color(t.warning),
                             );
@@ -340,5 +399,40 @@ mod tests {
         assert_eq!(job.duplex, Some(Duplex::LongEdge));
         assert_eq!(job.scaling, Scaling::ShrinkToFit);
         assert_eq!(job.title, "Ordine 124");
+    }
+
+    #[test]
+    fn la_stampante_scelta_resta_se_c_e_ancora() {
+        let list = |names: &[(&str, bool)]| -> Vec<Printer> {
+            names
+                .iter()
+                .map(|(n, d)| Printer {
+                    name: (*n).into(),
+                    default: *d,
+                    two_sided: None,
+                })
+                .collect()
+        };
+        let two = list(&[("Plotter A3", false), ("Ufficio", true)]);
+        assert_eq!(
+            pick(&two, Some("Plotter A3".into())).as_deref(),
+            Some("Plotter A3")
+        );
+        // Sparita: la predefinita; senza predefinita, la prima; senza stampanti, nessuna.
+        assert_eq!(pick(&two, Some("Vecchia".into())).as_deref(), Some("Ufficio"));
+        assert_eq!(
+            pick(&list(&[("B", false), ("C", false)]), None).as_deref(),
+            Some("B")
+        );
+        assert_eq!(pick(&[], Some("Ufficio".into())), None);
+        // L'elenco arriva dopo l'apertura della finestra: la scelta di prima si ritrova.
+        let mut d = PrintDialog {
+            printer: Some("Plotter A3".into()),
+            ..Default::default()
+        };
+        d.set_printers(Vec::new());
+        assert_eq!(d.printer.as_deref(), Some("Plotter A3"));
+        d.set_printers(two);
+        assert_eq!(d.printer.as_deref(), Some("Plotter A3"));
     }
 }
