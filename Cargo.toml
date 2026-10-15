@@ -2,6 +2,8 @@
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/winfiles", "xtask"]
+# Copie modificate di librerie esterne, fuori dai controlli del workspace (vedi vendor/README.md).
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.0"
@@ -43,6 +45,9 @@ egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
 # Finestre di sistema per aprire e salvare il progetto (Fase 1): su Windows usa il dialogo
 # comune di Esplora file, su Linux il portale XDG. Licenza MIT.
 rfd = "0.17"
+# Appunti con testo e HTML insieme ("Copia tabella", Fase 6): Excel e Word incollano la tabella
+# formattata, il Blocco note il testo. Già usato da egui-winit. Licenza MIT/Apache.
+arboard = "3.6"
 # Pannelli agganciabili e icone delle app ArtCraft, a commit fissato (vedi CLAUDE.md).
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "457a078809690994b22debdffb703ff36d3129df", features = ["serde"] }
 # Stampa (Fase 5): il PDF dei fogli allo spooler, alla misura vera. Su Windows nel processo, senza
@@ -63,3 +68,8 @@ unreachable = "deny"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# hayro-interpret 0.8.0 con la sovrastampa simulata (ADR 0011): finché non è nella versione
+# ufficiale, la copia modificata in vendor/.
+[patch.crates-io]
+hayro-interpret = { path = "vendor/hayro-interpret" }

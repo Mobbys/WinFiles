@@ -26,6 +26,7 @@ mod scan;
 mod shell;
 mod sketch;
 mod summary;
+mod table;
 mod theme;
 mod thumbs;
 

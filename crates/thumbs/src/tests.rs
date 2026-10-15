@@ -30,11 +30,17 @@ fn png(w: u32, h: u32) -> Vec<u8> {
 
 /// PDF di una pagina 200 × 100 pt con un rettangolo nero sulla metà sinistra.
 fn pdf() -> Vec<u8> {
-    let content = "0 0 0 rg 0 0 100 100 re f";
+    pdf_page("0 0 0 rg 0 0 100 100 re f", 200, "")
+}
+
+/// PDF di una pagina larga `width` pt e alta 100 con il contenuto e le risorse dati.
+fn pdf_page(content: &str, width: u32, resources: &str) -> Vec<u8> {
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >>".to_string(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} 100] /Resources << {resources} >> /Contents 4 0 R >>"
+        ),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
@@ -125,4 +131,40 @@ fn pages_beyond_the_last_are_errors_not_crashes() {
 fn un_file_mancante_si_dice_in_italiano() {
     let e = render(std::path::Path::new("/non/esiste/x.jpg"), FileKind::Image, 0, 64).unwrap_err();
     assert_eq!(e.to_string(), "file non trovato");
+}
+
+#[test]
+fn la_sovrastampa_si_vede_come_in_stampa() {
+    // Ciano a sinistra (0-200), magenta a destra (100-300) sopra; un quadrato bianco sul ciano.
+    let draw = |gs: &str| {
+        format!("1 0 0 0 k 0 0 200 100 re f {gs} 0 1 0 0 k 100 0 200 100 re f 0 0 0 0 k 20 20 40 40 re f")
+    };
+    let resources = "/ExtGState << /Sovra << /OP true /op true /OPM 1 >> >>";
+    let px = |t: &crate::Thumb, x: u32| {
+        let i = ((50 * t.width + x) * 4) as usize;
+        (t.rgba[i], t.rgba[i + 1], t.rgba[i + 2])
+    };
+    // Senza sovrastampa il magenta copre il ciano e il bianco copre tutto.
+    let f = Temp::new("coprente.pdf", &pdf_page(&draw(""), 300, resources));
+    let t = render(&f.0, FileKind::Pdf, 0, 300).unwrap();
+    let (r, g, b) = px(&t, 150);
+    assert!(r > 200 && g < 80 && b > 100, "magenta coprente: {:?}", (r, g, b));
+    assert!(
+        px(&t, 40).0 > 240 && px(&t, 40).1 > 240,
+        "bianco coprente: {:?}",
+        px(&t, 40)
+    );
+    // In sovrastampa ciano e magenta si sommano in blu, e il bianco sparisce.
+    let f = Temp::new("sovrastampa.pdf", &pdf_page(&draw("/Sovra gs"), 300, resources));
+    let t = render(&f.0, FileKind::Pdf, 0, 300).unwrap();
+    let (r, g, b) = px(&t, 150);
+    assert!(
+        r < 80 && g < 120 && b > 120,
+        "ciano e magenta in sovrastampa: {:?}",
+        (r, g, b)
+    );
+    assert_eq!(px(&t, 40), px(&t, 90), "il bianco in sovrastampa sparisce");
+    // Il magenta da solo resta magenta.
+    let (r, g, _) = px(&t, 250);
+    assert!(r > 200 && g < 80);
 }

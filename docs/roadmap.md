@@ -10,8 +10,8 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 | 2 | Decodificatori in processo separato, profili ICC, cache su disco | Corpus completo senza crash | Da fare |
 | 3 | Griglia, elenco e nesting su A4 e A3, intestazioni cartella, export PDF | Parità con la stampa attuale, ±0,5 mm | In corso: griglia, elenco, nesting, riepilogo ed export PDF pronti |
 | 4 | Pannelli agganciabili, anteprima, note, ordine a trascinamento, filtri | Un lavoro vero fatto solo con la nuova app | In corso: pannelli, note, stampa sì/no per file e pagina, ricerca, filtri e ordine a trascinamento pronti |
-| 5 | Stampa Windows a scala 100%, area stampabile del driver, calibrazione | A4 e A3 esatti su due stampanti | Stampa diretta ([ADR 0009](adr/0009-stampa-diretta.md)) e calibrazione ([ADR 0010](adr/0010-calibrazione-stampante.md)) pronte; manca la prova su due stampanti vere |
-| 6 | CSV, appunti, modelli salvati, segni di taglio, miniature vettoriali, HEIC | Ogni extra con i suoi criteri | Da fare |
+| 5 | Stampa Windows a scala 100%, area stampabile del driver, calibrazione | A4 e A3 esatti su due stampanti | Fatta: stampa diretta ([ADR 0009](adr/0009-stampa-diretta.md)) e calibrazione ([ADR 0010](adr/0010-calibrazione-stampante.md)), A4 e A3 esatti provati da Michel |
+| 6 | CSV, appunti, modelli salvati, segni di taglio, miniature vettoriali, HEIC | Ogni extra con i suoi criteri | In corso: CSV, appunti e anteprima della sovrastampa pronti |
 | 7 | Installer MSI, aggiornamenti, beta in parallelo con WinFile 4.9 | Liste Anteprime 4.9 messa a riposo | Da fare |
 | 8 | Modulo Immagini: dati tecnici, calcolo DPI, ruota, specchia, ritaglia, RAW, HEIC | Tutto ciò che fa oggi Controllo Immagini | Da fare |
 | 9 | Modulo PDF: unisci, dividi, ruota, elimina, ritaglia, margini, adatta ad A4 o A3 | WinFile 4.9 messo a riposo | Da fare |
@@ -61,3 +61,12 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Cerca per nome o cartella (Ctrl+F, Esc svuota) e filtra per tipo nell'elenco dei file: cambia solo quello che si vede, non la stampa
 - [x] Pagine dei PDF nell'elenco: freccia per aprirle, una riga per pagina con la sua casella di stampa e la nota; la ricerca trova le singole pagine ("catalogo 3", "pag. 12", testo delle note) e il clic porta l'anteprima al foglio della pagina
 - [x] Ordine a trascinamento nell'elenco: i file dentro la loro cartella (anche più file scelti insieme), le cartelle intere
+
+## Fase 6 in dettaglio
+- [x] Esporta tabella CSV (File): una riga per pagina in stampa, base e altezza in colonne, m², nota; per Excel in italiano
+- [x] Copia tabella (File, Ctrl+Maiusc+C; Ctrl+C con file scelti; clic destro): HTML con cartelle e totali per Excel, Word e posta, più testo a tabulazioni
+- [x] Anteprima della sovrastampa nelle miniature di PDF e AI ([ADR 0011](adr/0011-anteprima-sovrastampa.md))
+- [ ] Modelli di impaginazione salvati
+- [ ] Segni di taglio
+- [ ] Miniature vettoriali nel PDF
+- [ ] HEIC

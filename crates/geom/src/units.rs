@@ -24,7 +24,7 @@ impl Unit {
     }
 
     /// Millimetri in un'unità.
-    const fn mm(self) -> f64 {
+    pub const fn mm(self) -> f64 {
         match self {
             Unit::Mm => 1.0,
             Unit::Cm => 10.0,
@@ -32,7 +32,7 @@ impl Unit {
     }
 
     /// Decimali mostrati: un decimo di millimetro basta in entrambe le unità.
-    const fn decimals(self) -> usize {
+    pub const fn decimals(self) -> usize {
         match self {
             Unit::Mm => 1,
             Unit::Cm => 2,

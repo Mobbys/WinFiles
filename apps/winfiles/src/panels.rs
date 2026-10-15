@@ -313,6 +313,8 @@ enum FileAction {
     PrintPage(usize, usize, bool),
     /// Apre o chiude le pagine di un file nell'elenco.
     Expand(std::path::PathBuf),
+    /// Copia negli appunti la tabella dei file scelti.
+    CopyMarked,
 }
 
 /// Cosa fare dell'intestazione di una cartella nell'elenco.
@@ -810,6 +812,18 @@ impl WinFilesApp {
                                     action = Some(FileAction::Reveal(path.clone()));
                                     ui.close();
                                 }
+                                let label = match count {
+                                    1 => "Copia negli appunti".to_string(),
+                                    n => format!("Copia negli appunti i {n} file scelti"),
+                                };
+                                if ui
+                                    .button(label)
+                                    .on_hover_text("Nome, pagine, misure, m² e note, da incollare in Excel o in una mail")
+                                    .clicked()
+                                {
+                                    action = Some(FileAction::CopyMarked);
+                                    ui.close();
+                                }
                                 ui.separator();
                                 let on = state != PrintState::All;
                                 let label = match (count, on) {
@@ -1021,6 +1035,10 @@ impl WinFilesApp {
                 if let Err(e) = crate::shell::open(&path) {
                     self.status = format!("Non riesco ad aprire {}: {e}", path.display());
                 }
+            }
+            Some(FileAction::CopyMarked) => {
+                let marked = self.marked.clone();
+                self.copy_table(Some(&marked));
             }
             Some(FileAction::Reveal(path)) => {
                 if let Err(e) = crate::shell::reveal(&path) {

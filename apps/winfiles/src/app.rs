@@ -507,6 +507,82 @@ impl WinFilesApp {
         } else if pressed(Modifiers::COMMAND, Key::F) {
             self.focus_search = true;
         }
+        // Ctrl+C arriva come evento Copia (con o senza Maiusc). Fuori dai campi di testo copia la
+        // tabella: dei file scelti, o di tutto il lavoro con Maiusc.
+        let copy = ctx.input(|i| {
+            i.events
+                .iter()
+                .any(|e| matches!(e, egui::Event::Copy))
+                .then_some(i.modifiers.shift)
+        });
+        if let Some(all) = copy
+            && !ctx.egui_wants_keyboard_input()
+        {
+            if all || self.marked.is_empty() {
+                self.copy_table(None);
+            } else {
+                let marked = self.marked.clone();
+                self.copy_table(Some(&marked));
+            }
+        }
+    }
+
+    /// Copia negli appunti la tabella delle pagine in stampa (dei file `only`, se c'è): HTML per
+    /// Excel, Word e la posta, testo a tabulazioni per tutto il resto.
+    pub(crate) fn copy_table(&mut self, only: Option<&BTreeSet<usize>>) {
+        let unit = self.project.unit;
+        let lines = crate::table::lines(&self.project, only);
+        if lines.is_empty() {
+            self.status = "Nessuna pagina in stampa da copiare".into();
+            return;
+        }
+        let text = crate::table::tsv(&lines, unit);
+        let html = crate::table::html(&lines, unit);
+        let rich = arboard::Clipboard::new().and_then(|mut c| c.set_html(html, Some(text.clone())));
+        if rich.is_err() {
+            // Senza gli appunti di sistema restano quelli di egui, solo testo.
+            self.ctx.copy_text(text);
+        }
+        let n = lines.len();
+        self.status = format!(
+            "Copiata negli appunti la tabella di {n} {}: si incolla in Excel, Word o in una mail",
+            if n == 1 { "pagina" } else { "pagine" }
+        );
+    }
+
+    /// Salva la tabella delle pagine in stampa in un CSV per Excel.
+    fn export_csv(&mut self) {
+        let lines = crate::table::lines(&self.project, None);
+        if lines.is_empty() {
+            self.status = "Nessuna pagina in stampa da esportare".into();
+            return;
+        }
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter("CSV", &["csv"])
+            .set_title("Esporta la tabella in CSV")
+            .set_file_name(format!("{}.csv", self.document_name()));
+        if let Some(dir) = self.path.as_deref().and_then(std::path::Path::parent) {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(mut path) = dialog.save_file() else {
+            return;
+        };
+        if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("csv")) {
+            path.as_mut_os_string().push(".csv");
+        }
+        let text = crate::table::csv(&lines, self.project.unit);
+        let mut tmp = path.clone().into_os_string();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
+        let written = std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &path));
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.status = match written {
+            Ok(()) => format!("Esportata la tabella in {name}: {} righe", lines.len()),
+            Err(e) => format!("Non riesco a scrivere {name}: {e}"),
+        };
     }
 
     /// Sceglie un file con un clic: da solo, oppure con Ctrl lo aggiunge o lo toglie e con Maiusc
@@ -744,6 +820,32 @@ impl WinFilesApp {
                                 ui.close();
                                 self.want_print = true;
                             }
+                            ui.separator();
+                            let has_files = !self.project.files.is_empty();
+                            if ui
+                                .add_enabled(has_files, egui::Button::new("Esporta tabella CSV…"))
+                                .on_hover_text(
+                                    "Una riga per pagina in stampa, con misure e m², da aprire in Excel",
+                                )
+                                .clicked()
+                            {
+                                ui.close();
+                                self.export_csv();
+                            }
+                            if ui
+                                .add_enabled(
+                                    has_files,
+                                    egui::Button::new("Copia tabella").shortcut_text("Ctrl+Maiusc+C"),
+                                )
+                                .on_hover_text(
+                                    "Da incollare in Excel, Word o in una mail, con cartelle e totali",
+                                )
+                                .clicked()
+                            {
+                                ui.close();
+                                self.copy_table(None);
+                            }
+                            ui.separator();
                             if ui
                                 .add_enabled(
                                     self.export.is_none(),
