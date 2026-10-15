@@ -1,5 +1,6 @@
 # Pubblica una versione di WinFiles (ADR 0014): si parte da un tag "vX.Y.Z" uguale alla versione
-# del workspace in Cargo.toml. Il rilascio su GitHub contiene l'installer MSI e l'eseguibile
+# del workspace in Cargo.toml, spinto con git o creato da "Draft a new release" su GitHub (in quel
+# caso il rilascio esiste già e qui gli si aggiungono i file e le novità). Il rilascio su GitHub contiene l'installer MSI e l'eseguibile
 # portatile; le note sono docs/novita/X.Y.Z.md. Le copie installate lo trovano da sole.
 name: Rilascio
 
@@ -52,10 +53,17 @@ jobs:
           installer/crea-msi.sh windows/winfiles.exe "WinFiles-${version}.msi"
           cp windows/winfiles.exe "WinFiles-${version}-portatile.exe"
       - name: Rilascio su GitHub
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=${GITHUB_REF_NAME#v}
-          gh release create "${GITHUB_REF_NAME}" --title "WinFiles ${version}" \
-            --notes-file "docs/novita/${version}.md" \
-            "WinFiles-${version}.msi" "WinFiles-${version}-portatile.exe"
+          files=("WinFiles-${version}.msi" "WinFiles-${version}-portatile.exe")
+          if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" --title "WinFiles ${version}" \
+              --notes-file "docs/novita/${version}.md"
+            gh release upload "${GITHUB_REF_NAME}" "${files[@]}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" --title "WinFiles ${version}" \
+              --notes-file "docs/novita/${version}.md" "${files[@]}"
+          fi
