@@ -30,16 +30,22 @@ mod summary;
 mod table;
 mod theme;
 mod thumbs;
+mod update;
 
 fn main() -> eframe::Result {
     // Le ultime scelte: pannelli, tema, impaginazione, stampante e misura della finestra.
     let prefs = prefs::load();
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title(concat!("WinFiles ", env!("CARGO_PKG_VERSION")))
+        .with_inner_size(prefs.window.unwrap_or([1280.0, 800.0]))
+        .with_min_inner_size(prefs::MIN_WINDOW)
+        .with_maximized(prefs.maximized);
+    // L'icona della finestra e della barra delle applicazioni (assets/icon, genera-icona.py).
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon/icona-256.png")) {
+        viewport = viewport.with_icon(icon);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(concat!("WinFiles ", env!("CARGO_PKG_VERSION")))
-            .with_inner_size(prefs.window.unwrap_or([1280.0, 800.0]))
-            .with_min_inner_size(prefs::MIN_WINDOW)
-            .with_maximized(prefs.maximized),
+        viewport,
         #[cfg(feature = "opengl")]
         renderer: eframe::Renderer::Glow,
         ..Default::default()

@@ -2,7 +2,7 @@
 //! agganciabili su schede arrotondate e barra di stato.
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use craft_ui::docking::{Action, DockArea, DockContent, Layout, PanelLimits};
 use egui::{Align, Color32, Rect, Sense, Stroke, Vec2, vec2};
@@ -76,6 +76,10 @@ pub struct WinFilesApp {
     last_print: crate::printing::PrintDialog,
     /// Le stampanti del sistema, lette in un thread a parte.
     printer_scan: crate::printing::PrinterScan,
+    /// Il controllo degli aggiornamenti e l'installer scaricato.
+    updater: crate::update::Updater,
+    /// La finestra con le novità della versione nuova è aperta.
+    show_notes: bool,
     /// La finestra "Calibra la stampante" aperta.
     calibrate: Option<crate::calibrate::CalibrateDialog>,
     /// Aprire la finestra della calibrazione al prossimo fotogramma.
@@ -172,6 +176,8 @@ impl WinFilesApp {
             print_dialog: None,
             last_print,
             printer_scan: crate::printing::PrinterScan::default(),
+            updater: crate::update::Updater::default(),
+            show_notes: false,
             batch_pdf,
             batch_running: false,
             calibrate: None,
@@ -193,6 +199,8 @@ impl WinFilesApp {
         // Le stampanti si cercano subito, così Stampa le trova già pronte.
         if app.batch_pdf.is_none() && app.batch_calibration.is_none() {
             app.scan_printers();
+            // Come la 4.9: all'avvio si chiede a GitHub se c'è una versione nuova, senza aspettare.
+            app.check_updates(false);
         }
         // Un file .winfiles sulla riga di comando (doppio clic in Esplora file) apre il lavoro;
         // gli altri file e cartelle si aggiungono all'elenco.
@@ -280,6 +288,161 @@ impl WinFilesApp {
     fn scan_printers(&mut self) {
         let wake = self.ctx.clone();
         self.printer_scan.start(move || wake.request_repaint());
+    }
+
+    /// Chiede l'ultima versione pubblicata; `asked` se l'ha chiesto chi usa WinFiles.
+    fn check_updates(&mut self, asked: bool) {
+        let wake = self.ctx.clone();
+        self.updater.check(asked, move || wake.request_repaint());
+    }
+
+    /// La barra sotto i comandi che annuncia la versione nuova.
+    fn update_bar(&mut self, ui: &mut egui::Ui) {
+        use crate::update::State;
+        self.updater.poll();
+        let installed = crate::update::installed();
+        let (text, busy) = match &self.updater.state {
+            State::Available(r) if !self.updater.dismissed => (
+                format!(
+                    "È disponibile WinFiles {} (questa è la {}).",
+                    r.version,
+                    crate::update::Version::current()
+                ),
+                false,
+            ),
+            State::Downloading(r) => (format!("Scarico WinFiles {}…", r.version), true),
+            State::Ready(r, _) if !self.updater.dismissed => (
+                format!(
+                    "WinFiles {} è pronto: si installa quando chiudi WinFiles.",
+                    r.version
+                ),
+                false,
+            ),
+            State::Checking if self.updater.asked => ("Controllo gli aggiornamenti…".to_string(), true),
+            State::UpToDate if self.updater.asked && !self.updater.dismissed => (
+                format!("WinFiles {} è aggiornato.", crate::update::Version::current()),
+                false,
+            ),
+            State::Failed(e) if self.updater.asked && !self.updater.dismissed => (e.clone(), false),
+            _ => return,
+        };
+        let t = Tokens::get(ui.ctx());
+        let frame = egui::Frame::NONE
+            .fill(t.panel)
+            .stroke(egui::Stroke::new(1.0, t.border))
+            .corner_radius(t.card_radius)
+            .inner_margin(egui::Margin::symmetric(12, 4))
+            .outer_margin(egui::Margin {
+                left: 10,
+                right: 10,
+                top: 0,
+                bottom: 6,
+            });
+        egui::Panel::top("barra-aggiornamenti")
+            .frame(egui::Frame::NONE.fill(t.app_bar))
+            .show(ui, |ui| {
+                frame.show(ui, |ui| {
+                    ui.set_min_height(30.0);
+                    ui.horizontal_centered(|ui| {
+                        if busy {
+                            ui.add(egui::Spinner::new().size(13.0).color(t.accent));
+                        }
+                        ui.label(
+                            egui::RichText::new(text)
+                                .font(semibold(13.0))
+                                .color(t.text_strong),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if !busy
+                                && crate::icons::button(ui, "x", "Più tardi", false, true, 26.0).clicked()
+                            {
+                                self.updater.dismissed = true;
+                            }
+                            let primary = |label: &str| {
+                                egui::Button::new(
+                                    egui::RichText::new(label)
+                                        .font(semibold(13.0))
+                                        .color(t.on_primary),
+                                )
+                                .fill(t.primary)
+                                .min_size(vec2(96.0, 26.0))
+                            };
+                            match self.updater.state.clone() {
+                                State::Available(r) => {
+                                    let label = if installed && r.msi.is_some() {
+                                        "Aggiorna"
+                                    } else {
+                                        "Scarica"
+                                    };
+                                    if ui.add(primary(label)).clicked() {
+                                        if installed && r.msi.is_some() {
+                                            let wake = self.ctx.clone();
+                                            self.updater.download(move || wake.request_repaint());
+                                        } else if let Err(e) = crate::shell::open(Path::new(&r.page)) {
+                                            self.status =
+                                                format!("Non riesco ad aprire la pagina del rilascio: {e}");
+                                        }
+                                    }
+                                    if !r.notes.trim().is_empty() && ui.button("Novità").clicked() {
+                                        self.show_notes = true;
+                                    }
+                                }
+                                State::Ready(..) => {
+                                    if ui.add(primary("Riavvia ora")).clicked() {
+                                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                                    }
+                                    if ui.button("Novità").clicked() {
+                                        self.show_notes = true;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        });
+                    });
+                });
+            });
+    }
+
+    /// Le novità della versione annunciata.
+    fn notes_window(&mut self, ctx: &egui::Context) {
+        use crate::update::State;
+        let (State::Available(r) | State::Downloading(r) | State::Ready(r, _)) = &self.updater.state else {
+            self.show_notes = false;
+            return;
+        };
+        if !self.show_notes {
+            return;
+        }
+        let t = Tokens::get(ctx);
+        let title = format!("Novità di WinFiles {}", r.version);
+        let notes = r.notes.clone();
+        let mut open = true;
+        egui::Window::new(title)
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(460.0)
+            .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                    // Le note sono il Markdown del rilascio: titoli in grassetto, elenchi con il pallino.
+                    for line in notes.lines() {
+                        let line = line.trim_end().replace("**", "");
+                        let text = if let Some(title) = line.strip_prefix('#') {
+                            egui::RichText::new(title.trim_start_matches('#').trim())
+                                .font(semibold(14.0))
+                                .color(t.text_strong)
+                        } else if let Some(item) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* "))
+                        {
+                            egui::RichText::new(format!("•  {item}")).size(13.0).color(t.text)
+                        } else {
+                            egui::RichText::new(line).size(13.0).color(t.text)
+                        };
+                        ui.label(text);
+                    }
+                });
+            });
+        self.show_notes = open;
     }
 
     /// Porta le stampanti appena lette nelle finestre aperte.
@@ -958,6 +1121,10 @@ impl WinFilesApp {
                         });
                         ui.menu_button("Aiuto", |ui| {
                             ui.label(concat!("WinFiles ", env!("CARGO_PKG_VERSION")));
+                            if ui.button("Controlla aggiornamenti").clicked() {
+                                ui.close();
+                                self.check_updates(true);
+                            }
                             dim_label(ui, "Trascina file o cartelle nella finestra per aggiungerli.");
                         });
                     });
@@ -1986,6 +2153,7 @@ impl eframe::App for WinFilesApp {
         self.calibrate_window(&ctx);
         self.app_bar(ui);
         self.control_bar(ui);
+        self.update_bar(ui);
         self.status_bar(ui);
         let t = Tokens::get(ui.ctx());
         let frame = egui::Frame::NONE.fill(t.app_bar).inner_margin(egui::Margin {
@@ -2023,7 +2191,30 @@ impl eframe::App for WinFilesApp {
                 self.apply_dock(action);
             }
         });
+        self.notes_window(&ctx);
         self.unsaved_dialog(&ctx);
+    }
+
+    // L'installer scaricato si avvia quando WinFiles si è chiuso (ADR 0014).
+    #[cfg(feature = "opengl")]
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.install_update();
+    }
+
+    #[cfg(not(feature = "opengl"))]
+    fn on_exit(&mut self) {
+        self.install_update();
+    }
+}
+
+impl WinFilesApp {
+    /// Avvia l'installer già scaricato, se c'è.
+    fn install_update(&mut self) {
+        if let crate::update::State::Ready(_, msi) = &self.updater.state
+            && let Err(e) = crate::update::install_after_exit(msi)
+        {
+            eprintln!("Non riesco ad avviare l'aggiornamento: {e}");
+        }
     }
 }
 

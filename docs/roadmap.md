@@ -11,8 +11,8 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 | 3 | Griglia, elenco e nesting su A4 e A3, intestazioni cartella, export PDF | Parità con la stampa attuale, ±0,5 mm | In corso: griglia, elenco, nesting, riepilogo ed export PDF pronti |
 | 4 | Pannelli agganciabili, anteprima, note, ordine a trascinamento, filtri | Un lavoro vero fatto solo con la nuova app | In corso: pannelli, note, stampa sì/no per file e pagina, ricerca, filtri e ordine a trascinamento pronti |
 | 5 | Stampa Windows a scala 100%, area stampabile del driver, calibrazione | A4 e A3 esatti su due stampanti | Fatta: stampa diretta ([ADR 0009](adr/0009-stampa-diretta.md)) e calibrazione ([ADR 0010](adr/0010-calibrazione-stampante.md)), A4 e A3 esatti provati da Michel |
-| 6 | CSV, appunti, modelli salvati, HEIC, AI in PostScript | Ogni extra con i suoi criteri | Fatta: CSV, appunti, sovrastampa, modelli salvati, HEIC, AI in PostScript |
-| 7 | Installer MSI, aggiornamenti, beta in parallelo con WinFile 4.9 | Liste Anteprime 4.9 messa a riposo | Da fare |
+| 6 | CSV, appunti, modelli salvati, HEIC, AI in PostScript | Ogni extra con i suoi criteri | Fatta e provata da Michel: CSV, appunti, sovrastampa, modelli salvati, HEIC, AI in PostScript |
+| 7 | Installer MSI, aggiornamenti, beta in parallelo con WinFile 4.9 | Liste Anteprime 4.9 messa a riposo | In corso: installer, aggiornamenti e rilascio automatico pronti ([ADR 0014](adr/0014-installer-e-aggiornamenti.md)) |
 | 8 | Modulo Immagini: dati tecnici, calcolo DPI, ruota, specchia, ritaglia, RAW, HEIC | Tutto ciò che fa oggi Controllo Immagini | Da fare |
 | 9 | Modulo PDF: unisci, dividi, ruota, elimina, ritaglia, margini, adatta ad A4 o A3 | WinFile 4.9 messo a riposo | Da fare |
 
@@ -71,3 +71,11 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - ~~Miniature vettoriali nel PDF~~: tolte, il PDF resta leggero (Michel, 15 ottobre 2026)
 - [x] Foto HEIC/HEIF di iPhone e Mac: misure, miniature, PDF e stampa ([ADR 0012](adr/0012-foto-heic.md))
 - [x] Miniature degli AI in PostScript ("legacy", file da taglio) e degli EPS di Illustrator senza anteprima ([ADR 0013](adr/0013-ai-in-postscript.md))
+
+## Fase 7 in dettaglio
+- [x] Icona di WinFiles (finestra, eseguibile, menu Start, file `.winfiles`)
+- [x] Installer MSI per l'utente, senza amministratore: menu Start, file `.winfiles`, disinstallazione ([ADR 0014](adr/0014-installer-e-aggiornamenti.md))
+- [x] Aggiornamenti: controllo all'avvio, barra con Novità e Aggiorna, installazione alla chiusura; Aiuto › Controlla aggiornamenti
+- [x] Rilascio automatico da un tag `vX.Y.Z`: MSI, eseguibile portatile e novità su GitHub
+- [ ] Repository pubblico (Michel) e primo rilascio beta
+- [ ] Beta in parallelo con la 4.9 su un lavoro vero

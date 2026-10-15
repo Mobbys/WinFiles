@@ -35,3 +35,4 @@ Il font dell'interfaccia è Inter (SIL OFL); le icone sono Lucide (ISC), le stes
 | `vendor/hayro-interpret/` (codice, copia modificata) | Laurenz Stampfl | https://github.com/LaurenzV/hayro (crate `hayro-interpret` 0.8.0, modifiche in `vendor/README.md`) | Apache-2.0 o MIT (`vendor/hayro-interpret/LICENSE-*`) |
 | `testdata/heic/rgb-strips-96.heic` (foto di prova) | Thomas Braun | https://github.com/tbraun96/heic-rs (`tests/fixtures`, pixel sintetici codificati con `sips` di macOS) | MIT o Apache-2.0 |
 | `testdata/heic/checker-1024.heic` (foto di prova) | Thomas Braun | https://github.com/tbraun96/heic-rs (`tests/fixtures`, pixel sintetici codificati con `sips` di macOS) | MIT o Apache-2.0 |
+| `apps/winfiles/assets/icon/icona.ico`, `icona-256.png` (icona di WinFiles) | Progetto WinFiles | Disegnata da `apps/winfiles/assets/icon/genera-icona.py` (quadrato blu, "W" in Inter SemiBold) | Proprietaria (`LICENSE`); il carattere Inter è OFL-1.1 |

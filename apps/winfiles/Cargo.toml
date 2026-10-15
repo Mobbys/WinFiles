@@ -7,6 +7,8 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
+build = "build.rs"
+
 [[bin]]
 name = "winfiles"
 path = "src/main.rs"
@@ -32,6 +34,10 @@ rfd.workspace = true
 arboard.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+# L'icona e la versione dentro winfiles.exe (Esplora file, barra delle applicazioni): ADR 0014.
+[build-dependencies]
+winresource = "0.1.23"
 
 [lints]
 workspace = true

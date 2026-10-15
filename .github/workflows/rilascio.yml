@@ -1,0 +1,61 @@
+# Pubblica una versione di WinFiles (ADR 0014): si parte da un tag "vX.Y.Z" uguale alla versione
+# del workspace in Cargo.toml. Il rilascio su GitHub contiene l'installer MSI e l'eseguibile
+# portatile; le note sono docs/novita/X.Y.Z.md. Le copie installate lo trovano da sole.
+name: Rilascio
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Eseguibile Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Il tag corrisponde alla versione
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          test "${GITHUB_REF_NAME}" = "v${version}" || {
+            echo "Il tag ${GITHUB_REF_NAME} non corrisponde alla versione ${version} in Cargo.toml"; exit 1; }
+          test -f "docs/novita/${version}.md" || {
+            echo "Mancano le novità: docs/novita/${version}.md"; exit 1; }
+      - run: cargo test --workspace
+      - run: cargo build --release -p winfiles
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winfiles-windows
+          path: target/release/winfiles.exe
+          if-no-files-found: error
+
+  pubblica:
+    name: Installer e rilascio
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: winfiles-windows
+          path: windows
+      - run: sudo apt-get update -q && sudo apt-get install -y -q wixl
+      - name: Installer e copia portatile
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          installer/crea-msi.sh windows/winfiles.exe "WinFiles-${version}.msi"
+          cp windows/winfiles.exe "WinFiles-${version}-portatile.exe"
+      - name: Rilascio su GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          gh release create "${GITHUB_REF_NAME}" --title "WinFiles ${version}" \
+            --notes-file "docs/novita/${version}.md" \
+            "WinFiles-${version}.msi" "WinFiles-${version}-portatile.exe"
