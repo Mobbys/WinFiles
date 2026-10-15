@@ -362,10 +362,19 @@ pub(crate) fn to_screen(origin: Pos2, r: winfiles_geom::Rect, scale: f32) -> Rec
     )
 }
 
+/// "1 pagina", "3 pagine".
+pub(crate) fn pages_text(n: usize) -> String {
+    if n == 1 {
+        "1 pagina".into()
+    } else {
+        format!("{n} pagine")
+    }
+}
+
 /// I totali di una cartella a destra della sua intestazione: file, pagine e area, con le misure
 /// che le caselle dell'impaginazione lasciano vedere.
 pub(crate) fn totals_text(t: &Totals, print: &PrintSettings) -> String {
-    let mut text = format!("{} file · {} pagine", t.files, t.pages);
+    let mut text = format!("{} file · {}", t.files, pages_text(t.pages));
     if let Some(area) = area_text(t.area_full_m2, t.area_m2, print.show_sizes, print.show_trim) {
         text = format!("{text} · {area}");
     }

@@ -1,6 +1,8 @@
 //! Miniature (livello L1): un'immagine RGBA piccola per l'anteprima a schermo. Le immagini si
 //! decodificano con `image`, le foto HEIC con il lettore di PhotoCraft, PDF e AI con `hayro`
-//! (prima pagina), gli EPS mostrano l'anteprima TIFF che hanno dentro, se c'è.
+//! (prima pagina), gli EPS mostrano l'anteprima TIFF che hanno dentro, se c'è. Gli AI in
+//! PostScript ("legacy") e gli EPS di Illustrator senza anteprima si disegnano traducendo le loro
+//! forme in PDF (`legacy_ai`).
 //!
 //! I decodificatori sono codice di terzi che legge file ostili: ogni chiamata ha tetti di memoria
 //! e passa da `catch_unwind`, così un file rovinato dà un errore e non chiude l'app.
@@ -15,6 +17,8 @@ use hayro::vello_cpu::color::palette::css::WHITE;
 use hayro::{PixmapSettings, RenderCache, RenderSettings};
 use image::{DynamicImage, ImageDecoder, ImageReader, Limits};
 use winfiles_model::FileKind;
+
+mod legacy_ai;
 
 /// Memoria massima che un decodificatore di immagini può chiedere (1 GiB).
 const MAX_DECODE_BYTES: u64 = 1024 * 1024 * 1024;
@@ -104,7 +108,14 @@ fn render_inner(path: &Path, kind: FileKind, page: usize, max_side: u32) -> Resu
         return Err(ThumbError::NoPage(page + 1));
     }
     if head.starts_with(&[0xC5, 0xD0, 0xD3, 0xC6]) {
-        return eps_preview(&mut file, head, max_side);
+        return match eps_preview(&mut file, head, max_side) {
+            Err(ThumbError::NoPreview) => illustrator(&mut file, dos_section(head), max_side),
+            other => other,
+        };
+    }
+    if head.starts_with(b"%!") && legacy_ai::is_illustrator(head) {
+        let len = file.metadata()?.len();
+        return illustrator(&mut file, Some((0, len)), max_side);
     }
     if is_heif(head) {
         let len = file.metadata()?.len();
@@ -248,6 +259,37 @@ fn pdf(data: Vec<u8>, page: usize, max_side: u32) -> Result<Thumb, ThumbError> {
         height,
         rgba: pixmap.data_as_u8_slice().to_vec(),
     })
+}
+
+/// Inizio e lunghezza della parte PostScript di un EPS con intestazione DOS.
+fn dos_section(head: &[u8]) -> Option<(u64, u64)> {
+    let field = |at: usize| {
+        head.get(at..at + 4)
+            .and_then(|b| b.try_into().ok())
+            .map(u32::from_le_bytes)
+    };
+    Some((u64::from(field(4)?), u64::from(field(8)?)))
+}
+
+/// Il disegno di un file PostScript di Illustrator (`section`: inizio e lunghezza), tradotto in
+/// PDF; gli altri PostScript non hanno anteprima.
+fn illustrator(
+    file: &mut std::fs::File,
+    section: Option<(u64, u64)>,
+    max_side: u32,
+) -> Result<Thumb, ThumbError> {
+    let (start, len) = section.ok_or(ThumbError::NoPreview)?;
+    if len > MAX_PDF_BYTES {
+        return Err(ThumbError::TooLarge(len));
+    }
+    file.seek(SeekFrom::Start(start))?;
+    let mut ps = Vec::new();
+    file.take(len).read_to_end(&mut ps)?;
+    if !legacy_ai::is_illustrator(&ps) {
+        return Err(ThumbError::NoPreview);
+    }
+    let pdf_data = legacy_ai::to_pdf(&ps).ok_or(ThumbError::NoPreview)?;
+    pdf(pdf_data, 0, max_side)
 }
 
 /// L'anteprima TIFF di un EPS con intestazione DOS (offset a 20, lunghezza a 24).

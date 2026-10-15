@@ -202,3 +202,80 @@ fn foto_heic() {
     );
     assert!(render(&f.0, FileKind::Image, 0, 256).is_err());
 }
+
+/// Un AI in PostScript come lo scrive Illustrator nel formato "Illustrator 3", pagina 200 × 100 pt
+/// spostata in coordinate negative come nei file veri: a sinistra un quadrato ciano con un buco
+/// (tracciato composto), a destra un quadrato in tinta piatta magenta al 50%.
+fn legacy_ai() -> Vec<u8> {
+    let art = "%!PS-Adobe-3.0 \r\n%%Creator: Adobe Illustrator(TM) 3.2\r\n\
+        %%BoundingBox: -300 100 -100 200\r\n%AI3_ColorUsage: Color\r\n\
+        %%IncludeResource: procset Adobe_IllustratorA_AI3 1.0 1\r\n%%EndProlog\r\n%%BeginSetup\r\n\
+        Adobe_IllustratorA_AI3 /initialize get exec\r\n%%EndSetup\r\n0 A\r\nu\r\n*u\r\n\
+        1 0 0 0 k\r\n0 J 0 j 1 w 10 M []0 d\r-290 110 m\r-290 190 L\r-210 190 L\r-210 110 L\r\n\
+        f\r\n1 D\r\n-270 130 m\r\n-230 130 L\r\n-230 170 L\r\n-270 170 L\r\nf\r\n*U\r\n\
+        0 1 0 0 (Rosso marca) 0.5 x\r\n-190 110 m -110 110 l -110 190 l -190 190 l f\r\nU\r\n\
+        (testo ignorato) 0 To 0 0 0 1 k 1 0 0 1 -150 150 Tp TP (Ciao) Tx TO\r\n\
+        %%PageTrailer\r\nshowpage\r\n%%Trailer\r\n%%EOF\r\n";
+    art.as_bytes().to_vec()
+}
+
+#[test]
+fn ai_in_postscript_si_disegna() {
+    let f = Temp::new("legacy.ai", &legacy_ai());
+    let t = render(&f.0, FileKind::Ai, 0, 200).unwrap();
+    assert_eq!((t.width, t.height), (200, 100));
+    let px = |x: u32, y: u32| {
+        let i = ((y * t.width + x) * 4) as usize;
+        t.rgba[i..i + 3].to_vec()
+    };
+    let near = |a: Vec<u8>, b: [u8; 3]| a.iter().zip(b).all(|(x, y)| x.abs_diff(y) < 40);
+    // Pieno del quadrato ciano, buco bianco, tinta al 50% rosa, fondo bianco, testo ignorato.
+    assert!(!near(px(15, 50), [255, 255, 255]), "{:?}", px(15, 50));
+    assert!(px(15, 50)[0] < 80 && px(15, 50)[2] > 180, "{:?}", px(15, 50));
+    assert!(near(px(50, 50), [255, 255, 255]), "{:?}", px(50, 50));
+    let tint = px(150, 50);
+    assert!(tint[0] > 200 && tint[1] < 200 && tint[1] > 60, "{tint:?}");
+    assert!(near(px(105, 5), [255, 255, 255]));
+}
+
+#[test]
+fn eps_di_illustrator_senza_anteprima_e_altri_postscript() {
+    // Con l'intestazione DOS e nessuna anteprima: si disegna lo stesso.
+    let ps = legacy_ai();
+    let mut dos = vec![0xC5, 0xD0, 0xD3, 0xC6];
+    dos.extend(30u32.to_le_bytes());
+    dos.extend((ps.len() as u32).to_le_bytes());
+    dos.extend([0; 18]);
+    dos.extend(&ps);
+    let f = Temp::new("illustrator.eps", &dos);
+    assert_eq!(
+        render(&f.0, FileKind::Eps, 0, 100).map(|t| t.width).ok(),
+        Some(100)
+    );
+    // Un PostScript di un altro programma resta senza anteprima.
+    let other = b"%!PS-Adobe-3.0 EPSF-3.0\n%%Creator: CorelDRAW\n%%BoundingBox: 0 0 10 10\n0 0 m 10 10 l S\n";
+    let f = Temp::new("corel.eps", other);
+    assert!(matches!(
+        render(&f.0, FileKind::Eps, 0, 100),
+        Err(ThumbError::NoPreview)
+    ));
+}
+
+#[test]
+fn ai_in_postscript_rovinati_non_bloccano() {
+    let good = legacy_ai();
+    for cut in [20, 120, 300, good.len() - 30] {
+        let f = Temp::new(&format!("tagliato-{cut}.ai"), &good[..cut]);
+        let _ = render(&f.0, FileKind::Ai, 0, 100);
+    }
+    // Riquadro assurdo o mancante: niente miniatura, nessun crash.
+    let bad = String::from_utf8(good.clone())
+        .unwrap()
+        .replace("-300 100 -100 200", "5 5 5 5");
+    let f = Temp::new("riquadro.ai", bad.as_bytes());
+    assert!(render(&f.0, FileKind::Ai, 0, 100).is_err());
+    let mut noise = good.clone();
+    noise.extend(std::iter::repeat_n(b"( [ { 1e999 -- 9 9 9 9 9 c ".as_slice(), 2000).flatten());
+    let f = Temp::new("rumore.ai", &noise);
+    let _ = render(&f.0, FileKind::Ai, 0, 100);
+}

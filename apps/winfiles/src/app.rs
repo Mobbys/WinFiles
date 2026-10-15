@@ -1098,9 +1098,9 @@ impl WinFilesApp {
                 ui.horizontal_centered(|ui| {
                     let totals = Totals::of(&self.project.files);
                     let mut text = format!(
-                        "{} file  ·  {} pagine  ·  {}",
+                        "{} file  ·  {}  ·  {}",
                         totals.files,
-                        totals.pages,
+                        crate::canvas::pages_text(totals.pages),
                         crate::panels::areas(&totals)
                     );
                     if totals.excluded > 0 {
