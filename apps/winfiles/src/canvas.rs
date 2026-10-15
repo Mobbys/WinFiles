@@ -60,8 +60,6 @@ pub struct Selection<'a> {
 pub struct CanvasOutput {
     /// File e pagina della miniatura cliccata.
     pub clicked: Option<(usize, usize)>,
-    /// Ctrl + rotella: fattore di ingrandimento richiesto.
-    pub zoom_by: Option<f32>,
 }
 
 /// Una riga di testo che si tronca con "…" se non sta nella larghezza (`width` in mm), centrata.
@@ -304,13 +302,6 @@ pub fn draw(
         }
     }
 
-    if response.hovered() {
-        // Ctrl + rotella (o il pizzico sul touchpad) arriva da egui come fattore di zoom.
-        let zoom = ui.input(|i| i.zoom_delta());
-        if zoom != 1.0 {
-            out.zoom_by = Some(zoom);
-        }
-    }
     out
 }
 

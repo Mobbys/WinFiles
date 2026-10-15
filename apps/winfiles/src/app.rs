@@ -974,6 +974,7 @@ impl WinFilesApp {
                 crate::summary::draw(ui, sheet, &scene, summary, &mut self.thumbs, &self.marked, scale)
             });
             self.wheel(ui, board, count, &scrolled);
+            self.zoom_with_wheel(ui, board, scale);
             if let Some(file) = scrolled.inner {
                 let mods = ui.input(|i| i.modifiers);
                 self.pick(file, mods);
@@ -1004,19 +1005,30 @@ impl WinFilesApp {
             )
         });
         self.wheel(ui, board, count, &scrolled);
+        self.zoom_with_wheel(ui, board, scale);
         let out = scrolled.inner;
         if let Some((file, page)) = out.clicked {
             let mods = ui.input(|i| i.modifiers);
             self.pick(file, mods);
             self.selected_page = page;
         }
-        if let Some(by) = out.zoom_by {
-            self.zoom = Some((scale * by).clamp(canvas::MIN_ZOOM, canvas::MAX_ZOOM));
-        }
     }
 }
 
+/// Ctrl + rotella (o il pizzico sul touchpad) con il puntatore sull'anteprima: il fattore di
+/// ingrandimento chiesto, uguale per ogni foglio, miniature o riepilogo.
+pub(crate) fn wheel_zoom(ui: &egui::Ui, board: Rect) -> Option<f32> {
+    let zoom = ui.input(|i| i.zoom_delta());
+    (zoom != 1.0 && ui.rect_contains_pointer(board)).then_some(zoom)
+}
+
 impl WinFilesApp {
+    fn zoom_with_wheel(&mut self, ui: &egui::Ui, board: Rect, scale: f32) {
+        if let Some(by) = wheel_zoom(ui, board) {
+            self.zoom = Some((scale * by).clamp(canvas::MIN_ZOOM, canvas::MAX_ZOOM));
+        }
+    }
+
     /// La rotella sull'anteprima scorre il foglio e, arrivati al bordo, passa al foglio dopo o a
     /// quello prima. Serve una girata di rotella in più quando si arriva al bordo, così chi
     /// scorre un foglio ingrandito non salta al successivo senza volerlo.
@@ -1639,5 +1651,36 @@ impl eframe::App for WinFilesApp {
             }
         });
         self.unsaved_dialog(&ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wheel_zoom;
+
+    /// Un fotogramma con Ctrl + rotella (per egui un evento di zoom) e il puntatore in `at`.
+    fn frame(at: egui::Pos2) -> Option<f32> {
+        let ctx = egui::Context::default();
+        let board = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(400.0, 300.0));
+        let mut seen = None;
+        for events in [vec![egui::Event::PointerMoved(at)], vec![egui::Event::Zoom(1.25)]] {
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                seen = wheel_zoom(ui, board);
+            });
+            out.textures_delta.clear();
+        }
+        seen
+    }
+
+    #[test]
+    fn ctrl_rotella_ingrandisce_sopra_l_anteprima() {
+        // Prima funzionava solo sui fogli di miniature, non sul foglio di riepilogo: ora la
+        // richiesta si legge sull'anteprima, qualunque foglio mostri.
+        assert_eq!(frame(egui::pos2(300.0, 250.0)), Some(1.25));
+        assert_eq!(frame(egui::pos2(20.0, 20.0)), None);
     }
 }
