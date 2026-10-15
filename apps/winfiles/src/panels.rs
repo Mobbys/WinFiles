@@ -667,7 +667,13 @@ impl WinFilesApp {
                             let Some(f) = self.project.files.get(*i) else {
                                 continue;
                             };
-                            // La freccia che apre le pagine dei file con più pagine.
+                            let selected = self.marked.contains(i);
+                            if selected {
+                                ui.painter().rect_filled(rect, t.radius, t.selection);
+                            } else if resp.hovered() {
+                                ui.painter().rect_filled(rect, t.radius, t.hover);
+                            }
+                            // La freccia che apre le pagine dei file con più pagine, sopra il fondo della riga.
                             if let Some(open) = open {
                                 let r = Rect::from_center_size(
                                     rect.left_center() + vec2(11.0, 0.0),
@@ -681,19 +687,18 @@ impl WinFilesApp {
                                         "Mostra le pagine una per una"
                                     });
                                 if arrow.hovered() {
-                                    ui.painter().rect_filled(r, 3.0, t.hover);
+                                    ui.painter().rect_filled(r, 3.0, t.pressed);
                                 }
                                 let icon = if *open { "chevron-down" } else { "chevron-right" };
-                                icons::paint(ui, icon, r.shrink(2.0), t.text_dim);
+                                icons::paint(
+                                    ui,
+                                    icon,
+                                    r.shrink(2.0),
+                                    if selected { t.text_strong } else { t.text_dim },
+                                );
                                 if arrow.clicked() {
                                     action = Some(FileAction::Expand(f.path.clone()));
                                 }
-                            }
-                            let selected = self.marked.contains(i);
-                            if selected {
-                                ui.painter().rect_filled(rect, t.radius, t.selection);
-                            } else if resp.hovered() {
-                                ui.painter().rect_filled(rect, t.radius, t.hover);
                             }
                             let error = self.errors.get(&f.path);
                             let state = f.print_state();
