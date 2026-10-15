@@ -6,7 +6,7 @@ default-members = ["crates/*", "apps/winfiles", "xtask"]
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "LicenseRef-WinFiles-Proprietary"
 rust-version = "1.95"
@@ -14,16 +14,16 @@ repository = "https://github.com/Mobbys/WinFiles"
 
 [workspace.dependencies]
 # interni
-winfiles-geom = { path = "crates/geom", version = "0.1.0" }
-winfiles-model = { path = "crates/model", version = "0.1.0" }
-winfiles-layout = { path = "crates/layout", version = "0.1.0" }
-winfiles-formats = { path = "crates/formats", version = "0.1.0" }
-winfiles-thumbs = { path = "crates/thumbs", version = "0.1.0" }
-winfiles-scene = { path = "crates/scene", version = "0.1.0" }
-winfiles-pdf-out = { path = "crates/pdf_out", version = "0.1.0" }
-winfiles-pdf-edit = { path = "crates/pdf_edit", version = "0.1.0" }
-winfiles-image-edit = { path = "crates/image_edit", version = "0.1.0" }
-winfiles-photo = { path = "crates/photo", version = "0.1.0" }
+winfiles-geom = { path = "crates/geom", version = "0.2.0" }
+winfiles-model = { path = "crates/model", version = "0.2.0" }
+winfiles-layout = { path = "crates/layout", version = "0.2.0" }
+winfiles-formats = { path = "crates/formats", version = "0.2.0" }
+winfiles-thumbs = { path = "crates/thumbs", version = "0.2.0" }
+winfiles-scene = { path = "crates/scene", version = "0.2.0" }
+winfiles-pdf-out = { path = "crates/pdf_out", version = "0.2.0" }
+winfiles-pdf-edit = { path = "crates/pdf_edit", version = "0.2.0" }
+winfiles-image-edit = { path = "crates/image_edit", version = "0.2.0" }
+winfiles-photo = { path = "crates/photo", version = "0.2.0" }
 
 # base
 serde = { version = "1", features = ["derive"] }
