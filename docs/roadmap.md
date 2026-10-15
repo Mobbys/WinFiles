@@ -50,5 +50,6 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Esporta PDF (File, Ctrl+E e barra): stessa scena dell'anteprima, Inter incorporato, miniature JPEG a 150 DPI ([ADR 0008](adr/0008-esportazione-pdf.md))
 - [x] La rotella cambia foglio nell'anteprima, Ctrl+rotella ingrandisce
 - [x] Vista a elenco: una miniatura per riga, nome, misure e note a destra
-- [x] Vista nesting: tutti i file alla stessa scala (scala 1:N nell'anteprima), accostati in righe centrate
+- [x] Vista nesting: tutti i file alla stessa scala 1:N, automatica o scelta, accostati in righe centrate
+- [x] Elenco con la larghezza delle miniature in mm
 - [ ] Confronto con la stampa della 4.9, ±0,5 mm

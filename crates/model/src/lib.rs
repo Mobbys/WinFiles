@@ -230,8 +230,12 @@ pub struct PrintSettings {
     /// Griglia, elenco o nesting.
     pub view: View,
     pub margins: Margins,
-    /// Numero di colonne della griglia; nell'elenco la miniatura è larga quanto una colonna.
+    /// Numero di colonne della griglia.
     pub columns: u32,
+    /// Larghezza delle miniature nella vista a elenco, in mm.
+    pub list_thumb: f64,
+    /// Scala del nesting come 1:N; 0 = automatica (il file più grande largo un terzo del foglio).
+    pub nesting_scale: u32,
     /// Spazio tra le colonne, in mm.
     pub gap: f64,
     /// Spazio tra le righe di miniature (e sotto titolo e intestazioni), in mm.
@@ -266,6 +270,8 @@ impl Default for PrintSettings {
             view: View::Grid,
             margins: Margins::uniform(10.0),
             columns: 4,
+            list_thumb: 40.0,
+            nesting_scale: 0,
             gap: 4.0,
             row_gap: 3.0,
             caption_text: 7.0,

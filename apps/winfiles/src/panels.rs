@@ -5,7 +5,7 @@ use std::path::Path;
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Color32, Rect, Sense, Vec2, pos2, vec2};
 use winfiles_geom::{Margins, Size, Unit, format_area, format_length, format_number, format_size};
-use winfiles_model::{FileEntry, FileKind, Totals};
+use winfiles_model::{FileEntry, FileKind, Totals, View};
 
 use crate::app::{WinFilesApp, dim_label};
 use crate::icons;
@@ -686,6 +686,7 @@ impl WinFilesApp {
     }
 
     pub(crate) fn layout_panel(&mut self, ui: &mut egui::Ui) {
+        let shown_scale = self.nesting_scale;
         let print = &mut self.project.print;
         let mm = |ui: &mut egui::Ui, value: &mut f64, max: f64| ui.add(mm_field(value, max));
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
@@ -700,10 +701,30 @@ impl WinFilesApp {
             dim_label(ui, "Testo del titolo");
             ui.add(text_slider(&mut print.title_text, MIN_TITLE_PT..=MAX_TITLE_PT));
             ui.add_space(8.0);
-            dim_label(ui, "Colonne");
             // Il cursore occupa la larghezza del pannello, lasciando posto al numero.
             ui.spacing_mut().slider_width = (ui.available_width() - 64.0).max(60.0);
-            ui.add(egui::Slider::new(&mut print.columns, 1..=10));
+            match print.view {
+                View::Grid => {
+                    dim_label(ui, "Colonne");
+                    ui.add(egui::Slider::new(&mut print.columns, 1..=10));
+                }
+                View::List => {
+                    dim_label(ui, "Larghezza delle miniature");
+                    ui.spacing_mut().slider_width = (ui.available_width() - 84.0).max(60.0);
+                    ui.add(
+                        egui::Slider::new(&mut print.list_thumb, winfiles_layout::LIST_THUMB_MM)
+                            .step_by(1.0)
+                            .fixed_decimals(0)
+                            .suffix(" mm"),
+                    );
+                }
+                View::Nesting => {
+                    dim_label(ui, "Scala");
+                    ui.horizontal(|ui| {
+                        crate::app::scale_stepper(ui, &mut print.nesting_scale, shown_scale);
+                    });
+                }
+            }
             ui.add_space(8.0);
             dim_label(ui, "Testo di nome e misure");
             ui.add(text_slider(

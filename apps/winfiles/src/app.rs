@@ -89,8 +89,8 @@ pub struct WinFilesApp {
     /// Le ultime scelte scritte in `impostazioni.json`, e quando si è controllato l'ultima volta.
     prefs: crate::prefs::Prefs,
     prefs_checked: f64,
-    /// Nel nesting: millimetri sul foglio per millimetro vero.
-    nesting_scale: Option<f64>,
+    /// Nel nesting: la scala 1:N in uso (scelta o automatica).
+    pub(crate) nesting_scale: Option<u32>,
 }
 
 impl WinFilesApp {
@@ -729,8 +729,21 @@ impl WinFilesApp {
                         ],
                     );
                     ui.add_space(12.0);
-                    dim_label(ui, "Colonne");
-                    stepper(ui, &mut print.columns, 1, MAX_COLUMNS);
+                    // Il controllo che conta nella vista scelta: colonne, miniatura o scala.
+                    match print.view {
+                        View::Grid => {
+                            dim_label(ui, "Colonne");
+                            stepper(ui, &mut print.columns, 1, MAX_COLUMNS);
+                        }
+                        View::List => {
+                            dim_label(ui, "Miniatura");
+                            thumb_stepper(ui, &mut print.list_thumb);
+                        }
+                        View::Nesting => {
+                            dim_label(ui, "Scala");
+                            scale_stepper(ui, &mut print.nesting_scale, self.nesting_scale);
+                        }
+                    }
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         let enabled = !self.project.files.is_empty() && self.export.is_none();
                         // Stampa: il pulsante principale dell'app, grande e blu.
@@ -857,8 +870,7 @@ impl WinFilesApp {
         // Nel nesting la scala comune, come si scrive in tipografia: 1:20.
         let scale = self
             .nesting_scale
-            .filter(|s| s.is_finite() && *s > 0.0)
-            .map(|s| format!(" · scala {}", scale_text(s)))
+            .map(|n| format!(" · scala 1:{n}"))
             .unwrap_or_default();
         bar.label(
             egui::RichText::new(format!("{} {orientation}{scale}", print.paper.name())).color(t.text_dim),
@@ -1145,6 +1157,56 @@ pub(crate) fn dim_label(ui: &mut egui::Ui, text: &str) {
 
 /// Un numero con i pulsanti − e + ai lati, in un unico contenitore arrotondato.
 pub(crate) fn stepper(ui: &mut egui::Ui, value: &mut u32, min: u32, max: u32) {
+    let delta = stepper_with(ui, "colonne", &value.to_string(), *value > min, *value < max);
+    *value = u32::try_from((i64::from(*value) + i64::from(delta)).clamp(i64::from(min), i64::from(max)))
+        .unwrap_or(min);
+}
+
+/// La larghezza delle miniature dell'elenco, a passi di 5 mm.
+pub(crate) fn thumb_stepper(ui: &mut egui::Ui, mm: &mut f64) {
+    let (lo, hi) = (
+        *winfiles_layout::LIST_THUMB_MM.start(),
+        *winfiles_layout::LIST_THUMB_MM.end(),
+    );
+    let v = if mm.is_finite() { mm.clamp(lo, hi) } else { lo };
+    let text = format!("{} mm", winfiles_geom::format_number(v, 0, true));
+    let delta = stepper_with(ui, "miniatura", &text, v > lo, v < hi);
+    if delta != 0 {
+        // Si torna su un multiplo di 5, poi si sale o si scende di 5.
+        let base = (v / 5.0).round() * 5.0;
+        *mm = (base + 5.0 * f64::from(delta)).clamp(lo, hi);
+    }
+}
+
+/// Scale "tonde" per il nesting, come 1:N.
+const SCALES: [u32; 30] = [
+    1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 60, 75, 100, 125, 150, 200, 250, 300, 400, 500, 750,
+    1000, 2000, 5000, 10_000,
+];
+
+/// La scala del nesting: i pulsanti passano alla scala tonda vicina (− ingrandisce, + rimpicciolisce)
+/// e la fissano; "Auto" torna alla scala automatica. `shown` è la scala in uso adesso.
+pub(crate) fn scale_stepper(ui: &mut egui::Ui, scale: &mut u32, shown: Option<u32>) {
+    let current = if *scale > 0 { *scale } else { shown.unwrap_or(1) };
+    let text = format!("1:{current}");
+    let delta = stepper_with(ui, "scala", &text, current > 1, current < 10_000);
+    if delta < 0 {
+        *scale = SCALES.iter().rev().copied().find(|&n| n < current).unwrap_or(1);
+    } else if delta > 0 {
+        *scale = SCALES.iter().copied().find(|&n| n > current).unwrap_or(10_000);
+    }
+    let mut auto = *scale == 0;
+    if ui
+        .checkbox(&mut auto, "Auto")
+        .on_hover_text("Il file più grande largo un terzo del foglio")
+        .changed()
+    {
+        *scale = if auto { 0 } else { current };
+    }
+}
+
+/// Un campo con − e + ai lati e `text` al centro; dice di quanto cambiare (−1, 0 o +1).
+fn stepper_with(ui: &mut egui::Ui, id: &str, text: &str, can_dec: bool, can_inc: bool) -> i32 {
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(96.0, 30.0), Sense::hover());
     ui.painter().rect_filled(rect, t.radius, t.input);
@@ -1156,13 +1218,11 @@ pub(crate) fn stepper(ui: &mut egui::Ui, value: &mut u32, min: u32, max: u32) {
     );
     let minus = Rect::from_min_size(rect.min, vec2(30.0, 30.0));
     let plus = Rect::from_min_size(egui::pos2(rect.right() - 30.0, rect.top()), vec2(30.0, 30.0));
-    for (r, icon, enabled, delta) in [
-        (minus, "minus", *value > min, -1i64),
-        (plus, "plus", *value < max, 1),
-    ] {
+    let mut out = 0;
+    for (r, icon, enabled, delta) in [(minus, "minus", can_dec, -1), (plus, "plus", can_inc, 1)] {
         let resp = ui.interact(
             r,
-            ui.id().with(("stepper", icon)),
+            ui.id().with(("stepper", id, icon)),
             if enabled { Sense::click() } else { Sense::hover() },
         );
         if enabled && resp.hovered() {
@@ -1176,17 +1236,17 @@ pub(crate) fn stepper(ui: &mut egui::Ui, value: &mut u32, min: u32, max: u32) {
             tint,
         );
         if resp.clicked() {
-            *value = u32::try_from((i64::from(*value) + delta).clamp(i64::from(min), i64::from(max)))
-                .unwrap_or(min);
+            out = delta;
         }
     }
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
-        value.to_string(),
+        text,
         semibold(13.5),
         t.text_strong,
     );
+    out
 }
 
 /// Pulsanti uniti a scelta singola: la scelta attiva è evidenziata in blu tenue.
@@ -1390,17 +1450,6 @@ impl DockContent<PanelId> for Content<'_> {
     }
 }
 
-/// Una scala come si scrive in tipografia: 1:20 per rimpicciolire, 2:1 per ingrandire; sotto
-/// 10 con un decimale.
-pub(crate) fn scale_text(s: f64) -> String {
-    let n = |v: f64| winfiles_geom::format_number(v, usize::from(v < 10.0), true);
-    if s >= 1.0 {
-        format!("{}:1", n(s))
-    } else {
-        format!("1:{}", n(1.0 / s))
-    }
-}
-
 /// Un lavoro nuovo, con l'impaginazione e l'unità delle ultime scelte.
 pub(crate) fn blank_project(prefs: &crate::prefs::Prefs) -> Project {
     let mut p = Project::new("Senza titolo");
@@ -1521,7 +1570,7 @@ impl eframe::App for WinFilesApp {
         let title = captions::title_height(ui.ctx(), &print.title, print.title_text, width);
         let items = captions::items(ui.ctx(), &self.project, &self.slots);
         self.nesting_scale = (print.view == View::Nesting && !items.is_empty())
-            .then(|| winfiles_layout::nesting_scale(&print, &items));
+            .then(|| winfiles_layout::nesting_denominator(&print, &items));
         let sheets = grid_with_title(&print, &items, title).and_then(|grid| {
             let summary = if print.show_summary && !self.project.files.is_empty() {
                 Some(crate::summary::layout(ui.ctx(), &self.project, title)?)
@@ -1590,18 +1639,5 @@ impl eframe::App for WinFilesApp {
             }
         });
         self.unsaved_dialog(&ctx);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::scale_text;
-
-    #[test]
-    fn scala_come_in_tipografia() {
-        assert_eq!(scale_text(0.05), "1:20");
-        assert_eq!(scale_text(1.0 / 9.44), "1:9,4");
-        assert_eq!(scale_text(1.0), "1:1");
-        assert_eq!(scale_text(2.0), "2:1");
     }
 }

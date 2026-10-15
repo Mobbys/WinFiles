@@ -208,9 +208,10 @@ fn nesting_tutti_alla_stessa_scala() {
     ];
     let sheets = grid(&settings, &items).unwrap();
     let p = &sheets[0].items;
-    // Il più grande occupa una colonna; gli altri in proporzione alle misure vere.
-    let scale = p[0].image.w / 420.0;
-    assert!((p[0].image.w - cell_width(&settings)).abs() < 1e-9);
+    // Scala automatica: il più grande sta in un terzo del foglio (190 mm / 3), con un 1:N intero.
+    assert_eq!(nesting_denominator(&settings, &items), 7);
+    let scale = 1.0 / 7.0;
+    assert!((p[0].image.w - 420.0 * scale).abs() < 1e-9);
     assert!((p[1].image.h / 297.0 - scale).abs() < 1e-9);
     assert!((p[2].image.w / 85.0 - scale).abs() < 1e-9);
     // Un file minuscolo resta visibile.
@@ -236,7 +237,35 @@ fn nesting_i_piccoli_si_accostano_piu_della_griglia() {
         .iter()
         .filter(|c| (c.cell.y - sheets[0].items[0].cell.y).abs() < 1e-9)
         .count();
-    assert!(first_row > settings.columns as usize);
+    assert!(first_row >= 4);
+}
+
+#[test]
+fn nesting_con_la_scala_scelta() {
+    let settings = PrintSettings {
+        view: View::Nesting,
+        nesting_scale: 10,
+        ..PrintSettings::default()
+    };
+    let items = [item(0, 210.0, 297.0, "a"), item(1, 5000.0, 1000.0, "a")];
+    let p = &grid(&settings, &items).unwrap()[0].items;
+    assert!((p[0].image.w - 21.0).abs() < 1e-9);
+    assert!((p[0].image.h - 29.7).abs() < 1e-9);
+    // Un file che a questa scala non sta nel foglio si riduce: al più metà dell'altezza utile
+    // (277 mm / 2), così sotto resta posto per la didascalia.
+    assert!((p[1].image.w - 138.5).abs() < 1e-9);
+}
+
+#[test]
+fn elenco_miniature_della_larghezza_scelta() {
+    let settings = PrintSettings {
+        view: View::List,
+        list_thumb: 25.0,
+        ..PrintSettings::default()
+    };
+    let p = &grid(&settings, &[item(0, 300.0, 200.0, "a")]).unwrap()[0].items[0];
+    assert!((p.image.w - 25.0).abs() < 1e-9);
+    assert!((p.caption.x - (p.cell.x + 25.0 + settings.gap)).abs() < 1e-9);
 }
 
 fn settings_strategy() -> impl Strategy<Value = PrintSettings> {
@@ -254,6 +283,8 @@ fn settings_strategy() -> impl Strategy<Value = PrintSettings> {
                 PrintSettings {
                     paper,
                     orientation,
+                    list_thumb: f64::from(columns) * 9.0,
+                    nesting_scale: if columns % 3 == 0 { 0 } else { columns * 7 },
                     view: match view {
                         0 => View::Grid,
                         1 => View::List,

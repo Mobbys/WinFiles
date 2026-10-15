@@ -144,39 +144,77 @@ pub fn caption_width(settings: &PrintSettings) -> f64 {
     }
 }
 
-/// Nel nesting la didascalia è larga mezza colonna (almeno 38 mm, se la colonna lo permette): le
-/// miniature piccole si accostano senza che il nome diventi illeggibile.
-fn nesting_caption(settings: &PrintSettings) -> f64 {
-    let cell = cell_width(settings);
-    (cell / 2.0).max(NESTING_MIN_CAPTION.min(cell))
+fn printable(settings: &PrintSettings) -> Rect {
+    let size = sheet_size(settings.paper, settings.orientation);
+    Rect::new(0.0, 0.0, size.w, size.h).inset(settings.margins)
 }
 
-/// Larghezza minima della didascalia nel nesting, in mm.
-const NESTING_MIN_CAPTION: f64 = 38.0;
+/// Nel nesting la didascalia è larga 38 mm (o il foglio, se più stretto): le miniature piccole si
+/// accostano senza che il nome diventi illeggibile.
+fn nesting_caption(settings: &PrintSettings) -> f64 {
+    NESTING_CAPTION.min(printable(settings).w)
+}
+
+/// Il lato più lungo di una miniatura nel nesting: la larghezza del foglio, ma non oltre metà
+/// dell'altezza, così sotto resta posto per intestazione e didascalia. Oltre, il file si riduce.
+fn nesting_max(settings: &PrintSettings) -> f64 {
+    let area = printable(settings);
+    area.w.min(area.h / 2.0)
+}
+
+/// Larghezza della didascalia nel nesting, in mm.
+const NESTING_CAPTION: f64 = 38.0;
+/// Scala più piccola ammessa nel nesting (1:N).
+pub const NESTING_MAX_DENOMINATOR: u32 = 10_000;
+/// Nella scala automatica il file più grande è largo al più questa parte del foglio.
+const NESTING_AUTO_SHARE: f64 = 1.0 / 3.0;
+/// Larghezza delle miniature nell'elenco ammessa, in mm.
+pub const LIST_THUMB_MM: std::ops::RangeInclusive<f64> = 10.0..=150.0;
 /// Lato lungo minimo di una miniatura nel nesting, in mm: sotto, un file piccolissimo accanto a uno
 /// enorme non si vedrebbe più. Solo questi escono dalla scala comune.
 pub const NESTING_MIN_SIDE: f64 = 6.0;
 
-/// La scala del nesting: il lato lungo del file più grande occupa una colonna.
-pub fn nesting_scale(settings: &PrintSettings, items: &[Item]) -> f64 {
+/// La scala del nesting come 1:N. Scelta dall'utente, oppure automatica: il numero intero più
+/// piccolo per cui il file più grande sta in un terzo della larghezza del foglio (mai ingrandito).
+pub fn nesting_denominator(settings: &PrintSettings, items: &[Item]) -> u32 {
+    if settings.nesting_scale > 0 {
+        return settings.nesting_scale.min(NESTING_MAX_DENOMINATOR);
+    }
     let longest = items
         .iter()
         .map(|i| i.content.w.max(i.content.h))
         .filter(|v| v.is_finite() && *v > 0.0)
         .fold(0.0, f64::max);
-    if longest > 0.0 {
-        cell_width(settings) / longest
+    let room = printable(settings).w * NESTING_AUTO_SHARE;
+    if longest <= 0.0 || room <= 0.0 {
+        return 1;
+    }
+    let n = (longest / room).ceil();
+    if n.is_finite() && n >= 1.0 {
+        // `n` è già tra 1 e il tetto: la conversione non perde nulla.
+        n.min(f64::from(NESTING_MAX_DENOMINATOR)) as u32
     } else {
-        1.0
+        1
     }
 }
 
-/// Larghezza delle miniature nell'elenco: una colonna della griglia, ma mai più di metà riga, così
+/// La scala del nesting: millimetri sul foglio per millimetro vero.
+pub fn nesting_scale(settings: &PrintSettings, items: &[Item]) -> f64 {
+    1.0 / f64::from(nesting_denominator(settings, items).max(1))
+}
+
+/// Larghezza delle miniature nell'elenco: quella scelta, ma mai più di metà riga, così
 /// resta sempre posto per il testo.
 fn list_thumb(settings: &PrintSettings) -> f64 {
-    let size = sheet_size(settings.paper, settings.orientation);
-    let area = Rect::new(0.0, 0.0, size.w, size.h).inset(settings.margins);
-    cell_width(settings).min((area.w - settings.gap) / 2.0)
+    let area = printable(settings);
+    let wanted = if settings.list_thumb.is_finite() {
+        settings
+            .list_thumb
+            .clamp(*LIST_THUMB_MM.start(), *LIST_THUMB_MM.end())
+    } else {
+        *LIST_THUMB_MM.start()
+    };
+    wanted.min((area.w - settings.gap) / 2.0)
 }
 
 /// Impagina `items` nell'ordine dato, in griglia.
@@ -294,10 +332,10 @@ fn list_rows(settings: &PrintSettings, items: &[Item], area: Rect, max_text: f64
 /// destra finché c'è posto, cartella per cartella; ogni riga è centrata e le immagini poggiano sulla
 /// didascalia come nella griglia.
 fn nesting_rows(settings: &PrintSettings, items: &[Item], area: Rect, max_text: f64) -> Vec<Row> {
-    let cell_w = cell_width(settings);
+    let cell_w = nesting_max(settings);
     let scale = nesting_scale(settings, items);
     let cap_w = nesting_caption(settings);
-    // La misura sul foglio di ogni file: in scala, ma mai sotto il minimo né oltre la colonna.
+    // La misura sul foglio di ogni file: in scala, ma mai sotto il minimo né oltre il massimo.
     let sized = |i: &Item| -> Size {
         let s = Size::new(i.content.w * scale, i.content.h * scale);
         let long = s.w.max(s.h);
@@ -399,8 +437,9 @@ pub fn grid_with_title(
         (printable, None)
     };
     let cell_w = match settings.view {
-        View::Grid | View::Nesting => cell_width(settings),
+        View::Grid => cell_width(settings),
         View::List => list_thumb(settings),
+        View::Nesting => nesting_max(settings),
     };
     // Deve starci almeno un'intestazione più una riga, altrimenti l'impaginazione non termina mai.
     if cell_w <= EPS || settings.header + settings.row_gap + cell_w > area.h + EPS {
