@@ -411,6 +411,31 @@ impl Project {
         }
     }
 
+    /// Sposta i file `moving` (indici nell'elenco, nel loro ordine) subito prima del file
+    /// `before`; un `before` oltre la fine li mette in fondo. Restituisce dove sono finiti.
+    /// Gli indici fuori dall'elenco non contano.
+    pub fn move_files(&mut self, moving: &BTreeSet<usize>, before: usize) -> std::ops::Range<usize> {
+        let files = std::mem::take(&mut self.files);
+        let mut moved = Vec::new();
+        let mut rest = Vec::with_capacity(files.len());
+        let mut at = None;
+        for (i, f) in files.into_iter().enumerate() {
+            if i == before {
+                at = Some(rest.len());
+            }
+            if moving.contains(&i) {
+                moved.push(f);
+            } else {
+                rest.push(f);
+            }
+        }
+        let at = at.unwrap_or(rest.len());
+        let range = at..at + moved.len();
+        rest.splice(at..at, moved);
+        self.files = rest;
+        range
+    }
+
     /// Somme per cartella, in ordine di cartella.
     pub fn folder_totals(&self) -> BTreeMap<&Path, Totals> {
         let mut out: BTreeMap<&Path, Totals> = BTreeMap::new();
@@ -648,6 +673,36 @@ mod tests {
         f.set_printed(0, true);
         let t = Totals::of([&f]);
         assert_eq!((t.files, t.unmeasured, t.excluded), (1, 1, 0));
+    }
+
+    #[test]
+    fn spostare_i_file_tiene_il_loro_ordine() {
+        let mut p = Project::new("x");
+        for name in ["a", "b", "c", "d", "e"] {
+            p.files.push(FileEntry::new(
+                PathBuf::from(format!("/x/{name}.pdf")),
+                FileKind::Pdf,
+            ));
+        }
+        let names = |p: &Project| -> String {
+            p.files
+                .iter()
+                .map(|f| f.path.file_stem().unwrap().to_string_lossy().into_owned())
+                .collect()
+        };
+        // b e d prima di a.
+        assert_eq!(p.move_files(&BTreeSet::from([1, 3]), 0), 0..2);
+        assert_eq!(names(&p), "bdace");
+        // In fondo.
+        assert_eq!(p.move_files(&BTreeSet::from([0]), 99), 4..5);
+        assert_eq!(names(&p), "daceb");
+        // Prima di uno dei file che si spostano: restano dove sono.
+        assert_eq!(p.move_files(&BTreeSet::from([1, 2]), 2), 1..3);
+        assert_eq!(names(&p), "daceb");
+        // Indici che non esistono: nessun danno.
+        assert_eq!(p.move_files(&BTreeSet::from([42]), 1), 1..1);
+        assert_eq!(names(&p), "daceb");
+        assert_eq!(p.move_files(&BTreeSet::new(), 3), 3..3);
     }
 
     #[test]

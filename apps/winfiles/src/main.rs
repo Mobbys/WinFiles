@@ -19,6 +19,7 @@ mod panels;
 mod prefs;
 mod printing;
 mod recent;
+mod reorder;
 mod scan;
 mod shell;
 mod sketch;

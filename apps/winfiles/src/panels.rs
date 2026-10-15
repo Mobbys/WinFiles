@@ -9,6 +9,7 @@ use winfiles_model::{FileEntry, FileKind, PrintState, Totals, View};
 
 use crate::app::{WinFilesApp, dim_label};
 use crate::icons;
+use crate::reorder;
 use crate::theme::{Tokens, semibold};
 use crate::thumbs::ThumbState;
 
@@ -223,6 +224,56 @@ fn print_section(ui: &mut egui::Ui, f: &FileEntry) -> Option<(Option<usize>, boo
     out
 }
 
+/// Mentre si trascina: la linea di arrivo, il cartellino sotto il puntatore e lo scorrimento
+/// quando il puntatore arriva al bordo dell'elenco.
+fn paint_drag(
+    ui: &egui::Ui,
+    drawn: &[(usize, Rect)],
+    drop: Option<reorder::Drop>,
+    pointer: Option<egui::Pos2>,
+    text: &str,
+) {
+    let t = Tokens::get(ui.ctx());
+    if let Some(d) = drop
+        && let Some((_, rect)) = drawn.iter().find(|(r, _)| *r == d.row)
+    {
+        // Un pixel dentro la riga, così la linea non sparisce sotto il bordo dell'elenco.
+        let y = if d.top {
+            rect.top() + 1.0
+        } else {
+            rect.bottom() - 1.0
+        };
+        let stroke = egui::Stroke::new(2.0, t.primary);
+        ui.painter()
+            .hline(rect.left() + 8.0..=rect.right() - 4.0, y, stroke);
+        ui.painter()
+            .circle_stroke(pos2(rect.left() + 5.0, y), 3.0, stroke);
+    }
+    ui.ctx().set_cursor_icon(if drop.is_some() {
+        egui::CursorIcon::Grabbing
+    } else {
+        egui::CursorIcon::NoDrop
+    });
+    let Some(p) = pointer else {
+        return;
+    };
+    let clip = ui.clip_rect();
+    if p.y < clip.top() + 24.0 {
+        ui.scroll_with_delta(vec2(0.0, 8.0));
+    } else if p.y > clip.bottom() - 24.0 {
+        ui.scroll_with_delta(vec2(0.0, -8.0));
+    }
+    ui.ctx().request_repaint();
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("trascina-file"),
+    ));
+    let galley = painter.layout_no_wrap(text.to_string(), egui::FontId::proportional(12.0), t.on_primary);
+    let r = Rect::from_min_size(p + vec2(14.0, 10.0), galley.size() + vec2(16.0, 8.0));
+    painter.rect_filled(r, t.radius, t.primary);
+    painter.galley(r.min + vec2(8.0, 4.0), galley, t.on_primary);
+}
+
 /// Una riga etichetta/valore nelle proprietà.
 fn prop(ui: &mut egui::Ui, label: &str, value: impl Into<egui::WidgetText>) {
     dim_label(ui, label);
@@ -371,6 +422,31 @@ impl WinFilesApp {
             }
         }
         let labels = self.project.folder_labels();
+        let group_files: Vec<Vec<usize>> = groups.iter().map(|(_, l)| l.clone()).collect();
+        let layout = reorder::Rows { groups: &group_files };
+        // Con un filtro attivo l'elenco ha dei buchi: l'ordine si cambia solo vedendo tutto.
+        let can_drag = !self.filter.is_active() && self.renaming.is_none();
+        if !can_drag {
+            self.drag = None;
+        }
+        let pointer = ui.ctx().pointer_latest_pos();
+        let released = ui.input(|i| !i.pointer.any_down());
+        let mut drop = None;
+        let mut start_drag = None;
+        let mut mode = Sense::click();
+        if can_drag {
+            mode = Sense::click_and_drag();
+        }
+        // Il cartellino sotto il puntatore mentre si trascina.
+        let drag_label = self.drag.as_ref().map(|d| match d {
+            reorder::Drag::Files { files, .. } if files.len() == 1 => files
+                .first()
+                .and_then(|i| self.project.files.get(*i))
+                .map(file_name)
+                .unwrap_or_default(),
+            reorder::Drag::Files { files, .. } => format!("{} file", files.len()),
+            reorder::Drag::Group(_) => "Cartella intera".to_string(),
+        });
         let mut rows = Vec::with_capacity(visible.len() + groups.len());
         for (folder, list) in groups {
             let label = self
@@ -400,9 +476,27 @@ impl WinFilesApp {
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show_rows(ui, ROW, rows.len(), |ui, range| {
-                for row in rows.get(range).unwrap_or_default() {
-                    let (rect, resp) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
+                let mut drawn = Vec::new();
+                for (r, row) in rows.iter().enumerate().skip(range.start).take(range.len()) {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), mode);
+                    drawn.push((r, rect));
+                    if let (Some(drag), Some(p)) = (&self.drag, pointer)
+                        && (rect.top()..rect.bottom()).contains(&p.y)
+                    {
+                        drop = layout.drop_at(drag, r, p.y < rect.center().y);
+                    }
+                    if resp.drag_started() {
+                        start_drag = layout
+                            .locate(r)
+                            .map(|(g, pos)| (g, pos.and_then(|k| group_files.get(g)?.get(k).copied())));
+                    }
+                    let dragged = match (&self.drag, row) {
+                        (Some(reorder::Drag::Group(g)), _) => {
+                            layout.locate(r).is_some_and(|(rg, _)| rg == *g)
+                        }
+                        (Some(reorder::Drag::Files { files, .. }), Row::File(i)) => files.contains(i),
+                        _ => false,
+                    };
                     match row {
                         Row::Folder(path, label, tot, state, members) => {
                             ui.painter()
@@ -685,8 +779,44 @@ impl WinFilesApp {
                             });
                         }
                     }
+                    if dragged {
+                        // Le righe che si stanno spostando restano al loro posto, velate.
+                        ui.painter()
+                            .rect_filled(rect, t.radius, t.panel.gamma_multiply(0.6));
+                    }
+                }
+                if let Some(text) = &drag_label {
+                    paint_drag(ui, &drawn, drop, pointer, text);
                 }
             });
+        if let Some((g, file)) = start_drag {
+            self.drag = match file {
+                Some(i) => {
+                    // Si trascina la scelta se il file ne fa parte e sta tutta nella sua cartella.
+                    let same = group_files.get(g).is_some_and(|list| {
+                        self.marked.contains(&i) && self.marked.iter().all(|m| list.contains(m))
+                    });
+                    if !same {
+                        self.pick(i, egui::Modifiers::NONE);
+                    }
+                    Some(reorder::Drag::Files {
+                        group: g,
+                        files: self.marked.clone(),
+                    })
+                }
+                None => Some(reorder::Drag::Group(g)),
+            };
+        } else if released
+            && let Some(drag) = self.drag.take()
+            && let Some(d) = drop
+        {
+            // Lasciato fuori da un punto valido, il trascinamento finisce senza spostare nulla.
+            let moving = match drag {
+                reorder::Drag::Files { files, .. } => files,
+                reorder::Drag::Group(g) => group_files.get(g).into_iter().flatten().copied().collect(),
+            };
+            self.move_files(&moving, d.before);
+        }
         if let Some(i) = clicked {
             self.pick(i, mods);
         }

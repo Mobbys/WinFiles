@@ -53,6 +53,8 @@ pub struct WinFilesApp {
     pub(crate) filter: crate::filter::FileFilter,
     /// Ctrl+F: il campo di ricerca prende il fuoco al prossimo disegno.
     pub(crate) focus_search: bool,
+    /// File o cartella che si sta trascinando nell'elenco per cambiarne l'ordine.
+    pub(crate) drag: Option<crate::reorder::Drag>,
     pub(crate) status: String,
     /// I lavori aperti di recente, il più recente per primo.
     pub(crate) recent: Vec<PathBuf>,
@@ -140,6 +142,7 @@ impl WinFilesApp {
             renaming: None,
             filter: Default::default(),
             focus_search: false,
+            drag: None,
             status: String::new(),
             scans: Vec::new(),
             export: None,
@@ -471,6 +474,26 @@ impl WinFilesApp {
             .any(|f| f.printed_pages().next().is_some());
         let marked = self.marked.clone();
         self.set_printed(&marked, !any_on);
+    }
+
+    /// Sposta i file indicati prima del file `before`, tenendo scelti gli stessi file.
+    pub(crate) fn move_files(&mut self, moving: &BTreeSet<usize>, before: usize) {
+        let path = |i: usize| self.project.files.get(i).map(|f| f.path.clone());
+        let marked: Vec<PathBuf> = self.marked.iter().filter_map(|i| path(*i)).collect();
+        let selected = self.selected.and_then(path);
+        let anchor = self.anchor.and_then(path);
+        self.project.move_files(moving, before);
+        let index: HashMap<&std::path::Path, usize> = self
+            .project
+            .files
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.path.as_path(), i))
+            .collect();
+        let find = |p: &PathBuf| index.get(p.as_path()).copied();
+        self.marked = marked.iter().filter_map(find).collect();
+        self.selected = selected.as_ref().and_then(find);
+        self.anchor = anchor.as_ref().and_then(find);
     }
 
     /// Toglie dall'elenco i file indicati (solo dal lavoro, mai dal disco).
