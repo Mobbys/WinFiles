@@ -216,6 +216,9 @@ pub enum View {
     Grid,
     /// Una miniatura per riga, con nome, misure e note a destra.
     List,
+    /// Tutti i file alla stessa scala, accostati in righe centrate: si vedono le misure vere a
+    /// confronto.
+    Nesting,
 }
 
 /// Impostazioni di stampa del progetto.
@@ -224,7 +227,7 @@ pub enum View {
 pub struct PrintSettings {
     pub paper: Paper,
     pub orientation: Orientation,
-    /// Griglia o elenco.
+    /// Griglia, elenco o nesting.
     pub view: View,
     pub margins: Margins,
     /// Numero di colonne della griglia; nell'elenco la miniatura è larga quanto una colonna.

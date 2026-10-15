@@ -8,7 +8,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 | 0 | Base del progetto, CI, CLAUDE.md, corpus; prototipi di craft-ui, hayro, EPS e craft-print | Stack confermato o ripieghi decisi | In corso: base, pannelli e misure pronti; prototipi da fare |
 | 1 | Scansione ricorsiva, metadati, file di progetto, note salvate | Progetto da 10.000 file aperto e salvato | In corso: apri e salva pronti |
 | 2 | Decodificatori in processo separato, profili ICC, cache su disco | Corpus completo senza crash | Da fare |
-| 3 | Griglia, elenco e nesting su A4 e A3, intestazioni cartella, export PDF | Parità con la stampa attuale, ±0,5 mm | In corso: griglia, elenco, riepilogo ed export PDF pronti |
+| 3 | Griglia, elenco e nesting su A4 e A3, intestazioni cartella, export PDF | Parità con la stampa attuale, ±0,5 mm | In corso: griglia, elenco, nesting, riepilogo ed export PDF pronti |
 | 4 | Pannelli agganciabili, anteprima, note, ordine a trascinamento, filtri | Un lavoro vero fatto solo con la nuova app | Da fare |
 | 5 | Stampa Windows a scala 100%, area stampabile del driver, calibrazione | A4 e A3 esatti su due stampanti | In corso: stampa diretta pronta ([ADR 0009](adr/0009-stampa-diretta.md)) |
 | 6 | CSV, appunti, modelli salvati, segni di taglio, miniature vettoriali, HEIC | Ogni extra con i suoi criteri | Da fare |
@@ -50,5 +50,5 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Esporta PDF (File, Ctrl+E e barra): stessa scena dell'anteprima, Inter incorporato, miniature JPEG a 150 DPI ([ADR 0008](adr/0008-esportazione-pdf.md))
 - [x] La rotella cambia foglio nell'anteprima, Ctrl+rotella ingrandisce
 - [x] Vista a elenco: una miniatura per riga, nome, misure e note a destra
-- [ ] Vista nesting
+- [x] Vista nesting: tutti i file alla stessa scala (scala 1:N nell'anteprima), accostati in righe centrate
 - [ ] Confronto con la stampa della 4.9, ±0,5 mm

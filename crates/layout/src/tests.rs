@@ -194,6 +194,51 @@ fn elenco_la_riga_segue_il_testo_se_e_piu_alto_della_miniatura() {
     assert!((p.cell.h - 80.0).abs() < 1e-9);
 }
 
+#[test]
+fn nesting_tutti_alla_stessa_scala() {
+    let settings = PrintSettings {
+        view: View::Nesting,
+        ..PrintSettings::default()
+    };
+    let items = [
+        item(0, 420.0, 297.0, "a"),
+        item(1, 210.0, 297.0, "a"),
+        item(2, 85.0, 55.0, "a"),
+        item(3, 1.0, 1.0, "a"),
+    ];
+    let sheets = grid(&settings, &items).unwrap();
+    let p = &sheets[0].items;
+    // Il più grande occupa una colonna; gli altri in proporzione alle misure vere.
+    let scale = p[0].image.w / 420.0;
+    assert!((p[0].image.w - cell_width(&settings)).abs() < 1e-9);
+    assert!((p[1].image.h / 297.0 - scale).abs() < 1e-9);
+    assert!((p[2].image.w / 85.0 - scale).abs() < 1e-9);
+    // Un file minuscolo resta visibile.
+    assert!((p[3].image.w - NESTING_MIN_SIDE).abs() < 1e-9);
+    // Stanno tutti nella prima riga, accostati: nella griglia a 4 colonne anche, ma qui la riga
+    // è centrata e più stretta dell'area.
+    assert!(p.iter().all(|c| (c.cell.y - p[0].cell.y).abs() < 1e-9));
+    assert!(p[0].cell.x > sheets[0].area.x);
+}
+
+#[test]
+fn nesting_i_piccoli_si_accostano_piu_della_griglia() {
+    let settings = PrintSettings {
+        view: View::Nesting,
+        columns: 3,
+        ..PrintSettings::default()
+    };
+    let mut items = vec![item(0, 1000.0, 700.0, "a")];
+    items.extend((1..9).map(|i| item(i, 85.0, 55.0, "a")));
+    let sheets = grid(&settings, &items).unwrap();
+    let first_row = sheets[0]
+        .items
+        .iter()
+        .filter(|c| (c.cell.y - sheets[0].items[0].cell.y).abs() < 1e-9)
+        .count();
+    assert!(first_row > settings.columns as usize);
+}
+
 fn settings_strategy() -> impl Strategy<Value = PrintSettings> {
     (
         prop_oneof![Just(Paper::A4), Just(Paper::A3)],
@@ -202,14 +247,18 @@ fn settings_strategy() -> impl Strategy<Value = PrintSettings> {
         1u32..=MAX_COLUMNS,
         (0.0f64..10.0, 0.0f64..10.0),
         0.0f64..15.0,
-        (any::<bool>(), any::<bool>()),
+        (any::<bool>(), 0u8..3),
     )
         .prop_map(
-            |(paper, orientation, margin, columns, (gap, row_gap), header, (page_break_per_folder, list))| {
+            |(paper, orientation, margin, columns, (gap, row_gap), header, (page_break_per_folder, view))| {
                 PrintSettings {
                     paper,
                     orientation,
-                    view: if list { View::List } else { View::Grid },
+                    view: match view {
+                        0 => View::Grid,
+                        1 => View::List,
+                        _ => View::Nesting,
+                    },
                     margins: Margins::uniform(margin),
                     columns,
                     gap,

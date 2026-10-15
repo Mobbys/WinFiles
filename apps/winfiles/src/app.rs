@@ -89,6 +89,8 @@ pub struct WinFilesApp {
     /// Le ultime scelte scritte in `impostazioni.json`, e quando si è controllato l'ultima volta.
     prefs: crate::prefs::Prefs,
     prefs_checked: f64,
+    /// Nel nesting: millimetri sul foglio per millimetro vero.
+    nesting_scale: Option<f64>,
 }
 
 impl WinFilesApp {
@@ -146,6 +148,7 @@ impl WinFilesApp {
             ctx: ctx.clone(),
             prefs,
             prefs_checked: 0.0,
+            nesting_scale: None,
         };
         // Un file .winfiles sulla riga di comando (doppio clic in Esplora file) apre il lavoro;
         // gli altri file e cartelle si aggiungono all'elenco.
@@ -719,16 +722,15 @@ impl WinFilesApp {
                         ui,
                         "vista",
                         &mut print.view,
-                        &[(View::Grid, "Griglia"), (View::List, "Elenco")],
+                        &[
+                            (View::Grid, "Griglia"),
+                            (View::List, "Elenco"),
+                            (View::Nesting, "Nesting"),
+                        ],
                     );
                     ui.add_space(12.0);
                     dim_label(ui, "Colonne");
                     stepper(ui, &mut print.columns, 1, MAX_COLUMNS);
-                    ui.add_space(12.0);
-                    ui.checkbox(
-                        &mut print.page_break_per_folder,
-                        "Ogni cartella su un foglio nuovo",
-                    );
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         let enabled = !self.project.files.is_empty() && self.export.is_none();
                         // Stampa: il pulsante principale dell'app, grande e blu.
@@ -852,7 +854,15 @@ impl WinFilesApp {
                 .font(semibold(14.0))
                 .color(t.text_strong),
         );
-        bar.label(egui::RichText::new(format!("{} {orientation}", print.paper.name())).color(t.text_dim));
+        // Nel nesting la scala comune, come si scrive in tipografia: 1:20.
+        let scale = self
+            .nesting_scale
+            .filter(|s| s.is_finite() && *s > 0.0)
+            .map(|s| format!(" · scala {}", scale_text(s)))
+            .unwrap_or_default();
+        bar.label(
+            egui::RichText::new(format!("{} {orientation}{scale}", print.paper.name())).color(t.text_dim),
+        );
         bar.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             let percent = self.shown_zoom / POINTS_PER_MM * 100.0;
             egui::ComboBox::from_id_salt("zoom")
@@ -1380,6 +1390,17 @@ impl DockContent<PanelId> for Content<'_> {
     }
 }
 
+/// Una scala come si scrive in tipografia: 1:20 per rimpicciolire, 2:1 per ingrandire; sotto
+/// 10 con un decimale.
+pub(crate) fn scale_text(s: f64) -> String {
+    let n = |v: f64| winfiles_geom::format_number(v, usize::from(v < 10.0), true);
+    if s >= 1.0 {
+        format!("{}:1", n(s))
+    } else {
+        format!("1:{}", n(1.0 / s))
+    }
+}
+
 /// Un lavoro nuovo, con l'impaginazione e l'unità delle ultime scelte.
 pub(crate) fn blank_project(prefs: &crate::prefs::Prefs) -> Project {
     let mut p = Project::new("Senza titolo");
@@ -1498,12 +1519,10 @@ impl eframe::App for WinFilesApp {
             - print.margins.left
             - print.margins.right;
         let title = captions::title_height(ui.ctx(), &print.title, print.title_text, width);
-        let sheets = grid_with_title(
-            &print,
-            &captions::items(ui.ctx(), &self.project, &self.slots),
-            title,
-        )
-        .and_then(|grid| {
+        let items = captions::items(ui.ctx(), &self.project, &self.slots);
+        self.nesting_scale = (print.view == View::Nesting && !items.is_empty())
+            .then(|| winfiles_layout::nesting_scale(&print, &items));
+        let sheets = grid_with_title(&print, &items, title).and_then(|grid| {
             let summary = if print.show_summary && !self.project.files.is_empty() {
                 Some(crate::summary::layout(ui.ctx(), &self.project, title)?)
             } else {
@@ -1571,5 +1590,18 @@ impl eframe::App for WinFilesApp {
             }
         });
         self.unsaved_dialog(&ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scale_text;
+
+    #[test]
+    fn scala_come_in_tipografia() {
+        assert_eq!(scale_text(0.05), "1:20");
+        assert_eq!(scale_text(1.0 / 9.44), "1:9,4");
+        assert_eq!(scale_text(1.0), "1:1");
+        assert_eq!(scale_text(2.0), "2:1");
     }
 }

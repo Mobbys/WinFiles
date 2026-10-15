@@ -135,11 +135,39 @@ fn height(v: f64, max: f64) -> f64 {
 pub fn caption_width(settings: &PrintSettings) -> f64 {
     match settings.view {
         View::Grid => cell_width(settings),
+        View::Nesting => nesting_caption(settings),
         View::List => {
             let size = sheet_size(settings.paper, settings.orientation);
             let area = Rect::new(0.0, 0.0, size.w, size.h).inset(settings.margins);
             (area.w - list_thumb(settings) - settings.gap).max(0.0)
         }
+    }
+}
+
+/// Nel nesting la didascalia è larga mezza colonna (almeno 38 mm, se la colonna lo permette): le
+/// miniature piccole si accostano senza che il nome diventi illeggibile.
+fn nesting_caption(settings: &PrintSettings) -> f64 {
+    let cell = cell_width(settings);
+    (cell / 2.0).max(NESTING_MIN_CAPTION.min(cell))
+}
+
+/// Larghezza minima della didascalia nel nesting, in mm.
+const NESTING_MIN_CAPTION: f64 = 38.0;
+/// Lato lungo minimo di una miniatura nel nesting, in mm: sotto, un file piccolissimo accanto a uno
+/// enorme non si vedrebbe più. Solo questi escono dalla scala comune.
+pub const NESTING_MIN_SIDE: f64 = 6.0;
+
+/// La scala del nesting: il lato lungo del file più grande occupa una colonna.
+pub fn nesting_scale(settings: &PrintSettings, items: &[Item]) -> f64 {
+    let longest = items
+        .iter()
+        .map(|i| i.content.w.max(i.content.h))
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .fold(0.0, f64::max);
+    if longest > 0.0 {
+        cell_width(settings) / longest
+    } else {
+        1.0
     }
 }
 
@@ -262,7 +290,89 @@ fn list_rows(settings: &PrintSettings, items: &[Item], area: Rect, max_text: f64
         .collect()
 }
 
-/// Impagina `items` nell'ordine dato, nella vista scelta (griglia o elenco), con lo spazio per un
+/// Le righe del nesting: ogni file alla stessa scala (`nesting_scale`), accostati da sinistra a
+/// destra finché c'è posto, cartella per cartella; ogni riga è centrata e le immagini poggiano sulla
+/// didascalia come nella griglia.
+fn nesting_rows(settings: &PrintSettings, items: &[Item], area: Rect, max_text: f64) -> Vec<Row> {
+    let cell_w = cell_width(settings);
+    let scale = nesting_scale(settings, items);
+    let cap_w = nesting_caption(settings);
+    // La misura sul foglio di ogni file: in scala, ma mai sotto il minimo né oltre la colonna.
+    let sized = |i: &Item| -> Size {
+        let s = Size::new(i.content.w * scale, i.content.h * scale);
+        let long = s.w.max(s.h);
+        let s = if long.is_finite() && long > 0.0 && long < NESTING_MIN_SIDE {
+            Size::new(s.w * NESTING_MIN_SIDE / long, s.h * NESTING_MIN_SIDE / long)
+        } else {
+            s
+        };
+        // Solo rimpicciolire, per i valori al limite: `fit_within` ingrandirebbe anche.
+        let long = s.w.max(s.h);
+        if long.is_finite() && long > cell_w {
+            Size::new(s.w * cell_w / long, s.h * cell_w / long)
+        } else if long.is_finite() && long > 0.0 {
+            s
+        } else {
+            Size::new(cell_w, cell_w)
+        }
+    };
+    let mut rows = Vec::new();
+    let mut start = 0usize;
+    while start < items.len() {
+        let folder = items.get(start).map(|i| i.folder.as_str());
+        // Quante celle stanno nella riga: almeno una.
+        let mut used = 0.0;
+        let mut members: Vec<(&Item, Size, f64)> = Vec::new();
+        for item in items.iter().skip(start) {
+            if Some(item.folder.as_str()) != folder {
+                break;
+            }
+            let size = sized(item);
+            let box_w = size.w.max(cap_w);
+            let need = if members.is_empty() {
+                box_w
+            } else {
+                used + settings.gap + box_w
+            };
+            if !members.is_empty() && need > area.w + EPS {
+                break;
+            }
+            used = need;
+            members.push((item, size, box_w));
+        }
+        let img_h = members
+            .iter()
+            .map(|(_, s, _)| s.h)
+            .fold(0.0, f64::max)
+            .clamp(cell_w * 0.05, cell_w);
+        let caption_h = members
+            .iter()
+            .map(|(i, _, _)| height(i.caption, max_text))
+            .fold(0.0, f64::max);
+        let row_h = img_h + caption_h;
+        let mut x = area.x + ((area.w - used) / 2.0).max(0.0);
+        let mut cells = Vec::with_capacity(members.len());
+        for (item, size, box_w) in &members {
+            let (w, h) = (size.w.min(*box_w), size.h.min(img_h));
+            cells.push(Placed {
+                id: item.id,
+                cell: Rect::new(x, 0.0, *box_w, row_h),
+                image: Rect::new(x + (box_w - w) / 2.0, img_h - h, w, h),
+                caption: Rect::new(x + (box_w - cap_w) / 2.0, img_h, cap_w, caption_h),
+            });
+            x += box_w + settings.gap;
+        }
+        rows.push(Row {
+            first: start,
+            height: row_h,
+            cells,
+        });
+        start += members.len().max(1);
+    }
+    rows
+}
+
+/// Impagina `items` nell'ordine dato, nella vista scelta (griglia, elenco o nesting), con lo spazio per un
 /// titolo alto `title` mm in cima a ogni foglio.
 pub fn grid_with_title(
     settings: &PrintSettings,
@@ -289,7 +399,7 @@ pub fn grid_with_title(
         (printable, None)
     };
     let cell_w = match settings.view {
-        View::Grid => cell_width(settings),
+        View::Grid | View::Nesting => cell_width(settings),
         View::List => list_thumb(settings),
     };
     // Deve starci almeno un'intestazione più una riga, altrimenti l'impaginazione non termina mai.
@@ -302,6 +412,7 @@ pub fn grid_with_title(
     let rows = match settings.view {
         View::Grid => grid_rows(settings, items, area, max_text),
         View::List => list_rows(settings, items, area, max_text),
+        View::Nesting => nesting_rows(settings, items, area, max_text),
     };
 
     let new_sheet = || Sheet {
