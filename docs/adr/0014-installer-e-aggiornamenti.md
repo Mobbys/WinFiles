@@ -45,9 +45,12 @@ password, e una password dentro il programma sarebbe leggibile da chiunque lo ab
 - L'icona di WinFiles è disegnata da uno script (`assets/icon/genera-icona.py`), niente asset di
   Microsoft o Adobe; `build.rs` la mette nell'eseguibile con `winresource` (MIT, solo in
   compilazione e solo per Windows).
-- Una versione si pubblica con un tag `vX.Y.Z` uguale alla versione in `Cargo.toml` e le note in
-  `docs/novita/X.Y.Z.md`: `.github/workflows/rilascio.yml` compila, crea MSI ed eseguibile
-  portatile e pubblica il rilascio.
+- Una versione si pubblica alzando la versione in `Cargo.toml` e scrivendo le note in
+  `docs/novita/X.Y.Z.md`: al primo push che porta una versione senza rilascio,
+  `.github/workflows/rilascio.yml` compila, crea MSI ed eseguibile portatile e pubblica il
+  rilascio, con il tag `vX.Y.Z` creato da GitHub sul commit. Niente tag da spingere né passaggi a
+  mano (Michel, 15 ottobre 2026); la versione si alza solo quando Michel chiede di pubblicare.
+  Un rilascio creato a mano su GitHub riceve lo stesso i file.
 
 ## Conseguenze
 - Il codice si può leggere da chiunque: niente file di clienti, password o dati riservati nel

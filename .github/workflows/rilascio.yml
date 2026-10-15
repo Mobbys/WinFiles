@@ -1,42 +1,72 @@
-# Pubblica una versione di WinFiles (ADR 0014): si parte da un tag "vX.Y.Z" uguale alla versione
-# del workspace in Cargo.toml, spinto con git o creato da "Draft a new release" su GitHub (in quel
-# caso il rilascio esiste già e qui gli si aggiungono i file e le novità). Il rilascio su GitHub contiene l'installer MSI e l'eseguibile
-# portatile; le note sono docs/novita/X.Y.Z.md. Le copie installate lo trovano da sole.
+# Pubblica una versione di WinFiles (ADR 0014). Si pubblica alzando la versione del workspace in
+# Cargo.toml e scrivendo le novità in docs/novita/X.Y.Z.md: al primo push che porta una versione
+# senza rilascio, questo workflow compila, crea l'MSI e l'eseguibile portatile e pubblica il
+# rilascio "vX.Y.Z" (il tag lo crea GitHub sul commit). Le copie installate lo trovano da sole.
+# Funziona anche con un rilascio creato a mano su GitHub: gli si aggiungono i file e le novità.
 name: Rilascio
 
 on:
   push:
+    branches: ["**"]
+    paths: ["Cargo.toml", "docs/novita/**", ".github/workflows/rilascio.yml"]
     tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: rilascio
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  versione:
+    name: Versione da pubblicare
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "Il tag ${GITHUB_REF_NAME} non corrisponde alla versione ${version} in Cargo.toml"; exit 1
+          fi
+          # Già pubblicata con i suoi file: niente da fare.
+          assets=$(gh release view "v${version}" --json assets --jq '.assets | length' 2>/dev/null || echo 0)
+          if [ "${assets}" -gt 0 ]; then
+            echo "WinFiles ${version} è già pubblicata"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          test -f "docs/novita/${version}.md" || {
+            echo "Mancano le novità: docs/novita/${version}.md"; exit 1; }
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
   windows:
     name: Eseguibile Windows
+    needs: versione
+    if: needs.versione.outputs.publish == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - name: Il tag corrisponde alla versione
-        shell: bash
-        run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
-          test "${GITHUB_REF_NAME}" = "v${version}" || {
-            echo "Il tag ${GITHUB_REF_NAME} non corrisponde alla versione ${version} in Cargo.toml"; exit 1; }
-          test -f "docs/novita/${version}.md" || {
-            echo "Mancano le novità: docs/novita/${version}.md"; exit 1; }
       - run: cargo test --workspace
       - run: cargo build --release -p winfiles
       - uses: actions/upload-artifact@v4
         with:
-          name: winfiles-windows
+          name: winfiles-rilascio
           path: target/release/winfiles.exe
           if-no-files-found: error
 
   pubblica:
     name: Installer e rilascio
-    needs: windows
+    needs: [versione, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -44,26 +74,28 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: winfiles-windows
+          name: winfiles-rilascio
           path: windows
       - run: sudo apt-get update -q && sudo apt-get install -y -q wixl
       - name: Installer e copia portatile
+        env:
+          VERSION: ${{ needs.versione.outputs.version }}
         run: |
-          version=${GITHUB_REF_NAME#v}
-          installer/crea-msi.sh windows/winfiles.exe "WinFiles-${version}.msi"
-          cp windows/winfiles.exe "WinFiles-${version}-portatile.exe"
+          installer/crea-msi.sh windows/winfiles.exe "WinFiles-${VERSION}.msi"
+          cp windows/winfiles.exe "WinFiles-${VERSION}-portatile.exe"
       - name: Rilascio su GitHub
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.versione.outputs.version }}
         run: |
-          version=${GITHUB_REF_NAME#v}
-          files=("WinFiles-${version}.msi" "WinFiles-${version}-portatile.exe")
-          if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
-            gh release edit "${GITHUB_REF_NAME}" --title "WinFiles ${version}" \
-              --notes-file "docs/novita/${version}.md"
-            gh release upload "${GITHUB_REF_NAME}" "${files[@]}" --clobber
+          tag="v${VERSION}"
+          files=("WinFiles-${VERSION}.msi" "WinFiles-${VERSION}-portatile.exe")
+          if gh release view "${tag}" > /dev/null 2>&1; then
+            gh release edit "${tag}" --title "WinFiles ${VERSION}" \
+              --notes-file "docs/novita/${VERSION}.md"
+            gh release upload "${tag}" "${files[@]}" --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" --title "WinFiles ${version}" \
-              --notes-file "docs/novita/${version}.md" "${files[@]}"
+            gh release create "${tag}" --target "${GITHUB_SHA}" --title "WinFiles ${VERSION}" \
+              --notes-file "docs/novita/${VERSION}.md" "${files[@]}"
           fi
