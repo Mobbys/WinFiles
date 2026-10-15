@@ -8,6 +8,7 @@ use winfiles_geom::{Margins, Size, Unit, format_area, format_length, format_numb
 use winfiles_model::{FileEntry, FileKind, PrintState, Totals, View};
 
 use crate::app::{WinFilesApp, dim_label};
+use crate::filter::Found;
 use crate::icons;
 use crate::reorder;
 use crate::theme::{Tokens, semibold};
@@ -18,7 +19,10 @@ const ROW: f32 = 38.0;
 enum Row<'a> {
     /// Una cartella con i totali, lo stato di stampa e i file che l'elenco mostra.
     Folder(&'a Path, String, Totals, PrintState, Vec<usize>),
-    File(usize),
+    /// Un file, e se ha più pagine se sono aperte sotto di lui.
+    File(usize, Option<bool>),
+    /// Una pagina di un file con più pagine.
+    Page(usize, usize),
 }
 
 /// La casella "in stampa" a sinistra di file e cartelle: piena con la spunta, piena con un
@@ -305,6 +309,10 @@ enum FileAction {
     PrintFile(usize, bool),
     /// Mette in stampa (o ne toglie) i file di una cartella che l'elenco mostra.
     PrintSet(std::collections::BTreeSet<usize>, bool),
+    /// Mette in stampa (o ne toglie) una pagina.
+    PrintPage(usize, usize, bool),
+    /// Apre o chiude le pagine di un file nell'elenco.
+    Expand(std::path::PathBuf),
 }
 
 /// Cosa fare dell'intestazione di una cartella nell'elenco.
@@ -389,12 +397,13 @@ impl WinFilesApp {
         self.search_bar(ui);
         let filter = &self.filter;
         let files = &self.project.files;
-        let visible: Vec<usize> = files
+        let found: Vec<(usize, Found)> = files
             .iter()
             .enumerate()
-            .filter(|(_, f)| filter.matches(f))
-            .map(|(i, _)| i)
+            .map(|(i, f)| (i, filter.find(f)))
+            .filter(|(_, m)| *m != Found::Nothing)
             .collect();
+        let visible: Vec<usize> = found.iter().map(|(i, _)| *i).collect();
         if filter.is_active() {
             // Canc e Spazio non devono toccare file che l'elenco non mostra.
             self.marked.retain(|i| visible.binary_search(i).is_ok());
@@ -410,20 +419,40 @@ impl WinFilesApp {
             }
         }
         let files = &self.project.files;
-        // I file visibili raggruppati per cartella, nell'ordine del lavoro.
+        // I file visibili raggruppati per cartella, nell'ordine del lavoro, ognuno con le pagine
+        // da mostrare sotto: tutte se è aperto, quelle trovate se la ricerca ha trovato pagine.
         let mut groups: Vec<(&Path, Vec<usize>)> = Vec::new();
-        for &i in &visible {
-            let Some(folder) = files.get(i).map(FileEntry::folder) else {
+        let mut shown_pages: Vec<Vec<Vec<usize>>> = Vec::new();
+        for (i, m) in found {
+            let Some(f) = files.get(i) else {
                 continue;
             };
-            match groups.last_mut() {
-                Some((last, list)) if *last == folder => list.push(i),
-                _ => groups.push((folder, vec![i])),
+            let pages = match m {
+                Found::Pages(pages) => pages,
+                _ if f.sheet_pages() > 1 && self.expanded.contains(&f.path) => (0..f.sheet_pages()).collect(),
+                _ => Vec::new(),
+            };
+            match (groups.last_mut(), shown_pages.last_mut()) {
+                (Some((last, list)), Some(p)) if *last == f.folder() => {
+                    list.push(i);
+                    p.push(pages);
+                }
+                _ => {
+                    groups.push((f.folder(), vec![i]));
+                    shown_pages.push(vec![pages]);
+                }
             }
         }
         let labels = self.project.folder_labels();
         let group_files: Vec<Vec<usize>> = groups.iter().map(|(_, l)| l.clone()).collect();
-        let layout = reorder::Rows { groups: &group_files };
+        let page_rows: Vec<Vec<usize>> = shown_pages
+            .iter()
+            .map(|g| g.iter().map(Vec::len).collect())
+            .collect();
+        let layout = reorder::Rows {
+            groups: &group_files,
+            pages: &page_rows,
+        };
         // Con un filtro attivo l'elenco ha dei buchi: l'ordine si cambia solo vedendo tutto.
         let can_drag = !self.filter.is_active() && self.renaming.is_none();
         if !can_drag {
@@ -448,7 +477,7 @@ impl WinFilesApp {
             reorder::Drag::Group(_) => "Cartella intera".to_string(),
         });
         let mut rows = Vec::with_capacity(visible.len() + groups.len());
-        for (folder, list) in groups {
+        for ((folder, list), pages) in groups.into_iter().zip(shown_pages) {
             let label = self
                 .project
                 .folder_titles
@@ -461,10 +490,12 @@ impl WinFilesApp {
             let members = || list.iter().filter_map(|i| files.get(*i));
             let totals = Totals::of(members());
             let state = group_state(members().map(FileEntry::print_state));
-            rows.extend(
-                std::iter::once(Row::Folder(folder, label, totals, state, list.clone()))
-                    .chain(list.iter().map(|i| Row::File(*i))),
-            );
+            rows.push(Row::Folder(folder, label, totals, state, list.clone()));
+            for (i, pages) in list.iter().zip(pages) {
+                let multi = files.get(*i).is_some_and(|f| f.sheet_pages() > 1);
+                rows.push(Row::File(*i, multi.then_some(!pages.is_empty())));
+                rows.extend(pages.into_iter().map(|p| Row::Page(*i, p)));
+            }
         }
         let unit = self.project.unit;
         let mut clicked = None;
@@ -473,6 +504,7 @@ impl WinFilesApp {
         let marked = self.marked.len();
         let mods = ui.input(|i| i.modifiers);
         let mut rename = None;
+        let mut page_click = None;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show_rows(ui, ROW, rows.len(), |ui, range| {
@@ -485,16 +517,20 @@ impl WinFilesApp {
                     {
                         drop = layout.drop_at(drag, r, p.y < rect.center().y);
                     }
-                    if resp.drag_started() {
-                        start_drag = layout
-                            .locate(r)
-                            .map(|(g, pos)| (g, pos.and_then(|k| group_files.get(g)?.get(k).copied())));
+                    let spot = layout.spot(r);
+                    if resp.drag_started()
+                        && let Some(spot) = spot.filter(|s| !s.page)
+                    {
+                        let file = spot
+                            .file
+                            .and_then(|k| group_files.get(spot.group)?.get(k).copied());
+                        start_drag = Some((spot.group, file));
                     }
                     let dragged = match (&self.drag, row) {
-                        (Some(reorder::Drag::Group(g)), _) => {
-                            layout.locate(r).is_some_and(|(rg, _)| rg == *g)
+                        (Some(reorder::Drag::Group(g)), _) => spot.is_some_and(|s| s.group == *g),
+                        (Some(reorder::Drag::Files { files, .. }), Row::File(i, _) | Row::Page(i, _)) => {
+                            files.contains(i)
                         }
-                        (Some(reorder::Drag::Files { files, .. }), Row::File(i)) => files.contains(i),
                         _ => false,
                     };
                     match row {
@@ -628,10 +664,32 @@ impl WinFilesApp {
                                 });
                             }
                         }
-                        Row::File(i) => {
+                        Row::File(i, open) => {
                             let Some(f) = self.project.files.get(*i) else {
                                 continue;
                             };
+                            // La freccia che apre le pagine dei file con più pagine.
+                            if let Some(open) = open {
+                                let r = Rect::from_center_size(
+                                    rect.left_center() + vec2(11.0, 0.0),
+                                    Vec2::splat(18.0),
+                                );
+                                let arrow = ui
+                                    .interact(r, ui.id().with(("pagine", *i)), Sense::click())
+                                    .on_hover_text(if *open {
+                                        "Chiudi le pagine"
+                                    } else {
+                                        "Mostra le pagine una per una"
+                                    });
+                                if arrow.hovered() {
+                                    ui.painter().rect_filled(r, 3.0, t.hover);
+                                }
+                                let icon = if *open { "chevron-down" } else { "chevron-right" };
+                                icons::paint(ui, icon, r.shrink(2.0), t.text_dim);
+                                if arrow.clicked() {
+                                    action = Some(FileAction::Expand(f.path.clone()));
+                                }
+                            }
                             let selected = self.marked.contains(i);
                             if selected {
                                 ui.painter().rect_filled(rect, t.radius, t.selection);
@@ -778,6 +836,100 @@ impl WinFilesApp {
                                 }
                             });
                         }
+                        Row::Page(i, p) => {
+                            let Some(f) = self.project.files.get(*i) else {
+                                continue;
+                            };
+                            let selected = self.selected == Some(*i) && self.selected_page == *p;
+                            if selected {
+                                ui.painter().rect_filled(rect, t.radius, t.selection);
+                            } else if resp.hovered() {
+                                ui.painter().rect_filled(rect, t.radius, t.hover);
+                            }
+                            let on = f.printed(*p);
+                            let check = check_rect(rect).translate(vec2(40.0, 0.0));
+                            let check_resp = ui
+                                .interact(
+                                    check.expand(4.0),
+                                    ui.id().with(("stampa-pagina", *i, *p)),
+                                    Sense::click(),
+                                )
+                                .on_hover_text(if on {
+                                    "Pagina in stampa. Clic per lasciarla fuori"
+                                } else {
+                                    "Pagina fuori stampa. Clic per rimetterla"
+                                });
+                            paint_print_check(
+                                ui,
+                                check,
+                                if on { PrintState::All } else { PrintState::None },
+                                check_resp.hovered(),
+                            );
+                            if check_resp.clicked() {
+                                action = Some(FileAction::PrintPage(*i, *p, !on));
+                            }
+                            let note = f.note(*p).trim();
+                            if !note.is_empty() {
+                                let r = Rect::from_center_size(
+                                    rect.right_center() - vec2(16.0, 0.0),
+                                    Vec2::splat(14.0),
+                                );
+                                icons::paint(
+                                    ui,
+                                    "pencil",
+                                    r,
+                                    if selected { t.text_strong } else { t.accent_text },
+                                );
+                            }
+                            let mut info = match f.pages.get(*p) {
+                                Some(page) => format_size(page.size, unit),
+                                None => "lettura delle misure…".to_string(),
+                            };
+                            if let Some(trim) =
+                                f.pages.get(*p).and_then(|pg| pg.trim.filter(|t| *t != pg.size))
+                            {
+                                info.push_str(&format!("  ·  al vivo {}", format_size(trim, unit)));
+                            }
+                            if !on {
+                                info = format!("fuori stampa  ·  {info}");
+                            }
+                            let first_line = note.lines().next().unwrap_or("");
+                            let name = if first_line.is_empty() {
+                                format!("Pagina {} di {}", p + 1, f.sheet_pages())
+                            } else {
+                                format!("Pagina {}  ·  {first_line}", p + 1)
+                            };
+                            two_lines(
+                                ui,
+                                rect.with_min_x(rect.left() + 64.0)
+                                    .with_max_x(rect.right() - if note.is_empty() { 0.0 } else { 30.0 }),
+                                &name,
+                                egui::FontId::proportional(12.0),
+                                if selected {
+                                    t.text_strong
+                                } else if on {
+                                    t.text
+                                } else {
+                                    t.text_dim
+                                },
+                                &info,
+                                if selected {
+                                    t.text_strong
+                                } else if on {
+                                    t.text_dim
+                                } else {
+                                    t.text_disabled
+                                },
+                            );
+                            let resp = resp.on_hover_text(if note.is_empty() {
+                                "Clic per sceglierla: la vedi nell'anteprima e ne scrivi la nota".to_string()
+                            } else {
+                                note.to_string()
+                            });
+                            if resp.clicked() || resp.secondary_clicked() {
+                                page_click = Some((*i, *p));
+                            }
+                        }
                     }
                     if dragged {
                         // Le righe che si stanno spostando restano al loro posto, velate.
@@ -819,6 +971,14 @@ impl WinFilesApp {
         }
         if let Some(i) = clicked {
             self.pick(i, mods);
+            if !mods.command && !mods.shift {
+                self.reveal = Some((i, 0));
+            }
+        }
+        if let Some((i, p)) = page_click {
+            self.pick(i, egui::Modifiers::NONE);
+            self.selected_page = p;
+            self.reveal = Some((i, p));
         }
         if let Some(i) = menu_on {
             self.pick_for_menu(i);
@@ -843,6 +1003,16 @@ impl WinFilesApp {
                 self.set_printed(&set, on);
             }
             Some(FileAction::PrintSet(set, on)) => self.set_printed(&set, on),
+            Some(FileAction::PrintPage(i, p, on)) => {
+                if let Some(f) = self.project.files.get_mut(i) {
+                    f.set_printed(p, on);
+                }
+            }
+            Some(FileAction::Expand(path)) => {
+                if !self.expanded.remove(&path) {
+                    self.expanded.insert(path);
+                }
+            }
             Some(FileAction::Open(path)) => {
                 if let Err(e) = crate::shell::open(&path) {
                     self.status = format!("Non riesco ad aprire {}: {e}", path.display());

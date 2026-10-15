@@ -55,6 +55,10 @@ pub struct WinFilesApp {
     pub(crate) focus_search: bool,
     /// File o cartella che si sta trascinando nell'elenco per cambiarne l'ordine.
     pub(crate) drag: Option<crate::reorder::Drag>,
+    /// File con più pagine aperti nell'elenco, una riga per pagina.
+    pub(crate) expanded: BTreeSet<PathBuf>,
+    /// Pagina da mostrare nell'anteprima al prossimo disegno: si va al suo foglio.
+    pub(crate) reveal: Option<(usize, usize)>,
     pub(crate) status: String,
     /// I lavori aperti di recente, il più recente per primo.
     pub(crate) recent: Vec<PathBuf>,
@@ -143,6 +147,8 @@ impl WinFilesApp {
             filter: Default::default(),
             focus_search: false,
             drag: None,
+            expanded: BTreeSet::new(),
+            reveal: None,
             status: String::new(),
             scans: Vec::new(),
             export: None,
@@ -907,6 +913,13 @@ impl WinFilesApp {
         card(ui, full);
         let count = pages.as_ref().map_or(0, Sheets::len);
         self.sheet = self.sheet.min(count.saturating_sub(1));
+        // Una pagina scelta nell'elenco: si va al foglio che la contiene.
+        if let Some(target) = self.reveal.take()
+            && let Ok(sheets) = pages
+            && let Some(n) = sheet_of(sheets, &self.slots, target)
+        {
+            self.sheet = n;
+        }
 
         // Intestazione della scheda.
         let header = Rect::from_min_size(full.min, vec2(full.width(), 48.0)).shrink2(vec2(14.0, 0.0));
@@ -1483,6 +1496,19 @@ impl WinFilesApp {
         self.layout_cache = Some((self.project.clone(), pages.clone()));
         pages
     }
+}
+
+/// Il foglio (contando il riepilogo) dove sta la miniatura della pagina `page` del file `file`.
+fn sheet_of(sheets: &Sheets, slots: &[Slot], (file, page): (usize, usize)) -> Option<usize> {
+    let before = sheets.summary.as_ref().map_or(0, |s| s.sheets.len());
+    let n = sheets.grid.iter().position(|sheet| {
+        sheet.items.iter().any(|item| {
+            slots
+                .get(item.id)
+                .is_some_and(|s| s.file == file && s.page == page)
+        })
+    })?;
+    Some(before + n)
 }
 
 /// Tutti i fogli del lavoro: il riepilogo (se richiesto) e poi le miniature.

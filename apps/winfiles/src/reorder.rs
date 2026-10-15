@@ -28,19 +28,63 @@ pub struct Drop {
 }
 
 /// Le righe dell'elenco: per ogni gruppo l'intestazione e poi i suoi file, indici consecutivi
-/// del lavoro.
+/// del lavoro; sotto un file aperto, le righe delle sue pagine.
 pub struct Rows<'a> {
     pub groups: &'a [Vec<usize>],
+    /// Per ogni gruppo e ogni file, quante righe di pagina ha sotto (0 se è chiuso).
+    pub pages: &'a [Vec<usize>],
+}
+
+/// Che cosa c'è su una riga dell'elenco.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Spot {
+    pub group: usize,
+    /// Posizione del file nel gruppo; None per l'intestazione.
+    pub file: Option<usize>,
+    /// Vero per la riga di una pagina, sotto il suo file.
+    pub page: bool,
 }
 
 impl Rows<'_> {
-    /// Il gruppo e la posizione del file (None per l'intestazione) di una riga.
-    pub fn locate(&self, row: usize) -> Option<(usize, Option<usize>)> {
+    fn page_rows(&self, group: usize, file: usize) -> usize {
+        self.pages
+            .get(group)
+            .and_then(|p| p.get(file))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Le righe di un gruppo: intestazione, file e pagine aperte.
+    fn group_rows(&self, group: usize) -> usize {
+        let files = self.groups.get(group).map_or(0, Vec::len);
+        1 + (0..files).map(|k| 1 + self.page_rows(group, k)).sum::<usize>()
+    }
+
+    /// Che cosa c'è sulla riga `row`.
+    pub fn spot(&self, row: usize) -> Option<Spot> {
         let mut first = 0;
-        for (g, files) in self.groups.iter().enumerate() {
-            let end = first + 1 + files.len();
+        for group in 0..self.groups.len() {
+            let end = first + self.group_rows(group);
             if row < end {
-                return Some((g, (row > first).then(|| row - first - 1)));
+                if row == first {
+                    return Some(Spot {
+                        group,
+                        file: None,
+                        page: false,
+                    });
+                }
+                let mut r = first + 1;
+                for k in 0..self.groups.get(group).map_or(0, Vec::len) {
+                    let next = r + 1 + self.page_rows(group, k);
+                    if row < next {
+                        return Some(Spot {
+                            group,
+                            file: Some(k),
+                            page: row > r,
+                        });
+                    }
+                    r = next;
+                }
             }
             first = end;
         }
@@ -49,46 +93,54 @@ impl Rows<'_> {
 
     /// La riga dell'intestazione di un gruppo.
     fn header(&self, group: usize) -> usize {
-        self.groups.iter().take(group).map(|files| 1 + files.len()).sum()
+        (0..group).map(|g| self.group_rows(g)).sum()
+    }
+
+    /// L'ultima riga di un file del gruppo: la sua, o quella della sua ultima pagina aperta.
+    fn file_last_row(&self, group: usize, file: usize) -> usize {
+        let before: usize = (0..file).map(|k| 1 + self.page_rows(group, k)).sum();
+        self.header(group) + 1 + before + self.page_rows(group, file)
     }
 
     /// Dove cade `drag` con il puntatore sulla riga `row`, nella metà alta (`upper`) o bassa.
     /// None se lì non può andare.
     pub fn drop_at(&self, drag: &Drag, row: usize, upper: bool) -> Option<Drop> {
-        let (g, pos) = self.locate(row)?;
+        let spot = self.spot(row)?;
+        let g = spot.group;
         let files = self.groups.get(g)?;
         let first = *files.first()?;
         let last = *files.last()?;
         let header = self.header(g);
         match drag {
-            Drag::Files { group, .. } if *group == g => Some(match pos {
+            Drag::Files { group, .. } if *group == g => Some(match spot.file {
                 // Sull'intestazione: in cima alla cartella.
                 None => Drop {
                     before: first,
                     row: header,
                     top: false,
                 },
-                Some(k) if upper => Drop {
+                Some(k) if upper && !spot.page => Drop {
                     before: *files.get(k)?,
                     row,
                     top: true,
                 },
+                // Sotto un file, dopo le sue pagine aperte.
                 Some(k) => Drop {
                     before: files.get(k + 1).copied().unwrap_or(last + 1),
-                    row,
+                    row: self.file_last_row(g, k),
                     top: false,
                 },
             }),
             Drag::Files { .. } => None,
             Drag::Group(moving) if *moving == g => None,
-            Drag::Group(_) if pos.is_none() && upper => Some(Drop {
+            Drag::Group(_) if spot.file.is_none() && upper => Some(Drop {
                 before: first,
                 row: header,
                 top: true,
             }),
             Drag::Group(_) => Some(Drop {
                 before: last + 1,
-                row: header + files.len(),
+                row: header + self.group_rows(g) - 1,
                 top: false,
             }),
         }
@@ -104,21 +156,75 @@ mod tests {
         vec![vec![0, 1, 2], vec![3, 4]]
     }
 
+    fn closed(g: &[Vec<usize>]) -> Vec<Vec<usize>> {
+        g.iter().map(|f| vec![0; f.len()]).collect()
+    }
+
+    fn at(group: usize, file: Option<usize>) -> Option<Spot> {
+        Some(Spot {
+            group,
+            file,
+            page: false,
+        })
+    }
+
     #[test]
     fn righe_e_gruppi() {
         let g = groups();
-        let rows = Rows { groups: &g };
-        assert_eq!(rows.locate(0), Some((0, None)));
-        assert_eq!(rows.locate(3), Some((0, Some(2))));
-        assert_eq!(rows.locate(4), Some((1, None)));
-        assert_eq!(rows.locate(6), Some((1, Some(1))));
-        assert_eq!(rows.locate(7), None);
+        let p = closed(&g);
+        let rows = Rows {
+            groups: &g,
+            pages: &p,
+        };
+        assert_eq!(rows.spot(0), at(0, None));
+        assert_eq!(rows.spot(3), at(0, Some(2)));
+        assert_eq!(rows.spot(4), at(1, None));
+        assert_eq!(rows.spot(6), at(1, Some(1)));
+        assert_eq!(rows.spot(7), None);
+    }
+
+    #[test]
+    fn le_pagine_aperte_restano_attaccate_al_loro_file() {
+        let g = groups();
+        // Il file 1 ha tre pagine aperte: righe 3, 4, 5; il file 2 scende alla riga 6.
+        let p = vec![vec![0, 3, 0], vec![0, 0]];
+        let rows = Rows {
+            groups: &g,
+            pages: &p,
+        };
+        assert_eq!(
+            rows.spot(4),
+            Some(Spot {
+                group: 0,
+                file: Some(1),
+                page: true
+            })
+        );
+        assert_eq!(rows.spot(6), at(0, Some(2)));
+        assert_eq!(rows.spot(7), at(1, None));
+        let drag = Drag::Files {
+            group: 0,
+            files: BTreeSet::from([0]),
+        };
+        // Su una pagina del file 1: dopo il file 1, linea sotto la sua ultima pagina.
+        let d = rows.drop_at(&drag, 4, true).unwrap();
+        assert_eq!((d.before, d.row, d.top), (2, 5, false));
+        // Metà bassa della riga del file 1: lo stesso.
+        let d = rows.drop_at(&drag, 2, false).unwrap();
+        assert_eq!((d.before, d.row, d.top), (2, 5, false));
+        // La seconda cartella dopo la prima: linea sotto l'ultima riga della prima.
+        let d = rows.drop_at(&Drag::Group(1), 1, true).unwrap();
+        assert_eq!((d.before, d.row, d.top), (3, 6, false));
     }
 
     #[test]
     fn i_file_restano_nella_loro_cartella() {
         let g = groups();
-        let rows = Rows { groups: &g };
+        let p = closed(&g);
+        let rows = Rows {
+            groups: &g,
+            pages: &p,
+        };
         let drag = Drag::Files {
             group: 0,
             files: BTreeSet::from([2]),
@@ -139,7 +245,11 @@ mod tests {
     #[test]
     fn le_cartelle_si_spostano_intere() {
         let g = groups();
-        let rows = Rows { groups: &g };
+        let p = closed(&g);
+        let rows = Rows {
+            groups: &g,
+            pages: &p,
+        };
         let seconda = Drag::Group(1);
         // Sopra l'intestazione della prima: la seconda cartella va in testa.
         let d = rows.drop_at(&seconda, 0, true).unwrap();

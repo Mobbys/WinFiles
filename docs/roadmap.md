@@ -59,4 +59,5 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] L'impaginazione si rifà solo quando il lavoro cambia
 - [x] In stampa sì/no per file, cartella e pagina (casella nell'elenco, Spazio, Proprietà): il file resta nell'elenco con le sue note, i totali contano solo quello che si stampa
 - [x] Cerca per nome o cartella (Ctrl+F, Esc svuota) e filtra per tipo nell'elenco dei file: cambia solo quello che si vede, non la stampa
+- [x] Pagine dei PDF nell'elenco: freccia per aprirle, una riga per pagina con la sua casella di stampa e la nota; la ricerca trova le singole pagine ("catalogo 3", "pag. 12", testo delle note) e il clic porta l'anteprima al foglio della pagina
 - [x] Ordine a trascinamento nell'elenco: i file dentro la loro cartella (anche più file scelti insieme), le cartelle intere
