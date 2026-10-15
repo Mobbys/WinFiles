@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use winfiles_geom::{Rect, Size};
+use winfiles_geom::{Calibration, Rect, Size};
 use winfiles_model::FileKind;
 
 /// Un colore RGB con opacità.
@@ -93,6 +93,9 @@ pub enum Item {
 pub struct Page {
     pub size: Size,
     pub items: Vec<Item>,
+    /// La correzione della stampante a cui va il foglio: chi scrive il PDF per la stampa la
+    /// applica a tutto il foglio. Nell'anteprima e nel PDF esportato resta nessuna.
+    pub calibration: Calibration,
 }
 
 impl Page {
@@ -100,6 +103,7 @@ impl Page {
         Self {
             size,
             items: Vec::new(),
+            calibration: Calibration::IDENTITY,
         }
     }
 

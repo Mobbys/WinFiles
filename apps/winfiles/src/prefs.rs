@@ -3,12 +3,13 @@
 //! delle impostazioni (`%APPDATA%\WinFiles` su Windows). Un file mancante, rovinato o di una
 //! versione diversa non blocca nulla: si riparte dai valori predefiniti, campo per campo.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use craft_print::Duplex;
 use craft_ui::docking::Layout;
 use serde::{Deserialize, Serialize};
-use winfiles_geom::Unit;
+use winfiles_geom::{Calibration, Unit};
 use winfiles_model::PrintSettings;
 
 use crate::dock::PanelId;
@@ -18,6 +19,8 @@ use crate::theme::ThemeChoice;
 const MAX_BYTES: u64 = 256 * 1024;
 /// La finestra non si riapre più piccola di così (come `with_min_inner_size` in `main`).
 pub const MIN_WINDOW: [f32; 2] = [800.0, 560.0];
+/// Stampanti di cui si ricorda la correzione al massimo.
+const MAX_CALIBRATIONS: usize = 64;
 /// Né più grande di così, contro valori assurdi nel file.
 const MAX_WINDOW: f32 = 16_000.0;
 
@@ -84,6 +87,8 @@ pub struct Prefs {
     /// L'impaginazione di partenza per un lavoro nuovo (senza titolo, che è del lavoro).
     pub print: PrintSettings,
     pub printing: PrintChoices,
+    /// La correzione di ogni stampante calibrata, per nome.
+    pub calibrations: BTreeMap<String, Calibration>,
     /// Misura interna della finestra, in punti.
     pub window: Option<[f32; 2]>,
     pub maximized: bool,
@@ -108,6 +113,12 @@ impl Prefs {
             self.print = PrintSettings::default();
         }
         self.print.title.clear();
+        self.calibrations = std::mem::take(&mut self.calibrations)
+            .into_iter()
+            .map(|(name, c)| (name, c.sanitized()))
+            .filter(|(name, c)| !name.is_empty() && !c.is_identity())
+            .take(MAX_CALIBRATIONS)
+            .collect();
         self
     }
 }
@@ -184,6 +195,14 @@ mod tests {
                 gray: true,
                 fit: true,
             },
+            calibrations: BTreeMap::from([(
+                "Ufficio A3".to_string(),
+                Calibration {
+                    scale_x: 1.004,
+                    offset_y: -0.5,
+                    ..Calibration::IDENTITY
+                },
+            )]),
             window: Some([1400.0, 900.0]),
             maximized: true,
         };
@@ -219,6 +238,27 @@ mod tests {
         assert_eq!(p.window, None);
         assert_eq!(p.dock, None);
         assert_eq!(p.print, PrintSettings::default());
+        assert!(p.calibrations.is_empty());
+        std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn le_correzioni_assurde_si_lasciano_cadere() {
+        let file = temp("calibrazioni");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            r#"{"calibrations":{
+                "Buona":{"scale_x":1.01,"scale_y":0.99,"offset_x":0.5,"offset_y":0.0},
+                "Doppia":{"scale_x":2.0},
+                "Nulla":{},
+                "Parziale":{"offset_x":-1.5}}}"#,
+        )
+        .unwrap();
+        let p = load_from(&file);
+        let names: Vec<&str> = p.calibrations.keys().map(String::as_str).collect();
+        assert_eq!(names, ["Buona", "Parziale"]);
+        assert_eq!(p.calibrations["Parziale"].scale_x, 1.0);
         std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
     }
 

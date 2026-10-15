@@ -19,7 +19,7 @@ use krilla::paint::{Fill, FillRule, Stroke};
 use krilla::surface::Surface;
 use krilla::text::{Font, TextDirection};
 use krilla::{Data, Document};
-use winfiles_geom::{Rect, mm_to_pt};
+use winfiles_geom::{Calibration, Rect, mm_to_pt};
 use winfiles_scene::{Color, Item, Page, Picture, Source, Text, Weight};
 
 /// Risoluzione delle miniature nel PDF, rispetto alla loro misura sul foglio.
@@ -86,8 +86,16 @@ pub fn write(
             .ok_or_else(|| PdfOutError::Write("formato del foglio non valido".into()))?;
         let mut p = doc.start_page_with(PageSettings::new(size));
         let mut surface = p.surface();
+        let c = page.calibration;
+        let calibrated = !c.is_identity();
+        if calibrated {
+            surface.push_transform(&calibration(&c));
+        }
         for item in &page.items {
             w.item(&mut surface, item);
+        }
+        if calibrated {
+            surface.pop();
         }
         surface.finish();
         p.finish();
@@ -106,6 +114,18 @@ pub fn save(path: &Path, bytes: &[u8]) -> Result<(), PdfOutError> {
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+/// La correzione della stampante come trasformazione del foglio, in punti PDF.
+fn calibration(c: &Calibration) -> Transform {
+    Transform::from_row(
+        c.scale_x as f32,
+        0.0,
+        0.0,
+        c.scale_y as f32,
+        pt(c.offset_x),
+        pt(c.offset_y),
+    )
 }
 
 fn pt(mm: f64) -> f32 {

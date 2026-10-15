@@ -74,6 +74,14 @@ pub struct WinFilesApp {
     print_dialog: Option<crate::printing::PrintDialog>,
     /// Le scelte dell'ultima stampa, per la prossima.
     last_print: crate::printing::PrintDialog,
+    /// La finestra "Calibra la stampante" aperta.
+    calibrate: Option<crate::calibrate::CalibrateDialog>,
+    /// Aprire la finestra della calibrazione al prossimo fotogramma.
+    want_calibrate: bool,
+    /// La correzione di ogni stampante calibrata, per nome.
+    calibrations: std::collections::BTreeMap<String, winfiles_geom::Calibration>,
+    /// `--calibrazione A4 uscita.pdf`: la pagina di calibrazione in PDF, poi chiudere.
+    batch_calibration: Option<(Paper, PathBuf)>,
     /// La rotella sull'anteprima: il foglio era già al bordo alto/basso nel fotogramma prima, e
     /// quando ha cambiato foglio l'ultima volta.
     wheel_edges: (bool, bool),
@@ -110,6 +118,7 @@ impl WinFilesApp {
         ctx: &egui::Context,
         paths: Vec<PathBuf>,
         batch_pdf: Option<PathBuf>,
+        batch_calibration: Option<(Paper, PathBuf)>,
         prefs: crate::prefs::Prefs,
     ) -> Self {
         let blank = blank_project(&prefs);
@@ -158,6 +167,10 @@ impl WinFilesApp {
             last_print,
             batch_pdf,
             batch_running: false,
+            calibrate: None,
+            want_calibrate: false,
+            calibrations: prefs.calibrations.clone(),
+            batch_calibration,
             wheel_edges: (true, true),
             last_flip: 0.0,
             flip_to: None,
@@ -276,20 +289,92 @@ impl WinFilesApp {
         let Some(dialog) = self.print_dialog.as_mut() else {
             return;
         };
-        let Some(answer) = dialog.show(ctx, &title, count, current) else {
+        let Some(answer) = dialog.show(ctx, &title, count, current, &self.calibrations) else {
             return;
         };
         if let Some(d) = self.print_dialog.take() {
             self.last_print = d;
         }
-        let crate::printing::Answer::Print(job, range) = answer else {
-            return;
+        let (job, range) = match answer {
+            crate::printing::Answer::Print(job, range) => (job, range),
+            crate::printing::Answer::Calibrate => {
+                self.want_calibrate = true;
+                return;
+            }
+            crate::printing::Answer::Cancel => return,
         };
         let Ok(sheets) = sheets else {
             return;
         };
-        let pages = self.compose(ctx, sheets, range);
+        let mut pages = self.compose(ctx, sheets, range);
+        crate::calibrate::apply(&mut pages, &job, &self.calibrations);
         self.start_job(pages, crate::export::Target::Printer(job));
+    }
+
+    /// Apre la finestra della calibrazione sulla stampante dell'ultima stampa.
+    fn open_calibrate(&mut self) {
+        if self.calibrate.is_some() || self.print_dialog.is_some() {
+            return;
+        }
+        let paper = self.project.print.paper;
+        self.calibrate = Some(crate::calibrate::CalibrateDialog::new(
+            self.last_print.printer.clone(),
+            paper,
+        ));
+    }
+
+    /// La finestra della calibrazione aperta.
+    fn calibrate_window(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = self.calibrate.as_mut() else {
+            return;
+        };
+        let Some(action) = dialog.show(ctx, &self.calibrations, &mut self.thumbs) else {
+            return;
+        };
+        use crate::calibrate::Action;
+        match action {
+            Action::Print(page, job) => {
+                if self.export.is_some() {
+                    self.status = "Aspetta che finisca la stampa in corso".into();
+                } else {
+                    self.start_job(vec![*page], crate::export::Target::Printer(job));
+                }
+            }
+            Action::Pdf(page) => {
+                let Some(mut path) = rfd::FileDialog::new()
+                    .add_filter("PDF", &["pdf"])
+                    .set_title("Salva la pagina di calibrazione")
+                    .set_file_name("Calibrazione.pdf")
+                    .save_file()
+                else {
+                    return;
+                };
+                if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+                    path.as_mut_os_string().push(".pdf");
+                }
+                if self.export.is_none() {
+                    self.start_job(vec![*page], crate::export::Target::File(path));
+                }
+            }
+            Action::Save(name, c) => {
+                self.status = format!(
+                    "Correzione salvata per {name}: {}",
+                    crate::calibrate::describe(&c)
+                );
+                if c.is_identity() {
+                    self.calibrations.remove(&name);
+                } else {
+                    self.calibrations.insert(name, c);
+                }
+            }
+            Action::Remove(name) => {
+                self.status = format!("Tolta la correzione di {name}");
+                self.calibrations.remove(&name);
+            }
+            Action::Close => self.calibrate = None,
+        }
+        // Una correzione nuova si scrive subito nelle impostazioni.
+        self.remember_prefs(ctx, true);
     }
 
     /// A esportazione finita: il messaggio nella barra di stato e il PDF aperto.
@@ -658,6 +743,19 @@ impl WinFilesApp {
                             {
                                 ui.close();
                                 self.want_print = true;
+                            }
+                            if ui
+                                .add_enabled(
+                                    self.export.is_none(),
+                                    egui::Button::new("Calibra la stampante…"),
+                                )
+                                .on_hover_text(
+                                    "Una pagina da misurare con il righello, perché le stampe vengano esatte",
+                                )
+                                .clicked()
+                            {
+                                ui.close();
+                                self.want_calibrate = true;
                             }
                             ui.separator();
                             if ui
@@ -1633,6 +1731,7 @@ impl WinFilesApp {
                 gray: self.last_print.gray,
                 fit: self.last_print.fit,
             },
+            calibrations: self.calibrations.clone(),
             window,
             maximized,
         }
@@ -1646,7 +1745,7 @@ impl WinFilesApp {
             return;
         }
         self.prefs_checked = time;
-        if self.batch_pdf.is_some() || self.batch_running {
+        if self.batch_pdf.is_some() || self.batch_calibration.is_some() || self.batch_running {
             return;
         }
         let current = self.current_prefs(ctx);
@@ -1728,8 +1827,22 @@ impl eframe::App for WinFilesApp {
         if std::mem::take(&mut self.want_print) {
             self.open_print();
         }
+        if std::mem::take(&mut self.want_calibrate) {
+            self.open_calibrate();
+        }
+        if let Some((paper, path)) = self.batch_calibration.take() {
+            let sheet = winfiles_layout::calibration::CalibrationSheet::new(paper);
+            let page = crate::calibrate::compose(&ctx, &sheet, None, &winfiles_geom::Calibration::IDENTITY);
+            self.batch_running = true;
+            self.start_job(vec![page], crate::export::Target::File(path));
+            if self.export.is_none() {
+                eprintln!("{}", self.status);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
         self.receive_export();
         self.print_window(&ctx, sheets);
+        self.calibrate_window(&ctx);
         self.app_bar(ui);
         self.control_bar(ui);
         self.status_bar(ui);

@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod calibrate;
 mod canvas;
 mod captions;
 mod dock;
@@ -44,11 +45,19 @@ fn main() -> eframe::Result {
     // File e cartelle passati sulla riga di comando (anche "Apri con" di Windows) si caricano subito.
     // `--pdf uscita.pdf` esporta i fogli in quel file e chiude: per gli script e per le prove.
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    // `--calibrazione A4 calibrazione.pdf` scrive la pagina di calibrazione in quel file e chiude.
     let mut pdf = None;
+    let mut calibration = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--pdf" {
             pdf = args.next().map(Into::into);
+        } else if arg == "--calibrazione" {
+            let paper = match args.next() {
+                Some(p) if p.eq_ignore_ascii_case("a3") => winfiles_geom::Paper::A3,
+                _ => winfiles_geom::Paper::A4,
+            };
+            calibration = args.next().map(|path| (paper, path.into()));
         } else {
             paths.push(arg.into());
         }
@@ -59,7 +68,13 @@ fn main() -> eframe::Result {
         Box::new(|cc| {
             theme::install_fonts(&cc.egui_ctx);
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            Ok(Box::new(app::WinFilesApp::new(&cc.egui_ctx, paths, pdf, prefs)))
+            Ok(Box::new(app::WinFilesApp::new(
+                &cc.egui_ctx,
+                paths,
+                pdf,
+                calibration,
+                prefs,
+            )))
         }),
     )
 }

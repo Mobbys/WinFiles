@@ -48,8 +48,9 @@ nessun colore scritto a mano nei widget, e ogni testo deve passare il test di co
 `theme.rs` sia nel tema scuro sia in quello chiaro.
 I comandi seguono lo stile di Windows 11 (Fluent): campi, caselle, pallini, cursori e pulsanti a
 due stati si prendono da `apps/winfiles/src/fluent.rs`, non direttamente da egui.
-In arrivo: decodificatori in processo separato (Fase 2), il crate `ui` (Fase 4), pagina di calibrazione
-(Fase 5). La stampa usa già `craft-print` con lo stesso PDF dell'esportazione (ADR 0009).
+In arrivo: decodificatori in processo separato (Fase 2), il crate `ui` (Fase 4).
+La stampa usa già `craft-print` con lo stesso PDF dell'esportazione (ADR 0009) e la correzione
+della stampante calibrata (ADR 0010).
 `cargo xtask layers` vieta egui, eframe, winit e rfd sotto l'interfaccia.
 
 ## Dipendenze
@@ -71,5 +72,7 @@ in inglese.
   moderna, macchine virtuali, screenshot sotto Xvfb).
 - `cargo run -p winfiles -- --pdf uscita.pdf lavoro.winfiles`: esporta i fogli in PDF e chiude;
   per guardare il risultato senza interfaccia (`pdftoppm -png uscita.pdf`).
+- `cargo run -p winfiles -- --calibrazione A4 calibrazione.pdf`: la pagina di calibrazione (A4 o A3)
+  in PDF, poi chiude.
 - `cargo xtask ci`: tutti i controlli.
 - L'eseguibile Windows lo produce la CI (job "Windows") come artifact `winfiles-windows`.

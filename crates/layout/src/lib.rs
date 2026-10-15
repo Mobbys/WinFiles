@@ -13,6 +13,7 @@
 use winfiles_geom::{Rect, Size, sheet_size};
 use winfiles_model::{PrintSettings, View};
 
+pub mod calibration;
 mod summary;
 pub use summary::{Line, PlacedLine, SummaryBlocks, SummarySheet, summary};
 

@@ -5,7 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
+mod calibration;
 mod units;
+pub use calibration::{BadMeasure, Calibration, MAX_SHIFT, MAX_STRETCH, Measures};
 pub use units::{Unit, area_m2, format_area, format_length, format_number, format_size};
 
 /// Millimetri in un pollice.

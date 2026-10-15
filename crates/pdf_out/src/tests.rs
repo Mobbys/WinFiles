@@ -185,3 +185,46 @@ fn si_puo_annullare() {
     let r = write(&pages, &FONTS, &AtomicBool::new(true), |_| {});
     assert!(matches!(r, Err(PdfOutError::Cancelled)));
 }
+
+#[test]
+fn la_correzione_della_stampante_sposta_e_allunga_il_foglio() {
+    let d = dir("calibrazione");
+    let mut page = Page::new(Size::new(210.0, 297.0));
+    page.push(Item::Rect {
+        rect: Rect::new(100.0, 100.0, 10.0, 10.0),
+        radius: 0.0,
+        fill: Some(Color::rgb(0, 0, 0)),
+        stroke: None,
+    });
+    let mut moved = page.clone();
+    // Il 5% più largo e 20 mm più in basso.
+    moved.calibration = winfiles_geom::Calibration {
+        scale_x: 1.05,
+        scale_y: 1.0,
+        offset_x: 0.0,
+        offset_y: 20.0,
+    };
+    let render = |page: Page, name: &str| {
+        let (bytes, _) = write(&[page], &FONTS, &AtomicBool::new(false), |_| {}).unwrap();
+        let out = d.join(name);
+        save(&out, &bytes).unwrap();
+        winfiles_thumbs::render(&out, FileKind::Pdf, 0, 840).unwrap()
+    };
+    let dark = |thumb: &winfiles_thumbs::Thumb, x_mm: f64, y_mm: f64| {
+        let k = f64::from(thumb.width) / 210.0;
+        let (x, y) = ((x_mm * k) as u32, (y_mm * k) as u32);
+        let i = ((y * thumb.width + x) * 4) as usize;
+        thumb.rgba[i] < 80
+    };
+    let plain = render(page, "senza.pdf");
+    assert!(dark(&plain, 105.0, 105.0));
+    assert!(!dark(&plain, 105.0, 125.0));
+    let fixed = render(moved, "con.pdf");
+    // Il quadrato ora va da 105 a 115,5 in x e da 120 a 130 in y; la misura del foglio non cambia.
+    assert!(!dark(&fixed, 105.0, 105.0));
+    assert!(dark(&fixed, 106.0, 125.0) && dark(&fixed, 114.8, 125.0));
+    assert!(!dark(&fixed, 116.5, 125.0));
+    let probe = winfiles_formats_like_size(&d.join("con.pdf"));
+    assert!((probe[0].0 - 210.0).abs() < 0.1);
+    std::fs::remove_dir_all(&d).unwrap();
+}

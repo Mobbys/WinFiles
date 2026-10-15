@@ -1,8 +1,11 @@
 //! La finestra Stampa: stampante, copie, fogli, fronte e retro, bianco e nero e scala. I fogli si
 //! stampano alla misura vera (100%), come nel PDF; la riduzione all'area stampabile è una scelta.
 
+use std::collections::BTreeMap;
+
 use craft_print::{Duplex, Job, Printer, Scaling};
 use egui::vec2;
+use winfiles_geom::Calibration;
 
 use crate::app::{dim_label, segmented, stepper};
 use crate::fluent;
@@ -51,6 +54,8 @@ impl Default for PrintDialog {
 /// Cosa ha deciso chi stampa.
 pub enum Answer {
     Print(Job, std::ops::RangeInclusive<usize>),
+    /// Aprire la calibrazione della stampante.
+    Calibrate,
     Cancel,
 }
 
@@ -115,7 +120,14 @@ impl PrintDialog {
     }
 
     /// Mostra la finestra. `count` sono i fogli del lavoro, `current` quello in anteprima.
-    pub fn show(&mut self, ctx: &egui::Context, title: &str, count: usize, current: usize) -> Option<Answer> {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        title: &str,
+        count: usize,
+        current: usize,
+        calibrations: &BTreeMap<String, Calibration>,
+    ) -> Option<Answer> {
         let t = Tokens::get(ctx);
         let mut answer = None;
         let modal = egui::Modal::new(egui::Id::new("stampa")).show(ctx, |ui| {
@@ -227,6 +239,19 @@ impl PrintDialog {
                             egui::Label::new(egui::RichText::new(hint).size(12.0).color(t.text_dim))
                                 .wrap(),
                         );
+                        if !self.fit {
+                            let correction = self.printer.as_ref().and_then(|n| calibrations.get(n));
+                            let text = correction.map_or_else(
+                                || "Stampante non calibrata".to_string(),
+                                |c| format!("Calibrata: {}", crate::calibrate::describe(c)),
+                            );
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(egui::RichText::new(text).size(12.0).color(t.text));
+                                if ui.link("Calibra la stampante…").clicked() {
+                                    answer = Some(Answer::Calibrate);
+                                }
+                            });
+                        }
                     });
                     ui.end_row();
                 });
