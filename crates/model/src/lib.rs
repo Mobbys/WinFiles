@@ -260,6 +260,8 @@ pub struct PrintSettings {
     pub show_trim: bool,
     /// Un foglio di riepilogo in cima: l'elenco di cartelle e file con le misure.
     pub show_summary: bool,
+    /// Stampa le note di file, pagine e cartelle (spento: restano nel lavoro ma non sul foglio).
+    pub show_notes: bool,
 }
 
 impl Default for PrintSettings {
@@ -284,6 +286,7 @@ impl Default for PrintSettings {
             show_sizes: true,
             show_trim: true,
             show_summary: false,
+            show_notes: true,
         }
     }
 }
@@ -311,6 +314,23 @@ impl Project {
             version: FORMAT_VERSION,
             title: title.into(),
             ..Self::default()
+        }
+    }
+
+    /// La nota di una pagina come va sul foglio: vuota se le note sono nascoste.
+    pub fn printed_note<'a>(&self, file: &'a FileEntry, page: usize) -> &'a str {
+        if self.print.show_notes {
+            file.note(page)
+        } else {
+            ""
+        }
+    }
+
+    /// La nota di una cartella come va sul foglio: vuota se manca o se le note sono nascoste.
+    pub fn printed_folder_note(&self, folder: &Path) -> &str {
+        match self.folder_notes.get(folder) {
+            Some(n) if self.print.show_notes => n,
+            _ => "",
         }
     }
 
@@ -439,6 +459,24 @@ mod tests {
         p.folder_notes
             .insert(PathBuf::from("/lavori/cliente"), "Consegna entro venerdì".into());
         p
+    }
+
+    #[test]
+    fn le_note_nascoste_restano_nel_lavoro_ma_non_sul_foglio() {
+        let mut p = sample();
+        let folder = PathBuf::from("/lavori/cliente");
+        assert_eq!(
+            p.printed_note(&p.files[0], 0),
+            "Verificare il colore Pantone, è più scuro"
+        );
+        assert_eq!(p.printed_folder_note(&folder), "Consegna entro venerdì");
+        p.print.show_notes = false;
+        assert_eq!(p.printed_note(&p.files[0], 0), "");
+        assert_eq!(p.printed_folder_note(&folder), "");
+        assert_eq!(p.files[0].note(0), "Verificare il colore Pantone, è più scuro");
+        // Un lavoro salvato prima di questa opzione stampa le note come prima.
+        let old: PrintSettings = serde_json::from_str("{}").unwrap();
+        assert!(old.show_notes);
     }
 
     #[test]

@@ -292,7 +292,7 @@ pub fn items(ctx: &egui::Context, project: &Project, slots: &[Slot]) -> Vec<Item
                 .get(folder)
                 .cloned()
                 .unwrap_or_else(|| folder.display().to_string());
-            let note = project.folder_notes.get(folder).map_or("", String::as_str);
+            let note = project.printed_folder_note(folder);
             current = Some((
                 folder,
                 label,
@@ -314,7 +314,7 @@ pub fn items(ctx: &egui::Context, project: &Project, slots: &[Slot]) -> Vec<Item
             caption: caption_height(
                 ctx,
                 &file_name(&f.path),
-                f.note(slot.page),
+                project.printed_note(f, slot.page),
                 lines,
                 print.caption_text,
                 print.note_text,

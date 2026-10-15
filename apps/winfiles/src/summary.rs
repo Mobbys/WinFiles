@@ -133,6 +133,7 @@ fn cells(f: &FileEntry, page: Option<usize>, print: &PrintSettings, unit: Unit) 
 
 /// Le righe del riepilogo, nell'ordine del lavoro.
 fn rows(project: &Project) -> Vec<Row> {
+    let print_notes = project.print.show_notes;
     let mut out = Vec::new();
     let mut last: Option<&std::path::Path> = None;
     let mut odd = false;
@@ -150,7 +151,7 @@ fn rows(project: &Project) -> Vec<Row> {
             let notes = f
                 .notes
                 .iter()
-                .filter(|(p, n)| **p < pages && !n.trim().is_empty())
+                .filter(|(p, n)| print_notes && **p < pages && !n.trim().is_empty())
                 .map(|(p, n)| {
                     if pages > 1 {
                         format!("Pag. {}: {}", p + 1, n.trim())
@@ -170,7 +171,7 @@ fn rows(project: &Project) -> Vec<Row> {
         } else {
             // Pagine di formati diversi: una riga per pagina.
             for p in 0..pages {
-                let note = f.note(p).trim();
+                let note = project.printed_note(f, p).trim();
                 out.push(Row {
                     kind: Kind::File {
                         file: i,
@@ -203,7 +204,7 @@ pub fn layout(ctx: &egui::Context, project: &Project, title: f64) -> Result<Summ
         .iter()
         .map(|row| match &row.kind {
             Kind::Folder(path) => {
-                let note = project.folder_notes.get(path).map_or("", String::as_str);
+                let note = project.printed_folder_note(path);
                 let n = note_rows(ctx, note, print.note_text, width - 2.0 * INDENT);
                 let note_h = if n > 0 {
                     n as f64 * line_mm(print.note_text) + 2.0 * ROW_PAD
@@ -389,7 +390,8 @@ pub fn compose(ctx: &egui::Context, sheet: &SummarySheet, summary: &Summary, pro
                     em(print.header_text),
                 );
                 if !placed.continued
-                    && let Some(note) = project.folder_notes.get(path).filter(|n| !n.trim().is_empty())
+                    && let Some(note) =
+                        Some(project.printed_folder_note(path)).filter(|n| !n.trim().is_empty())
                 {
                     let galley = sk.layout(note_job(note, print.note_text, r.w - 2.0 * INDENT, PX_PER_MM));
                     sk.text(

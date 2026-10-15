@@ -767,6 +767,8 @@ impl WinFilesApp {
                 &mut print.page_break_per_folder,
                 "Ogni cartella su un foglio nuovo",
             );
+            ui.checkbox(&mut print.show_notes, "Stampa le note")
+                .on_hover_text("Spento: le note restano nel lavoro ma non vanno sul foglio");
             ui.add_space(8.0);
             let sheet = winfiles_geom::sheet_size(print.paper, print.orientation);
             let area = Size::new(

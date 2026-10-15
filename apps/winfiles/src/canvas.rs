@@ -133,7 +133,9 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
             em(print.header_text),
         );
         if let Some(note) = header.note
-            && let Some(text) = folder.and_then(|f| project.folder_notes.get(f.0))
+            && let Some(text) = folder
+                .map(|f| project.printed_folder_note(f.0))
+                .filter(|n| !n.trim().is_empty())
         {
             let width = note.w - 2.0 * FOLDER_NOTE_INSET;
             let galley = sk.layout(note_job(text, print.note_text, width, PX_PER_MM));
@@ -237,7 +239,7 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
             }
             None => y += line_mm(info_pt),
         }
-        let note = file.note(slot.page);
+        let note = project.printed_note(file, slot.page);
         if !note.trim().is_empty() {
             y += NOTE_GAP;
             let mut job = note_job(note, print.note_text, caption.w, PX_PER_MM);
