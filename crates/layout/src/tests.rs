@@ -1,6 +1,7 @@
 use super::*;
 use proptest::prelude::*;
 use winfiles_geom::{Margins, Orientation, Paper};
+use winfiles_model::View;
 
 fn item(id: usize, w: f64, h: f64, folder: &str) -> Item {
     Item {
@@ -149,6 +150,50 @@ fn impostazioni_non_valide() {
     assert_eq!(grid(&huge, &[]), Err(LayoutError::NothingFits));
 }
 
+#[test]
+fn elenco_una_miniatura_per_riga_con_il_testo_a_destra() {
+    let settings = PrintSettings {
+        view: View::List,
+        ..PrintSettings::default()
+    };
+    let items: Vec<Item> = (0..5)
+        .map(|i| Item {
+            caption: 12.0,
+            ..item(i, 210.0, 297.0, "a")
+        })
+        .collect();
+    let sheets = grid(&settings, &items).unwrap();
+    let placed = &sheets[0].items;
+    assert_eq!(placed.len(), 5);
+    let cell = list_thumb(&settings);
+    for (a, b) in placed.iter().zip(placed.iter().skip(1)) {
+        // Una sotto l'altra, staccate dello spazio tra le righe.
+        assert!((b.cell.y - a.cell.bottom() - settings.row_gap).abs() < 1e-9);
+    }
+    for p in placed {
+        assert!((p.cell.x - sheets[0].area.x).abs() < 1e-9);
+        assert!((p.cell.w - sheets[0].area.w).abs() < 1e-9);
+        assert!(p.image.right() <= p.cell.x + cell + 1e-9);
+        assert!(p.caption.x >= p.image.right() + settings.gap - 1e-9);
+        assert!((p.caption.w - caption_width(&settings)).abs() < 1e-9);
+        assert!((p.caption.y - p.image.y).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn elenco_la_riga_segue_il_testo_se_e_piu_alto_della_miniatura() {
+    let settings = PrintSettings {
+        view: View::List,
+        ..PrintSettings::default()
+    };
+    let items = [Item {
+        caption: 80.0,
+        ..item(0, 300.0, 100.0, "a")
+    }];
+    let p = &grid(&settings, &items).unwrap()[0].items[0];
+    assert!((p.cell.h - 80.0).abs() < 1e-9);
+}
+
 fn settings_strategy() -> impl Strategy<Value = PrintSettings> {
     (
         prop_oneof![Just(Paper::A4), Just(Paper::A3)],
@@ -157,13 +202,14 @@ fn settings_strategy() -> impl Strategy<Value = PrintSettings> {
         1u32..=MAX_COLUMNS,
         (0.0f64..10.0, 0.0f64..10.0),
         0.0f64..15.0,
-        any::<bool>(),
+        (any::<bool>(), any::<bool>()),
     )
         .prop_map(
-            |(paper, orientation, margin, columns, (gap, row_gap), header, page_break_per_folder)| {
+            |(paper, orientation, margin, columns, (gap, row_gap), header, (page_break_per_folder, list))| {
                 PrintSettings {
                     paper,
                     orientation,
+                    view: if list { View::List } else { View::Grid },
                     margins: Margins::uniform(margin),
                     columns,
                     gap,

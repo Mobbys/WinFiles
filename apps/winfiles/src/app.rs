@@ -8,7 +8,7 @@ use craft_ui::docking::{Action, DockArea, DockContent, Layout, PanelLimits};
 use egui::{Align, Color32, Rect, Sense, Stroke, Vec2, vec2};
 use winfiles_geom::{Orientation, Paper, Unit};
 use winfiles_layout::{LayoutError, MAX_COLUMNS, Sheet, grid_with_title};
-use winfiles_model::{Project, Totals};
+use winfiles_model::{Project, Totals, View};
 
 use crate::captions::{self, Slot};
 use crate::dock::{self, PanelId};
@@ -712,6 +712,14 @@ impl WinFilesApp {
                             (Orientation::Portrait, "Verticale"),
                             (Orientation::Landscape, "Orizzontale"),
                         ],
+                    );
+                    ui.add_space(12.0);
+                    dim_label(ui, "Vista");
+                    segmented(
+                        ui,
+                        "vista",
+                        &mut print.view,
+                        &[(View::Grid, "Griglia"), (View::List, "Elenco")],
                     );
                     ui.add_space(12.0);
                     dim_label(ui, "Colonne");

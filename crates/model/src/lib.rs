@@ -208,14 +208,26 @@ impl Totals {
     }
 }
 
+/// Come si dispongono le miniature sul foglio.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum View {
+    /// Colonne di uguale larghezza, didascalia sotto ogni miniatura.
+    #[default]
+    Grid,
+    /// Una miniatura per riga, con nome, misure e note a destra.
+    List,
+}
+
 /// Impostazioni di stampa del progetto.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PrintSettings {
     pub paper: Paper,
     pub orientation: Orientation,
+    /// Griglia o elenco.
+    pub view: View,
     pub margins: Margins,
-    /// Numero di colonne della griglia.
+    /// Numero di colonne della griglia; nell'elenco la miniatura è larga quanto una colonna.
     pub columns: u32,
     /// Spazio tra le colonne, in mm.
     pub gap: f64,
@@ -248,6 +260,7 @@ impl Default for PrintSettings {
         Self {
             paper: Paper::A4,
             orientation: Orientation::Portrait,
+            view: View::Grid,
             margins: Margins::uniform(10.0),
             columns: 4,
             gap: 4.0,

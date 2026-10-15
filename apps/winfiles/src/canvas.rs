@@ -150,6 +150,25 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
         }
     }
 
+    let list = print.view == winfiles_model::View::List;
+    // Nell'elenco: per ogni riga, dove inizia la riga successiva sullo stesso foglio (se c'è e
+    // senza un'intestazione in mezzo), per il filo che le separa.
+    let rows_below: HashMap<usize, f64> = if list {
+        sheet
+            .items
+            .iter()
+            .zip(sheet.items.iter().skip(1))
+            .filter(|(a, b)| {
+                !sheet
+                    .headers
+                    .iter()
+                    .any(|h| h.rect.y >= a.cell.bottom() && h.rect.y < b.cell.y)
+            })
+            .map(|(a, b)| (a.id, b.cell.y))
+            .collect()
+    } else {
+        HashMap::new()
+    };
     for item in &sheet.items {
         let Some(slot) = slots.get(item.id) else {
             continue;
@@ -192,19 +211,29 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
         }
 
         let caption = item.caption;
-        let cx = caption.x + caption.w / 2.0;
+        // Nella griglia il testo è centrato sotto la miniatura, nell'elenco allineato a sinistra
+        // accanto alla miniatura.
+        let (tx, align) = if list {
+            (caption.x, egui::Align::LEFT)
+        } else {
+            (caption.x + caption.w / 2.0, egui::Align::Center)
+        };
         let bottom = Some(caption.bottom());
         let mut y = caption.y + CAPTION_PAD;
         let name = crate::captions::file_name(&file.path);
-        let galley = sk.layout(name_job(&name, name_pt, caption.w, PX_PER_MM));
-        sk.text((cx, y), &galley, em(name_pt), Weight::SemiBold, INK, bottom);
+        let mut job = name_job(&name, name_pt, caption.w, PX_PER_MM);
+        job.halign = align;
+        let galley = sk.layout(job);
+        sk.text((tx, y), &galley, em(name_pt), Weight::SemiBold, INK, bottom);
         y += galley.rows.len().max(1) as f64 * line_mm(name_pt);
         match page_info {
             Some(page) => {
                 for line in info_lines(page, project.unit, print) {
                     let ink = if line.trim { NOTE_INK } else { INK_SOFT };
-                    let galley = sk.layout(one_line(line.text, em(info_pt), Weight::Regular, caption.w));
-                    sk.text((cx, y), &galley, em(info_pt), Weight::Regular, ink, bottom);
+                    let mut job = one_line(line.text, em(info_pt), Weight::Regular, caption.w);
+                    job.halign = align;
+                    let galley = sk.layout(job);
+                    sk.text((tx, y), &galley, em(info_pt), Weight::Regular, ink, bottom);
                     y += line_mm(info_pt);
                 }
             }
@@ -214,16 +243,21 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
         if !note.trim().is_empty() {
             y += NOTE_GAP;
             let mut job = note_job(note, print.note_text, caption.w, PX_PER_MM);
-            job.halign = egui::Align::Center;
+            job.halign = align;
             let galley = sk.layout(job);
             sk.text(
-                (cx, y),
+                (tx, y),
                 &galley,
                 em(print.note_text),
                 Weight::Regular,
                 NOTE_INK,
                 bottom,
             );
+        }
+        // Nell'elenco un filo sottile separa una riga dalla successiva, a metà dello spazio.
+        if list && let Some(next) = rows_below.get(&item.id) {
+            let ly = (item.cell.bottom() + next) / 2.0;
+            sk.line((item.cell.x, ly), (item.cell.right(), ly), FRAME, 0.15);
         }
     }
     sk.page

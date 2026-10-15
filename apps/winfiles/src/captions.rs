@@ -7,7 +7,7 @@
 use egui::Color32;
 use egui::text::{LayoutJob, TextFormat};
 use winfiles_geom::{Size, Unit, area_m2, format_area, format_size};
-use winfiles_layout::{Item, cell_width};
+use winfiles_layout::{Item, caption_width};
 use winfiles_model::{FileKind, PageInfo, PrintSettings, Project};
 
 /// Millimetri per punto tipografico.
@@ -272,7 +272,7 @@ fn placeholder_size(kind: FileKind) -> Size {
 pub fn items(ctx: &egui::Context, project: &Project, slots: &[Slot]) -> Vec<Item> {
     let labels = project.folder_labels();
     let print = &project.print;
-    let width = cell_width(print);
+    let width = caption_width(print);
     let sheet_width = winfiles_geom::sheet_size(print.paper, print.orientation).w
         - print.margins.left
         - print.margins.right;

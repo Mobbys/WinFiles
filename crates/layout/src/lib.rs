@@ -5,13 +5,13 @@
 //! Oggi c'è la vista a griglia: colonne di uguale larghezza, riquadro immagine quadrato, didascalia
 //! sotto, intestazione a ogni cambio di cartella (ripetuta in testa al foglio se la cartella
 //! continua) con la nota della cartella. Ogni riga è alta quanto la didascalia più alta che
-//! contiene. Elenco e nesting arriveranno nella Fase 3.
+//! contiene. Nella vista a elenco ogni miniatura ha la sua riga, con la didascalia a destra.
 //!
 //! Le altezze dei testi (didascalia e note) le misura chi chiama, perché dipendono dai caratteri:
 //! qui arrivano già in millimetri.
 
 use winfiles_geom::{Rect, Size, sheet_size};
-use winfiles_model::PrintSettings;
+use winfiles_model::{PrintSettings, View};
 
 mod summary;
 pub use summary::{Line, PlacedLine, SummaryBlocks, SummarySheet, summary};
@@ -130,12 +130,140 @@ fn height(v: f64, max: f64) -> f64 {
     }
 }
 
+/// Larghezza dello spazio per la didascalia, in mm: serve a chi misura i testi. Nella griglia è
+/// la colonna; nell'elenco è ciò che resta a destra della miniatura.
+pub fn caption_width(settings: &PrintSettings) -> f64 {
+    match settings.view {
+        View::Grid => cell_width(settings),
+        View::List => {
+            let size = sheet_size(settings.paper, settings.orientation);
+            let area = Rect::new(0.0, 0.0, size.w, size.h).inset(settings.margins);
+            (area.w - list_thumb(settings) - settings.gap).max(0.0)
+        }
+    }
+}
+
+/// Larghezza delle miniature nell'elenco: una colonna della griglia, ma mai più di metà riga, così
+/// resta sempre posto per il testo.
+fn list_thumb(settings: &PrintSettings) -> f64 {
+    let size = sheet_size(settings.paper, settings.orientation);
+    let area = Rect::new(0.0, 0.0, size.w, size.h).inset(settings.margins);
+    cell_width(settings).min((area.w - settings.gap) / 2.0)
+}
+
 /// Impagina `items` nell'ordine dato, in griglia.
 pub fn grid(settings: &PrintSettings, items: &[Item]) -> Result<Vec<Sheet>, LayoutError> {
     grid_with_title(settings, items, 0.0)
 }
 
-/// Come [`grid`], con un titolo alto `title` mm in cima a ogni foglio (0 = nessun titolo).
+/// Una riga di miniature, con le celle già al loro posto in orizzontale e in alto a zero.
+struct Row {
+    /// Indice in `items` del primo elemento della riga.
+    first: usize,
+    height: f64,
+    cells: Vec<Placed>,
+}
+
+/// Le righe della griglia: fino a `columns` celle della stessa cartella. Ogni riga è alta quanto
+/// la sua immagine più alta più la sua didascalia più alta, e le immagini poggiano sulla
+/// didascalia, così una riga di soli formati orizzontali non lascia un vuoto.
+fn grid_rows(settings: &PrintSettings, items: &[Item], area: Rect, max_text: f64) -> Vec<Row> {
+    let cols = settings.columns.max(1) as usize;
+    let cell_w = cell_width(settings);
+    let mut rows = Vec::new();
+    let mut start = 0usize;
+    while start < items.len() {
+        let folder = items.get(start).map(|i| i.folder.as_str());
+        let members: Vec<&Item> = items
+            .iter()
+            .skip(start)
+            .take(cols)
+            .take_while(|i| Some(i.folder.as_str()) == folder)
+            .collect();
+        let img_h = members
+            .iter()
+            .map(|i| {
+                i.content
+                    .fit_within(Size::new(cell_w, cell_w))
+                    .map_or(cell_w, |s| s.h)
+            })
+            .fold(0.0, f64::max)
+            .clamp(cell_w * 0.05, cell_w);
+        let caption_h = members
+            .iter()
+            .map(|i| height(i.caption, max_text))
+            .fold(0.0, f64::max);
+        let row_h = img_h + caption_h;
+        let cells = members
+            .iter()
+            .enumerate()
+            .map(|(col, item)| {
+                let x = area.x + col as f64 * (cell_w + settings.gap);
+                let fitted = item
+                    .content
+                    .fit_within(Size::new(cell_w, img_h))
+                    .unwrap_or(Size::new(cell_w, img_h));
+                Placed {
+                    id: item.id,
+                    cell: Rect::new(x, 0.0, cell_w, row_h),
+                    image: Rect::new(
+                        x + (cell_w - fitted.w) / 2.0,
+                        img_h - fitted.h,
+                        fitted.w,
+                        fitted.h,
+                    ),
+                    caption: Rect::new(x, img_h, cell_w, caption_h),
+                }
+            })
+            .collect();
+        rows.push(Row {
+            first: start,
+            height: row_h,
+            cells,
+        });
+        start += members.len().max(1);
+    }
+    rows
+}
+
+/// Le righe dell'elenco: una miniatura per riga, larga quanto una colonna della griglia e in alto
+/// a sinistra (al più metà riga), con la didascalia a destra. La riga è alta quanto la più alta delle due.
+fn list_rows(settings: &PrintSettings, items: &[Item], area: Rect, max_text: f64) -> Vec<Row> {
+    let cell_w = list_thumb(settings);
+    let text_w = caption_width(settings);
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let fitted = item
+                .content
+                .fit_within(Size::new(cell_w, cell_w))
+                .unwrap_or(Size::new(cell_w, cell_w));
+            let img_h = fitted.h.clamp(cell_w * 0.05, cell_w);
+            let caption_h = height(item.caption, max_text);
+            let row_h = img_h.max(caption_h);
+            let text_x = area.x + cell_w + settings.gap;
+            Row {
+                first: index,
+                height: row_h,
+                cells: vec![Placed {
+                    id: item.id,
+                    cell: Rect::new(area.x, 0.0, area.w, row_h),
+                    image: Rect::new(
+                        area.x + (cell_w - fitted.w) / 2.0,
+                        0.0,
+                        fitted.w,
+                        fitted.h.min(img_h),
+                    ),
+                    caption: Rect::new(text_x, 0.0, text_w, caption_h),
+                }],
+            }
+        })
+        .collect()
+}
+
+/// Impagina `items` nell'ordine dato, nella vista scelta (griglia o elenco), con lo spazio per un
+/// titolo alto `title` mm in cima a ogni foglio.
 pub fn grid_with_title(
     settings: &PrintSettings,
     items: &[Item],
@@ -160,8 +288,10 @@ pub fn grid_with_title(
     } else {
         (printable, None)
     };
-    let cols = settings.columns as usize;
-    let cell_w = cell_width(settings);
+    let cell_w = match settings.view {
+        View::Grid => cell_width(settings),
+        View::List => list_thumb(settings),
+    };
     // Deve starci almeno un'intestazione più una riga, altrimenti l'impaginazione non termina mai.
     if cell_w <= EPS || settings.header + settings.row_gap + cell_w > area.h + EPS {
         return Err(LayoutError::NothingFits);
@@ -169,32 +299,9 @@ pub fn grid_with_title(
     // Lo spazio massimo per i testi sotto le immagini e sotto l'intestazione: oltre, il testo
     // viene tagliato, ma la riga sta sempre in un foglio.
     let max_text = area.h - settings.header - settings.row_gap - cell_w;
-    // Le celle della riga che inizia da `start`: fino a `cols`, della stessa cartella.
-    let row = |start: usize| {
-        let folder = items.get(start).map(|i| i.folder.as_str());
-        items
-            .iter()
-            .skip(start)
-            .take(cols)
-            .take_while(move |i| Some(i.folder.as_str()) == folder)
-    };
-    // L'altezza delle immagini della riga: quella della più alta, così una riga di soli formati
-    // orizzontali non lascia un vuoto sopra le didascalie.
-    let row_image = |start: usize| {
-        row(start)
-            .map(|i| {
-                i.content
-                    .fit_within(Size::new(cell_w, cell_w))
-                    .map_or(cell_w, |s| s.h)
-            })
-            .fold(0.0, f64::max)
-            .clamp(cell_w * 0.05, cell_w)
-    };
-    // La didascalia della riga che inizia da `start`: la più alta tra le sue celle.
-    let row_caption = |start: usize| {
-        row(start)
-            .map(|i| height(i.caption, max_text))
-            .fold(0.0, f64::max)
+    let rows = match settings.view {
+        View::Grid => grid_rows(settings, items, area, max_text),
+        View::List => list_rows(settings, items, area, max_text),
     };
 
     let new_sheet = || Sheet {
@@ -206,26 +313,28 @@ pub fn grid_with_title(
     let mut sheets = Vec::new();
     let mut sheet = new_sheet();
     let mut y = area.y;
-    let mut col = 0usize;
-    let mut row_h = 0.0;
-    let mut img_h = cell_w;
     let mut current: Option<&str> = None;
+    // C'è già una riga sopra, nello stesso foglio: la prossima va sotto, staccata di `row_gap`.
+    let mut after_row = false;
 
-    for (index, item) in items.iter().enumerate() {
-        let changed = current != Some(item.folder.as_str());
-        if changed {
+    for row in &rows {
+        let Some(item) = items.get(row.first) else {
+            continue;
+        };
+        if current != Some(item.folder.as_str()) {
             if settings.page_break_per_folder && !sheet.is_empty() {
                 sheets.push(std::mem::replace(&mut sheet, new_sheet()));
                 y = area.y;
-            } else if col != 0 {
-                y += row_h + settings.row_gap;
+            } else if after_row {
+                y += settings.row_gap;
             }
-            col = 0;
-            img_h = row_image(index);
-            row_h = img_h + row_caption(index);
-            let note = height(item.folder_note, max_text - (row_h - img_h));
+            // La nota della cartella non può spingere la sua prima riga fuori dal foglio.
+            let note = height(
+                item.folder_note,
+                area.h - settings.header - settings.row_gap - row.height,
+            );
             let block = settings.header + note + settings.row_gap;
-            if y + block + row_h > area.bottom() + EPS {
+            if y + block + row.height > area.bottom() + EPS {
                 sheets.push(std::mem::replace(&mut sheet, new_sheet()));
                 y = area.y;
             }
@@ -237,14 +346,11 @@ pub fn grid_with_title(
             });
             y += block;
             current = Some(item.folder.as_str());
-        } else if col == cols {
-            col = 0;
-            y += row_h + settings.row_gap;
-            img_h = row_image(index);
-            row_h = img_h + row_caption(index);
+        } else if after_row {
+            y += settings.row_gap;
         }
 
-        if col == 0 && y + row_h > area.bottom() + EPS {
+        if y + row.height > area.bottom() + EPS {
             sheets.push(std::mem::replace(&mut sheet, new_sheet()));
             sheet.headers.push(Header {
                 folder: item.folder.clone(),
@@ -255,28 +361,17 @@ pub fn grid_with_title(
             y = area.y + settings.header + settings.row_gap;
         }
 
-        let x = area.x + col as f64 * (cell_w + settings.gap);
-        let cell = Rect::new(x, y, cell_w, row_h);
-        let image_box = Rect::new(x, y, cell_w, img_h);
-        let fitted = item
-            .content
-            .fit_within(image_box.size())
-            .unwrap_or(image_box.size());
-        // Le immagini poggiano sulla didascalia: centrate in larghezza, in basso nel riquadro.
-        let image = Rect::new(
-            image_box.x + (image_box.w - fitted.w) / 2.0,
-            image_box.bottom() - fitted.h,
-            fitted.w,
-            fitted.h,
-        );
-        let caption = Rect::new(x, y + img_h, cell_w, row_h - img_h);
-        sheet.items.push(Placed {
-            id: item.id,
-            cell,
-            image,
-            caption,
-        });
-        col += 1;
+        for cell in &row.cells {
+            let down = |r: Rect| Rect::new(r.x, r.y + y, r.w, r.h);
+            sheet.items.push(Placed {
+                id: cell.id,
+                cell: down(cell.cell),
+                image: down(cell.image),
+                caption: down(cell.caption),
+            });
+        }
+        y += row.height;
+        after_row = true;
     }
 
     if !sheet.is_empty() || sheets.is_empty() {
