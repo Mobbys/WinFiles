@@ -444,6 +444,27 @@ impl WinFilesApp {
         }
     }
 
+    /// Mette in stampa (o ne toglie) tutte le pagine dei file indicati: restano nell'elenco con
+    /// le loro note.
+    pub(crate) fn set_printed(&mut self, files: &BTreeSet<usize>, on: bool) {
+        for i in files {
+            if let Some(f) = self.project.files.get_mut(*i) {
+                f.set_all_printed(on);
+            }
+        }
+    }
+
+    /// Spazio sui file scelti: se ce n'è uno in stampa li toglie tutti, altrimenti li rimette.
+    pub(crate) fn toggle_marked_print(&mut self) {
+        let any_on = self
+            .marked
+            .iter()
+            .filter_map(|i| self.project.files.get(*i))
+            .any(|f| f.printed_pages().next().is_some());
+        let marked = self.marked.clone();
+        self.set_printed(&marked, !any_on);
+    }
+
     /// Toglie dall'elenco i file indicati (solo dal lavoro, mai dal disco).
     pub(crate) fn remove_files(&mut self, remove: &BTreeSet<usize>) {
         if remove.is_empty() {
@@ -799,12 +820,15 @@ impl WinFilesApp {
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     let totals = Totals::of(&self.project.files);
-                    let text = format!(
+                    let mut text = format!(
                         "{} file  ·  {} pagine  ·  {}",
                         totals.files,
                         totals.pages,
                         crate::panels::areas(&totals)
                     );
+                    if totals.excluded > 0 {
+                        text.push_str(&format!("  ·  {} fuori stampa", totals.excluded));
+                    }
                     ui.label(egui::RichText::new(text).font(semibold(12.5)).color(t.text));
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         let pending = self.measurer.pending();
@@ -1604,6 +1628,13 @@ impl eframe::App for WinFilesApp {
         {
             let marked = std::mem::take(&mut self.marked);
             self.remove_files(&marked);
+        }
+        // Spazio mette o toglie dalla stampa i file scelti, come la spunta delle miniature della 4.9.
+        if !self.marked.is_empty()
+            && !ui.ctx().egui_wants_keyboard_input()
+            && ui.input(|i| i.key_pressed(egui::Key::Space))
+        {
+            self.toggle_marked_print();
         }
         self.sync_theme(ui.ctx());
         self.receive_scans();

@@ -9,7 +9,7 @@ use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Align, Color32, Stroke};
 use winfiles_geom::{Rect as MmRect, Unit, area_m2, format_area, format_size};
 use winfiles_layout::{Header, LayoutError, Line, SummaryBlocks, SummarySheet};
-use winfiles_model::{FileEntry, PrintSettings, Project, Totals};
+use winfiles_model::{FileEntry, PrintSettings, PrintState, Project, Totals};
 use winfiles_scene::{Page, Weight};
 
 use crate::canvas::{FRAME, INK, INK_SOFT, draw_header, draw_title, paper, to_screen, totals_text};
@@ -138,6 +138,10 @@ fn rows(project: &Project) -> Vec<Row> {
     let mut last: Option<&std::path::Path> = None;
     let mut odd = false;
     for (i, f) in project.files.iter().enumerate() {
+        // I file tolti dalla stampa non sono nel riepilogo, e nemmeno le cartelle rimaste vuote.
+        if f.printed_pages().next().is_none() {
+            continue;
+        }
         if last != Some(f.folder()) {
             last = Some(f.folder());
             odd = false;
@@ -146,8 +150,8 @@ fn rows(project: &Project) -> Vec<Row> {
                 notes: Vec::new(),
             });
         }
-        let pages = f.pages.len().max(1);
-        if same_pages(f) {
+        let pages = f.sheet_pages();
+        if same_pages(f) && f.print_state() == PrintState::All {
             let notes = f
                 .notes
                 .iter()
@@ -169,8 +173,8 @@ fn rows(project: &Project) -> Vec<Row> {
                 notes,
             });
         } else {
-            // Pagine di formati diversi: una riga per pagina.
-            for p in 0..pages {
+            // Pagine di formati diversi, o solo alcune in stampa: una riga per pagina.
+            for p in f.printed_pages() {
                 let note = project.printed_note(f, p).trim();
                 out.push(Row {
                     kind: Kind::File {
@@ -314,7 +318,7 @@ pub fn compose(ctx: &egui::Context, sheet: &SummarySheet, summary: &Summary, pro
         let galley = sk.layout_line("Riepilogo del lavoro", big, Weight::SemiBold);
         sk.text((h.x, h.y), &galley, big, Weight::SemiBold, INK, None);
         let all = Totals::of(&project.files);
-        let folders = project.folder_totals().len();
+        let folders = project.folder_totals().values().filter(|t| t.files > 0).count();
         let mut text = format!(
             "{folders} {}  ·  {} file  ·  {} pagine",
             if folders == 1 { "cartella" } else { "cartelle" },
@@ -554,6 +558,30 @@ mod tests {
         // Un file non ancora misurato ha comunque tutte le celle.
         let vuoto = FileEntry::new(PathBuf::from("/c/x.jpg"), FileKind::Image);
         assert_eq!(cells(&vuoto, None, &print, Unit::Mm).len(), 5);
+    }
+
+    #[test]
+    fn il_riepilogo_lascia_fuori_quello_che_non_si_stampa() {
+        let mut p = Project::new("x");
+        p.files = vec![
+            pdf("/a/libro.pdf", &[(216.0, 303.0); 3]),
+            pdf("/a/foglio.pdf", &[(216.0, 303.0)]),
+            pdf("/b/uno.pdf", &[(216.0, 303.0)]),
+        ];
+        p.files[0].set_printed(1, false);
+        // Un'esclusione di una pagina che il file non ha più (il file è cambiato) non conta.
+        p.files[1].skip.insert(4);
+        p.files[2].set_all_printed(false);
+        let kinds: Vec<_> = rows(&p)
+            .iter()
+            .map(|r| match &r.kind {
+                Kind::Folder(f) => f.display().to_string(),
+                Kind::File { page: None, .. } => "file".to_string(),
+                Kind::File { page: Some(n), .. } => format!("pag{n}"),
+            })
+            .collect();
+        // Il libro va per pagine, solo quelle in stampa; la cartella /b sparisce.
+        assert_eq!(kinds, ["/a", "pag0", "pag2", "file"]);
     }
 
     #[test]

@@ -55,7 +55,7 @@ pub struct Slot {
     pub color: Option<Color32>,
 }
 
-/// Una miniatura per ogni pagina di ogni file, nell'ordine del progetto.
+/// Una miniatura per ogni pagina in stampa di ogni file, nell'ordine del progetto.
 pub fn slots(project: &Project) -> Vec<Slot> {
     let mut out = Vec::with_capacity(project.files.len());
     let mut multi = 0usize;
@@ -69,7 +69,7 @@ pub fn slots(project: &Project) -> Vec<Slot> {
             multi += 1;
             c
         });
-        out.extend((0..pages).map(|page| Slot {
+        out.extend(f.printed_pages().map(|page| Slot {
             file,
             page,
             pages,
@@ -365,6 +365,22 @@ mod tests {
         p.files
             .push(FileEntry::new(PathBuf::from("/a/x.jpg"), FileKind::Image));
         assert_eq!(slots(&p).len(), 7);
+    }
+
+    #[test]
+    fn le_pagine_escluse_non_vanno_sul_foglio() {
+        let mut p = Project::new("prova");
+        p.files = vec![file("/a/uno.pdf", 3), file("/a/due.pdf", 1)];
+        let colore = slots(&p)[0].color;
+        p.files[0].set_printed(1, false);
+        p.files[1].set_all_printed(false);
+        let s = slots(&p);
+        // Restano la prima e la terza pagina, con il loro numero e il colore del file.
+        assert_eq!(
+            s.iter().map(|s| (s.file, s.page, s.pages)).collect::<Vec<_>>(),
+            [(0, 0, 3), (0, 2, 3)]
+        );
+        assert_eq!(s[1].color, colore);
     }
 
     #[test]

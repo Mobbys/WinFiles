@@ -4,7 +4,7 @@
 //! Le note vivono qui e non nel risultato stampato: nella versione 4.9 stavano solo nella pagina
 //! HTML generata e si perdevano alla chiusura.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -116,6 +116,10 @@ pub struct FileEntry {
     /// un PDF ha la sua, come ogni miniatura nella 4.9.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub notes: BTreeMap<usize, String>,
+    /// Pagine (da 0) che restano nell'elenco ma non vanno in stampa: come le miniature senza
+    /// spunta della 4.9. Un file senza misure ha comunque la sua pagina 0.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub skip: BTreeSet<usize>,
     /// Nota unica per file dei primi lavori salvati: all'apertura passa alla prima pagina.
     #[serde(default, rename = "note", skip_serializing)]
     legacy_note: String,
@@ -130,7 +134,52 @@ impl FileEntry {
             pages: Vec::new(),
             image: None,
             notes: BTreeMap::new(),
+            skip: BTreeSet::new(),
             legacy_note: String::new(),
+        }
+    }
+
+    /// Le pagine sul foglio: almeno una, anche per un file non ancora misurato.
+    pub fn sheet_pages(&self) -> usize {
+        self.pages.len().max(1)
+    }
+
+    /// Vero se la pagina va in stampa.
+    pub fn printed(&self, page: usize) -> bool {
+        !self.skip.contains(&page)
+    }
+
+    /// Mette o toglie una pagina dalla stampa.
+    pub fn set_printed(&mut self, page: usize, on: bool) {
+        if on {
+            self.skip.remove(&page);
+        } else if page < self.sheet_pages() {
+            self.skip.insert(page);
+        }
+    }
+
+    /// Mette o toglie dalla stampa tutte le pagine del file.
+    pub fn set_all_printed(&mut self, on: bool) {
+        self.skip.clear();
+        if !on {
+            self.skip.extend(0..self.sheet_pages());
+        }
+    }
+
+    /// Le pagine che vanno in stampa, in ordine.
+    pub fn printed_pages(&self) -> impl Iterator<Item = usize> + '_ {
+        (0..self.sheet_pages()).filter(|p| self.printed(*p))
+    }
+
+    /// Quanto del file va in stampa.
+    pub fn print_state(&self) -> PrintState {
+        let n = self.printed_pages().count();
+        if n == 0 {
+            PrintState::None
+        } else if n == self.sheet_pages() {
+            PrintState::All
+        } else {
+            PrintState::Some
         }
     }
 
@@ -167,6 +216,23 @@ impl FileEntry {
     pub fn area_full_m2(&self) -> f64 {
         self.pages.iter().map(|p| area_m2(p.size)).sum()
     }
+
+    /// Le misure delle pagine in stampa.
+    fn printed_info(&self) -> impl Iterator<Item = &PageInfo> + '_ {
+        self.pages
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.printed(*i))
+            .map(|(_, p)| p)
+    }
+}
+
+/// Quanto di un file va in stampa.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrintState {
+    All,
+    Some,
+    None,
 }
 
 /// Somme di un gruppo di file: numero di file, di pagine e metri quadrati.
@@ -180,16 +246,27 @@ pub struct Totals {
     pub area_full_m2: f64,
     /// File di cui non si conoscono ancora (o non si possono leggere) le misure.
     pub unmeasured: usize,
+    /// Pagine lasciate fuori dalla stampa: non contano nei numeri qui sopra.
+    pub excluded: usize,
 }
 
 impl Totals {
+    /// Conta solo quello che va in stampa: un file tolto del tutto non è tra i file.
     fn add(&mut self, file: &FileEntry) {
+        let printed = file.printed_pages().count();
+        self.excluded += file.sheet_pages() - printed;
+        if printed == 0 {
+            return;
+        }
         self.files += 1;
-        self.pages += file.pages.len();
-        self.area_m2 += file.area_m2();
-        self.area_full_m2 += file.area_full_m2();
         if file.pages.is_empty() {
             self.unmeasured += 1;
+        } else {
+            self.pages += printed;
+        }
+        for p in file.printed_info() {
+            self.area_m2 += area_m2(p.finished());
+            self.area_full_m2 += area_m2(p.size);
         }
     }
 
@@ -454,6 +531,7 @@ mod tests {
             }],
             image: None,
             notes: BTreeMap::from([(0, "Verificare il colore Pantone, è più scuro".into())]),
+            skip: BTreeSet::new(),
             legacy_note: String::new(),
         });
         p.folder_notes
@@ -516,6 +594,60 @@ mod tests {
             "Consegna entro venerdì"
         );
         assert_eq!(back.folder_note(Path::new("/altro")), "");
+    }
+
+    #[test]
+    fn le_pagine_escluse_restano_nel_lavoro_ma_non_contano() {
+        let mut p = sample();
+        let a4 = PageInfo {
+            size: Size::new(210.0, 297.0),
+            trim: None,
+        };
+        let mut libro = FileEntry::new(PathBuf::from("/lavori/cliente/libro.pdf"), FileKind::Pdf);
+        libro.pages = vec![a4; 4];
+        p.files.push(libro);
+        let tutto = Totals::of(&p.files);
+        assert_eq!((tutto.files, tutto.pages, tutto.excluded), (2, 5, 0));
+
+        // Due pagine del libro fuori dalla stampa: il file conta, le pagine no.
+        p.files[1].set_printed(1, false);
+        p.files[1].set_printed(3, false);
+        assert_eq!(p.files[1].printed_pages().collect::<Vec<_>>(), [0, 2]);
+        assert_eq!(p.files[1].print_state(), PrintState::Some);
+        let t = Totals::of(&p.files);
+        assert_eq!((t.files, t.pages, t.excluded), (2, 3, 2));
+        assert!((t.area_full_m2 - tutto.area_full_m2 + 2.0 * 0.06237).abs() < 1e-9);
+        // L'area del file resta quella di tutte le sue pagine.
+        assert!((p.files[1].area_full_m2() - 4.0 * 0.06237).abs() < 1e-9);
+
+        // Il logo tolto del tutto non è più tra i file della cartella.
+        p.files[0].set_all_printed(false);
+        assert_eq!(p.files[0].print_state(), PrintState::None);
+        let t = p.folder_totals()[Path::new("/lavori/cliente")];
+        assert_eq!((t.files, t.pages, t.excluded), (1, 2, 3));
+
+        // Una pagina che il file non ha non si può escludere.
+        p.files[0].set_printed(7, false);
+        assert!(!p.files[0].skip.contains(&7));
+
+        // Le esclusioni si salvano con il lavoro; senza esclusioni il campo non c'è.
+        let back = Project::from_json(&p.to_json().unwrap()).unwrap();
+        assert_eq!(back, p);
+        p.files[0].set_all_printed(true);
+        p.files[1].set_all_printed(true);
+        assert!(!p.to_json().unwrap().contains("skip"));
+    }
+
+    #[test]
+    fn un_file_senza_misure_si_puo_escludere() {
+        let mut f = FileEntry::new(PathBuf::from("/x/a.eps"), FileKind::Eps);
+        assert_eq!(f.sheet_pages(), 1);
+        f.set_printed(0, false);
+        let t = Totals::of([&f]);
+        assert_eq!((t.files, t.unmeasured, t.excluded), (0, 0, 1));
+        f.set_printed(0, true);
+        let t = Totals::of([&f]);
+        assert_eq!((t.files, t.unmeasured, t.excluded), (1, 1, 0));
     }
 
     #[test]

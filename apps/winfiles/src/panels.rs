@@ -5,7 +5,7 @@ use std::path::Path;
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Color32, Rect, Sense, Vec2, pos2, vec2};
 use winfiles_geom::{Margins, Size, Unit, format_area, format_length, format_number, format_size};
-use winfiles_model::{FileEntry, FileKind, Totals, View};
+use winfiles_model::{FileEntry, FileKind, PrintState, Totals, View};
 
 use crate::app::{WinFilesApp, dim_label};
 use crate::icons;
@@ -15,8 +15,70 @@ use crate::thumbs::ThumbState;
 const ROW: f32 = 38.0;
 
 enum Row<'a> {
-    Folder(&'a Path, String, Totals),
+    Folder(&'a Path, String, Totals, PrintState),
     File(usize),
+}
+
+/// La casella "in stampa" a sinistra di file e cartelle: piena con la spunta, piena con un
+/// trattino se va in stampa solo una parte, vuota se resta fuori.
+fn paint_print_check(ui: &egui::Ui, rect: Rect, state: PrintState, hovered: bool) {
+    let t = Tokens::get(ui.ctx());
+    let painter = ui.painter();
+    let fill = if hovered { t.accent } else { t.primary };
+    let stroke = egui::Stroke::new(1.8, t.on_primary);
+    let (l, tp, s) = (rect.left(), rect.top(), rect.width() / 16.0);
+    match state {
+        PrintState::All => {
+            painter.rect_filled(rect, 3.0, fill);
+            painter.line(
+                vec![
+                    pos2(l + 4.0 * s, tp + 8.5 * s),
+                    pos2(l + 6.8 * s, tp + 11.3 * s),
+                    pos2(l + 12.0 * s, tp + 5.0 * s),
+                ],
+                stroke,
+            );
+        }
+        PrintState::Some => {
+            painter.rect_filled(rect, 3.0, fill);
+            painter.line_segment(
+                [
+                    pos2(l + 4.0 * s, rect.center().y),
+                    pos2(l + 12.0 * s, rect.center().y),
+                ],
+                stroke,
+            );
+        }
+        PrintState::None => {
+            let fill = if hovered { t.hover } else { t.input };
+            painter.rect(
+                rect,
+                3.0,
+                fill,
+                egui::Stroke::new(1.0, t.input_border),
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
+}
+
+/// Lo stato di un gruppo di file: tutti in stampa, nessuno, o una parte.
+fn group_state(states: impl IntoIterator<Item = PrintState>) -> PrintState {
+    let (mut all, mut none) = (true, true);
+    for s in states {
+        all &= s == PrintState::All;
+        none &= s == PrintState::None;
+    }
+    match (all, none) {
+        (true, _) => PrintState::All,
+        (_, true) => PrintState::None,
+        _ => PrintState::Some,
+    }
+}
+
+/// Il riquadro della casella "in stampa" in una riga dell'elenco.
+fn check_rect(row: Rect) -> Rect {
+    Rect::from_center_size(row.left_center() + vec2(11.0, 0.0), Vec2::splat(14.0))
 }
 
 fn file_name(f: &FileEntry) -> String {
@@ -109,6 +171,57 @@ pub(crate) fn areas(t: &Totals) -> String {
     crate::captions::area_text(t.area_full_m2, t.area_m2, true, true).unwrap_or_default()
 }
 
+/// Quali pagine del file vanno in stampa: una casella per un file di una pagina, un numero da
+/// accendere o spegnere per ogni pagina degli altri. Restituisce la pagina toccata (None = tutte).
+fn print_section(ui: &mut egui::Ui, f: &FileEntry) -> Option<(Option<usize>, bool)> {
+    let mut out = None;
+    let pages = f.sheet_pages();
+    if pages == 1 {
+        let mut on = f.printed(0);
+        if ui
+            .checkbox(&mut on, "In stampa")
+            .on_hover_text("Tolto dalla stampa, il file resta nell'elenco con le sue note. Tasto Spazio.")
+            .changed()
+        {
+            out = Some((None, on));
+        }
+        return out;
+    }
+    let printed = f.printed_pages().count();
+    ui.horizontal(|ui| {
+        section(ui, "Pagine in stampa");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .add_enabled(printed > 0, egui::Button::new("Nessuna").small())
+                .clicked()
+            {
+                out = Some((None, false));
+            }
+            if ui
+                .add_enabled(printed < pages, egui::Button::new("Tutte").small())
+                .clicked()
+            {
+                out = Some((None, true));
+            }
+        });
+    });
+    dim_label(
+        ui,
+        &format!("{printed} di {pages}: clic su un numero per togliere o rimettere la pagina"),
+    );
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        for p in 0..pages.min(500) {
+            let on = f.printed(p);
+            let chip = egui::Button::selectable(on, format!("{}", p + 1)).min_size(vec2(30.0, 22.0));
+            if ui.add(chip).clicked() {
+                out = Some((Some(p), !on));
+            }
+        }
+    });
+    out
+}
+
 /// Una riga etichetta/valore nelle proprietà.
 fn prop(ui: &mut egui::Ui, label: &str, value: impl Into<egui::WidgetText>) {
     dim_label(ui, label);
@@ -134,6 +247,12 @@ enum FileAction {
     RemoveFolder(std::path::PathBuf),
     Open(std::path::PathBuf),
     Reveal(std::path::PathBuf),
+    /// Mette in stampa (o ne toglie) i file scelti.
+    PrintMarked(bool),
+    /// Mette in stampa (o ne toglie) un file solo, dalla sua casella.
+    PrintFile(usize, bool),
+    /// Mette in stampa (o ne toglie) tutti i file di una cartella.
+    PrintFolder(std::path::PathBuf, bool),
 }
 
 /// Cosa fare dell'intestazione di una cartella nell'elenco.
@@ -167,10 +286,18 @@ impl WinFilesApp {
                     .map(str::to_string)
                     .or_else(|| labels.get(folder).cloned())
                     .unwrap_or_else(|| folder_name(folder));
+                let state = group_state(
+                    self.project
+                        .files
+                        .iter()
+                        .filter(|g| g.folder() == folder)
+                        .map(FileEntry::print_state),
+                );
                 rows.push(Row::Folder(
                     folder,
                     label,
                     totals.get(folder).copied().unwrap_or_default(),
+                    state,
                 ));
                 last = Some(folder);
             }
@@ -190,24 +317,45 @@ impl WinFilesApp {
                     let (rect, resp) =
                         ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
                     match row {
-                        Row::Folder(path, label, tot) => {
+                        Row::Folder(path, label, tot, state) => {
                             ui.painter()
                                 .rect_filled(rect.shrink2(vec2(0.0, 1.0)), t.radius, t.panel_darker);
+                            let check = check_rect(rect);
+                            let check_resp = ui
+                                .interact(
+                                    check.expand(4.0),
+                                    ui.id().with(("stampa-cartella", path)),
+                                    Sense::click(),
+                                )
+                                .on_hover_text("In stampa: togli o rimetti tutta la cartella");
+                            paint_print_check(ui, check, *state, check_resp.hovered());
+                            if check_resp.clicked() {
+                                action = Some(FileAction::PrintFolder(
+                                    path.to_path_buf(),
+                                    *state != PrintState::All,
+                                ));
+                            }
                             let icon = Rect::from_center_size(
-                                rect.left_center() + vec2(12.0, 0.0),
+                                rect.left_center() + vec2(32.0, 0.0),
                                 Vec2::splat(16.0),
                             );
                             icons::paint(ui, "folder-open", icon, t.icon);
-                            let mut info = format!("{} file · {}", tot.files, areas(tot));
-                            if tot.pages > tot.files {
-                                info = format!("{} file · {} pagine · {}", tot.files, tot.pages, areas(tot));
+                            let mut info = if tot.files == 0 {
+                                "fuori stampa".to_string()
+                            } else if tot.pages > tot.files {
+                                format!("{} file · {} pagine · {}", tot.files, tot.pages, areas(tot))
+                            } else {
+                                format!("{} file · {}", tot.files, areas(tot))
+                            };
+                            if tot.files > 0 && tot.excluded > 0 {
+                                info.push_str(&format!(" · {} fuori stampa", tot.excluded));
                             }
                             let editing = matches!(&self.renaming, Some((p, _)) if p.as_path() == *path);
                             if editing {
                                 // Rinomina sul posto: Invio o clic fuori conferma, Esc annulla.
                                 let field = Rect::from_min_size(
-                                    rect.min + vec2(24.0, 1.0),
-                                    vec2(rect.width() - 28.0, 20.0),
+                                    rect.min + vec2(44.0, 1.0),
+                                    vec2(rect.width() - 48.0, 20.0),
                                 );
                                 if let Some((_, text)) = &mut self.renaming {
                                     // In una Ui figlia, così il campo non sposta le righe sotto.
@@ -229,7 +377,7 @@ impl WinFilesApp {
                                     }
                                 }
                                 ui.painter().text(
-                                    rect.left_bottom() + vec2(30.0, -2.0),
+                                    rect.left_bottom() + vec2(50.0, -2.0),
                                     egui::Align2::LEFT_BOTTOM,
                                     &info,
                                     egui::FontId::proportional(11.5),
@@ -238,7 +386,7 @@ impl WinFilesApp {
                             } else {
                                 two_lines(
                                     ui,
-                                    rect.with_min_x(rect.left() + 26.0)
+                                    rect.with_min_x(rect.left() + 46.0)
                                         .with_max_x(rect.right() - 26.0),
                                     label,
                                     semibold(12.5),
@@ -270,6 +418,16 @@ impl WinFilesApp {
                                         ui.close();
                                     }
                                     ui.separator();
+                                    let on = *state != PrintState::All;
+                                    let text = if on {
+                                        "Metti in stampa tutta la cartella"
+                                    } else {
+                                        "Togli dalla stampa tutta la cartella"
+                                    };
+                                    if ui.button(text).clicked() {
+                                        action = Some(FileAction::PrintFolder(path.to_path_buf(), on));
+                                        ui.close();
+                                    }
                                     if ui.button("Mostra la cartella").clicked() {
                                         action = Some(FileAction::Open(path.to_path_buf()));
                                         ui.close();
@@ -298,9 +456,35 @@ impl WinFilesApp {
                                 ui.painter().rect_filled(rect, t.radius, t.hover);
                             }
                             let error = self.errors.get(&f.path);
-                            let tint = if error.is_some() { t.warning } else { t.icon };
+                            let state = f.print_state();
+                            let out = state == PrintState::None;
+                            let check = check_rect(rect).translate(vec2(20.0, 0.0));
+                            let check_resp = ui
+                                .interact(
+                                    check.expand(4.0),
+                                    ui.id().with(("stampa-file", *i)),
+                                    Sense::click(),
+                                )
+                                .on_hover_text(match state {
+                                    PrintState::All => "In stampa. Clic per lasciarlo fuori (Spazio)",
+                                    PrintState::Some => {
+                                        "In stampa solo alcune pagine: scegli quali in Proprietà"
+                                    }
+                                    PrintState::None => "Fuori stampa. Clic per rimetterlo (Spazio)",
+                                });
+                            paint_print_check(ui, check, state, check_resp.hovered());
+                            if check_resp.clicked() {
+                                action = Some(FileAction::PrintFile(*i, state != PrintState::All));
+                            }
+                            let tint = if error.is_some() {
+                                t.warning
+                            } else if out {
+                                t.text_disabled
+                            } else {
+                                t.icon
+                            };
                             let icon = Rect::from_center_size(
-                                rect.left_center() + vec2(26.0, 0.0),
+                                rect.left_center() + vec2(50.0, 0.0),
                                 Vec2::splat(15.0),
                             );
                             icons::paint(ui, kind_icon(f.kind), icon, tint);
@@ -323,16 +507,35 @@ impl WinFilesApp {
                             let assumed = f.image.is_some_and(|i| !i.dpi_from_file);
                             let info_color = if (assumed || error.is_some()) && !selected {
                                 t.warning
+                            } else if out && !selected {
+                                t.text_disabled
                             } else if selected {
                                 t.text_strong
                             } else {
                                 t.text_dim
                             };
-                            let name_color = if selected { t.text_strong } else { t.text };
-                            let info = file_info(f, unit, error, assumed);
+                            let name_color = if selected {
+                                t.text_strong
+                            } else if out {
+                                t.text_dim
+                            } else {
+                                t.text
+                            };
+                            let mut info = file_info(f, unit, error, assumed);
+                            match state {
+                                PrintState::All => {}
+                                PrintState::Some => {
+                                    info = format!(
+                                        "{} di {} pagine in stampa  ·  {info}",
+                                        f.printed_pages().count(),
+                                        f.sheet_pages()
+                                    )
+                                }
+                                PrintState::None => info = format!("fuori stampa  ·  {info}"),
+                            }
                             two_lines(
                                 ui,
-                                rect.with_min_x(rect.left() + 42.0)
+                                rect.with_min_x(rect.left() + 66.0)
                                     .with_max_x(rect.right() - if note_icon { 30.0 } else { 0.0 }),
                                 &name,
                                 egui::FontId::proportional(12.5),
@@ -363,6 +566,21 @@ impl WinFilesApp {
                                     ui.close();
                                 }
                                 ui.separator();
+                                let on = state != PrintState::All;
+                                let label = match (count, on) {
+                                    (1, true) => "Metti in stampa".to_string(),
+                                    (1, false) => "Togli dalla stampa".to_string(),
+                                    (n, true) => format!("Metti in stampa i {n} file scelti"),
+                                    (n, false) => format!("Togli dalla stampa i {n} file scelti"),
+                                };
+                                if ui
+                                    .button(label)
+                                    .on_hover_text("Il file resta nell'elenco con le sue note. Tasto Spazio.")
+                                    .clicked()
+                                {
+                                    action = Some(FileAction::PrintMarked(on));
+                                    ui.close();
+                                }
                                 let label = match count {
                                     1 => "Togli dall'elenco".to_string(),
                                     n => format!("Togli dall'elenco i {n} file scelti"),
@@ -401,6 +619,30 @@ impl WinFilesApp {
                     .map(|(i, _)| i)
                     .collect();
                 self.remove_files(&set);
+            }
+            Some(FileAction::PrintMarked(on)) => {
+                let marked = self.marked.clone();
+                self.set_printed(&marked, on);
+            }
+            Some(FileAction::PrintFile(i, on)) => {
+                // La casella di un file scelto insieme ad altri vale per tutti, come in Esplora file.
+                let set = if self.marked.contains(&i) {
+                    self.marked.clone()
+                } else {
+                    std::collections::BTreeSet::from([i])
+                };
+                self.set_printed(&set, on);
+            }
+            Some(FileAction::PrintFolder(folder, on)) => {
+                let set = self
+                    .project
+                    .files
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| f.folder() == folder)
+                    .map(|(i, _)| i)
+                    .collect();
+                self.set_printed(&set, on);
             }
             Some(FileAction::Open(path)) => {
                 if let Err(e) = crate::shell::open(&path) {
@@ -454,7 +696,12 @@ impl WinFilesApp {
         );
         ui.add_space(4.0);
         let thumbs = &mut self.thumbs;
+        // Pagina (o tutto il file, con None) da mettere in stampa o togliere.
+        let mut print: Option<(Option<usize>, bool)> = None;
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            // Prima cosa che si vede: che cosa del file va in stampa.
+            print = print_section(ui, f);
+            ui.add_space(6.0);
             // L'anteprima grande del file scelto.
             let t = Tokens::get(ui.ctx());
             let box_size = vec2(ui.available_width(), 170.0);
@@ -543,6 +790,14 @@ impl WinFilesApp {
                 });
             }
         });
+        if let Some((page, on)) = print
+            && let Some(f) = self.selected.and_then(|i| self.project.files.get_mut(i))
+        {
+            match page {
+                Some(p) => f.set_printed(p, on),
+                None => f.set_all_printed(on),
+            }
+        }
     }
 
     /// Senza un file scelto: le somme per cartella e del progetto.

@@ -9,7 +9,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 | 1 | Scansione ricorsiva, metadati, file di progetto, note salvate | Progetto da 10.000 file aperto e salvato | In corso: apri e salva pronti |
 | 2 | Decodificatori in processo separato, profili ICC, cache su disco | Corpus completo senza crash | Da fare |
 | 3 | Griglia, elenco e nesting su A4 e A3, intestazioni cartella, export PDF | Parità con la stampa attuale, ±0,5 mm | In corso: griglia, elenco, nesting, riepilogo ed export PDF pronti |
-| 4 | Pannelli agganciabili, anteprima, note, ordine a trascinamento, filtri | Un lavoro vero fatto solo con la nuova app | Da fare |
+| 4 | Pannelli agganciabili, anteprima, note, ordine a trascinamento, filtri | Un lavoro vero fatto solo con la nuova app | In corso: pannelli, note e stampa sì/no per file e pagina pronti |
 | 5 | Stampa Windows a scala 100%, area stampabile del driver, calibrazione | A4 e A3 esatti su due stampanti | In corso: stampa diretta pronta ([ADR 0009](adr/0009-stampa-diretta.md)) |
 | 6 | CSV, appunti, modelli salvati, segni di taglio, miniature vettoriali, HEIC | Ogni extra con i suoi criteri | Da fare |
 | 7 | Installer MSI, aggiornamenti, beta in parallelo con WinFile 4.9 | Liste Anteprime 4.9 messa a riposo | Da fare |
@@ -53,3 +53,10 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Vista nesting: tutti i file alla stessa scala 1:N, automatica o scelta, accostati in righe centrate
 - [x] Elenco con la larghezza delle miniature in mm
 - [ ] Confronto con la stampa della 4.9, ±0,5 mm
+
+## Fase 4 in dettaglio
+- [x] "Stampa le note": le note restano nel lavoro ma si possono togliere dal foglio
+- [x] L'impaginazione si rifà solo quando il lavoro cambia
+- [x] In stampa sì/no per file, cartella e pagina (casella nell'elenco, Spazio, Proprietà): il file resta nell'elenco con le sue note, i totali contano solo quello che si stampa
+- [ ] Cerca e filtra per nome e tipo nell'elenco dei file
+- [ ] Ordine di file e cartelle a trascinamento
