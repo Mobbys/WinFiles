@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 745a48144bf6c070b7914365fc15f8daa89bc9daacb6059bbcbfc62f808b6578 # shrinks to settings = PrintSettings { paper: A4, orientation: Portrait, margins: Margins { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 }, columns: 1, gap: 0.0, caption: 0.0, header: 0.0, page_break_per_folder: false }, items = [Item { id: 1, content: Size { w: 0.1, h: 700.8072054126752 }, folder: "c0" }, Item { id: 0, content: Size { w: 0.1, h: 0.1 }, folder: "c2" }]
+cc 48a5470ac02e39dd52214684d9134cbbe6b2ac562c33fd85baff9b714d464106 # shrinks to settings = PrintSettings { paper: A4, orientation: Portrait, view: List, margins: Margins { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 }, columns: 1, gap: 0.5017741776627086, row_gap: 0.0, caption_text: 7.0, note_text: 8.0, header_text: 9.0, title_text: 14.0, header: 0.0, page_break_per_folder: false, title: "", show_sizes: true, show_trim: true, show_summary: false }, items = [Item { id: 0, content: Size { w: 0.1, h: 0.1 }, folder: "c0", caption: 0.0, folder_note: 0.0 }], title = 0.0

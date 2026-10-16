@@ -1,0 +1,107 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*", "xtask"]
+default-members = ["crates/*", "apps/winfiles", "xtask"]
+# Copie modificate di librerie esterne, fuori dai controlli del workspace (vedi vendor/README.md).
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.2.5"
+edition = "2024"
+license = "LicenseRef-WinFiles-Proprietary"
+rust-version = "1.95"
+repository = "https://github.com/Mobbys/WinFiles"
+
+[workspace.dependencies]
+# interni
+winfiles-geom = { path = "crates/geom", version = "0.2.3" }
+winfiles-model = { path = "crates/model", version = "0.2.3" }
+winfiles-layout = { path = "crates/layout", version = "0.2.3" }
+winfiles-formats = { path = "crates/formats", version = "0.2.3" }
+winfiles-thumbs = { path = "crates/thumbs", version = "0.2.3" }
+winfiles-scene = { path = "crates/scene", version = "0.2.3" }
+winfiles-pdf-out = { path = "crates/pdf_out", version = "0.2.3" }
+winfiles-pdf-edit = { path = "crates/pdf_edit", version = "0.2.3" }
+winfiles-image-edit = { path = "crates/image_edit", version = "0.2.3" }
+winfiles-photo = { path = "crates/photo", version = "0.2.3" }
+
+# base
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"
+proptest = "1"
+
+# lettura dei file (vedi docs/adr/0005-misure-dei-file.md)
+hayro-syntax = { version = "0.8", default-features = false, features = ["std"] }
+# miniature (vedi docs/adr/0006-miniature.md)
+hayro = "0.8"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "gif", "bmp", "webp"] }
+# Modifica delle immagini (Fase 8, ADR 0016): il codificatore TIFF di `image` non scrive la
+# risoluzione né il profilo ICC, e un TIFF senza risoluzione in tipografia si stampa alla misura
+# sbagliata. È la stessa libreria che `image` usa per i TIFF, quindi nessuna copia in più. MIT.
+tiff = "0.11"
+
+
+# Foto HEIC/HEIF (iPhone, Mac): il lettore di PhotoCraft, Rust puro senza unsafe, che avvolge
+# heic-rs (MIT/Apache) e trasforma i suoi panic in errori. A commit fissato (vedi ADR 0012).
+photocraft-heif = { git = "https://github.com/storytold/photocraft", rev = "df055f3dcb0bb0312af97548ee6c6f9628f21dd7" }
+# Foto RAW e file di Photoshop (ADR 0017), stesso commit di PhotoCraft. Tutti Rust puro senza
+# unsafe, MIT/Apache, scritti da zero sulle specifiche pubbliche (niente codice di dcraw/LibRaw,
+# che sono GPL/LGPL):
+# - photocraft-raw sviluppa DNG, CR2, NEF, ARW, PEF, ORF, RW2, RAF e trova l'anteprima della
+#   fotocamera (anche nei CR3, che non sviluppa ancora);
+# - photocraft-psd legge l'immagine unita dei PSD e PSB, con profilo ICC e risoluzione;
+# - photocraft-cms converte i colori con i profili ICC: dal ProPhoto dei RAW e dal CMYK dei PSD
+#   all'sRGB che si vede a schermo e si salva.
+photocraft-raw = { git = "https://github.com/storytold/photocraft", rev = "df055f3dcb0bb0312af97548ee6c6f9628f21dd7" }
+photocraft-psd = { git = "https://github.com/storytold/photocraft", rev = "df055f3dcb0bb0312af97548ee6c6f9628f21dd7" }
+photocraft-cms = { git = "https://github.com/storytold/photocraft", rev = "df055f3dcb0bb0312af97548ee6c6f9628f21dd7" }
+
+# PDF in uscita (vedi docs/adr/0008-esportazione-pdf.md): testi con i font incorporati, immagini
+# e pagine dei PDF originali incorporate come vettori.
+krilla = { version = "0.8", default-features = false, features = ["raster-images", "simple-text"] }
+
+# Modifica dei PDF (Fase 9, ADR 0015): il livello oggetti e le operazioni sulle pagine di PdfCraft
+# (rotazione, spostamento, eliminazione, import, estrazione, divisione, riquadri), che riscrivono
+# il file senza perdere annotazioni, segnalibri e livelli. A commit fissato. Licenza MIT/Apache.
+pdfcraft-cos = { git = "https://github.com/storytold/pdfcraft", rev = "afa8e1843cfed613f3d403119f6c2649bce824c9" }
+pdfcraft-organize = { git = "https://github.com/storytold/pdfcraft", rev = "afa8e1843cfed613f3d403119f6c2649bce824c9" }
+# Lettura e scrittura degli operatori del contenuto, per la sovrastampa delle tinte piatte; era già
+# nel progetto come dipendenza di pdfcraft-organize.
+pdfcraft-content = { git = "https://github.com/storytold/pdfcraft", rev = "afa8e1843cfed613f3d403119f6c2649bce824c9" }
+
+# interfaccia
+eframe = "0.36"
+egui = "0.36"
+egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
+# Finestre di sistema per aprire e salvare il progetto (Fase 1): su Windows usa il dialogo
+# comune di Esplora file, su Linux il portale XDG. Licenza MIT.
+rfd = "0.17"
+# Appunti con testo e HTML insieme ("Copia tabella", Fase 6): Excel e Word incollano la tabella
+# formattata, il Blocco note il testo. Già usato da egui-winit. Licenza MIT/Apache.
+arboard = "3.6"
+# Pannelli agganciabili e icone delle app ArtCraft, a commit fissato (vedi CLAUDE.md).
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "457a078809690994b22debdffb703ff36d3129df", features = ["serde"] }
+# Stampa (Fase 5): il PDF dei fogli allo spooler, alla misura vera. Su Windows nel processo, senza
+# script né programmi esterni; su Linux e macOS con CUPS. Stesso commit di craft-ui (ADR 0009).
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "457a078809690994b22debdffb703ff36d3129df" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# hayro-interpret 0.8.0 con la sovrastampa simulata (ADR 0011): finché non è nella versione
+# ufficiale, la copia modificata in vendor/.
+[patch.crates-io]
+hayro-interpret = { path = "vendor/hayro-interpret" }
