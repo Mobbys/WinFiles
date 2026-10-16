@@ -43,9 +43,11 @@ impl Measurer {
     }
 
     /// Chiede la misura di un file. Senza thread (non partito) la richiesta si perde e il file
-    /// resta "da misurare": l'app continua a funzionare con le proporzioni provvisorie.
+    /// resta "da misurare": l'app continua a funzionare con le proporzioni provvisorie. I file
+    /// di tipo non supportato non hanno misure: non si chiedono.
     pub fn request(&mut self, path: PathBuf, kind: FileKind) {
-        if let Some(jobs) = &self.jobs
+        if kind != FileKind::Unsupported
+            && let Some(jobs) = &self.jobs
             && jobs.send((path, kind)).is_ok()
         {
             self.pending += 1;

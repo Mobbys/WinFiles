@@ -110,8 +110,14 @@ impl WinFilesApp {
         self.sheet = 0;
         self.renaming = None;
         self.filter = Default::default();
-        self.saved = project.clone();
+        self.parked.clear();
         self.project = project;
+        // Con la casella spenta anche un lavoro salvato con file non supportati si apre senza:
+        // il lavoro non risulta modificato solo per questo.
+        if self.hide_unsupported {
+            self.park_unsupported();
+        }
+        self.saved = self.project.clone();
         self.path = path;
         for f in &self.project.files {
             if f.path.is_file() {

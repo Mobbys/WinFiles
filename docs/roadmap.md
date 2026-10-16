@@ -61,6 +61,8 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Cerca per nome o cartella (Ctrl+F, Esc svuota) e filtra per tipo nell'elenco dei file: cambia solo quello che si vede, non la stampa
 - [x] Pagine dei PDF nell'elenco: freccia per aprirle, una riga per pagina con la sua casella di stampa e la nota; la ricerca trova le singole pagine ("catalogo 3", "pag. 12", testo delle note) e il clic porta l'anteprima al foglio della pagina
 - [x] Ordine a trascinamento nell'elenco: i file dentro la loro cartella (anche più file scelti insieme), le cartelle intere
+- [x] Ogni tipo di file nell'elenco (Michel, 16 ottobre 2026): i non supportati hanno nome, nota e un riquadro con l'estensione sul foglio, senza anteprima né misure; la casella "Includi i file non supportati" li toglie e li rimette tutti; restano fuori solo i file nascosti e di sistema (Thumbs.db, desktop.ini, `~$` di Office)
+- [x] I file appena aggiunti si ordinano per cartella e poi per nome senza badare alle maiuscole: una cartella non compare più due volte se ha sottocartelle e nomi in maiuscolo
 
 ## Fase 6 in dettaglio
 - [x] Esporta tabella CSV (File): una riga per pagina in stampa, base e altezza in colonne, m², nota; per Excel in italiano

@@ -259,10 +259,12 @@ pub fn folder_note_height(ctx: &egui::Context, note: &str, note_pt: f64, width: 
     }
 }
 
-/// Proporzioni provvisorie finché un file non è stato misurato.
+/// Proporzioni provvisorie finché un file non è stato misurato; quelle del riquadro di un file
+/// non supportato, che misure non ne ha.
 fn placeholder_size(kind: FileKind) -> Size {
     match kind {
         FileKind::Image => Size::new(4.0, 3.0),
+        FileKind::Unsupported => Size::new(1.0, 1.0),
         _ => Size::new(210.0, 297.0),
     }
 }
@@ -303,10 +305,12 @@ pub fn items(ctx: &egui::Context, project: &Project, slots: &[Slot]) -> Vec<Item
             continue;
         };
         let page = f.pages.get(slot.page);
-        // Un file non ancora misurato tiene il posto di una riga.
-        let lines = page.map_or(usize::from(print.show_sizes || print.show_trim), |p| {
-            info_count(p, print)
-        });
+        // Un file non ancora misurato tiene il posto di una riga; uno non supportato non ne ha.
+        let lines = match page {
+            Some(p) => info_count(p, print),
+            None if f.kind == FileKind::Unsupported => 0,
+            None => usize::from(print.show_sizes || print.show_trim),
+        };
         out.push(Item {
             id,
             content: page.map_or_else(|| placeholder_size(f.kind), PageInfo::finished),

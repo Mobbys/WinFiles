@@ -40,6 +40,10 @@ pub struct WinFilesApp {
     pub(crate) shown_zoom: f32,
     /// Errori di lettura per file.
     pub(crate) errors: HashMap<PathBuf, String>,
+    /// I file non supportati restano fuori dall'elenco (la casella spenta).
+    pub(crate) hide_unsupported: bool,
+    /// I file non supportati tolti con la casella, da rimettere se la si riaccende.
+    pub(crate) parked: Vec<winfiles_model::FileEntry>,
     pub(crate) theme: ThemeChoice,
     applied: Option<Tokens>,
     dock: Layout<PanelId>,
@@ -173,6 +177,8 @@ impl WinFilesApp {
             zoom: None,
             shown_zoom: 1.0,
             errors: HashMap::new(),
+            hide_unsupported: prefs.hide_unsupported,
+            parked: Vec::new(),
             theme: prefs.theme,
             applied: None,
             dock: prefs.dock.clone().unwrap_or_else(dock::default_layout),
@@ -674,8 +680,21 @@ impl WinFilesApp {
     fn merge(&mut self, found: Vec<winfiles_model::FileEntry>, cancelled: bool, truncated: bool) {
         let before = self.project.files.len();
         let mut files = std::mem::take(&mut self.project.files);
-        files.extend(found);
-        files.sort_by(|a, b| a.path.cmp(&b.path));
+        let mut hidden = 0;
+        if self.hide_unsupported {
+            let (keep, parked) = crate::unsupported::split(found);
+            let known = |p: &std::path::Path| {
+                files.iter().any(|f: &winfiles_model::FileEntry| f.path == p)
+                    || self.parked.iter().any(|f| f.path == p)
+            };
+            let parked: Vec<_> = parked.into_iter().filter(|f| !known(&f.path)).collect();
+            hidden = parked.len();
+            self.parked.extend(parked);
+            files.extend(keep);
+        } else {
+            files.extend(found);
+        }
+        files.sort_by_cached_key(|f| winfiles_model::file_order_key(&f.path));
         files.dedup_by(|a, b| a.path == b.path);
         for f in files
             .iter()
@@ -687,10 +706,17 @@ impl WinFilesApp {
         self.project.files = files;
         self.unselect();
         self.status = match added {
-            0 => "Nessun file nuovo: immagini, PDF, AI ed EPS".into(),
+            0 => "Nessun file nuovo".into(),
             1 => "Aggiunto 1 file".into(),
             n => format!("Aggiunti {n} file"),
         };
+        match hidden {
+            0 => {}
+            1 => self.status.push_str(", 1 non supportato lasciato fuori"),
+            n => self
+                .status
+                .push_str(&format!(", {n} non supportati lasciati fuori")),
+        }
         if cancelled {
             self.status = "Ricerca annullata: nessun file aggiunto".into();
         } else if truncated {
@@ -705,11 +731,45 @@ impl WinFilesApp {
     fn clear(&mut self) {
         self.cancel_scans();
         self.project.files.clear();
+        self.parked.clear();
         self.errors.clear();
         self.thumbs.clear();
         self.unselect();
         self.sheet = 0;
         self.status = "Elenco svuotato".into();
+    }
+
+    /// La casella "Includi i file non supportati": spenta li toglie tutti dall'elenco e dai
+    /// fogli, riaccesa li rimette al loro posto.
+    pub(crate) fn include_unsupported(&mut self, on: bool) {
+        self.hide_unsupported = !on;
+        self.unselect();
+        if on {
+            let parked = std::mem::take(&mut self.parked);
+            let n = parked.len();
+            crate::unsupported::restore(&mut self.project.files, parked);
+            self.status = match n {
+                0 => "Nessun file non supportato da rimettere".into(),
+                1 => "Rimesso 1 file non supportato".into(),
+                n => format!("Rimessi {n} file non supportati"),
+            };
+        } else {
+            let n = self.park_unsupported();
+            self.status = match n {
+                1 => "Tolto 1 file non supportato".into(),
+                n => format!("Tolti {n} file non supportati"),
+            };
+        }
+    }
+
+    /// Mette da parte i file non supportati del lavoro; quanti erano.
+    pub(crate) fn park_unsupported(&mut self) -> usize {
+        let files = std::mem::take(&mut self.project.files);
+        let (keep, parked) = crate::unsupported::split(files);
+        self.project.files = keep;
+        let n = parked.len();
+        self.parked.extend(parked);
+        n
     }
 
     pub(crate) fn unselect(&mut self) {
@@ -915,9 +975,21 @@ impl WinFilesApp {
 
     /// Porta nel progetto le misure arrivate dal thread di lettura.
     fn receive_measures(&mut self) {
-        for m in self.measurer.drain() {
-            // I file sono ordinati per percorso; uno tolto nel frattempo si ignora.
-            let Ok(i) = self.project.files.binary_search_by(|f| f.path.cmp(&m.path)) else {
+        let arrived = self.measurer.drain();
+        if arrived.is_empty() {
+            return;
+        }
+        // L'ordine dei file può essere quello scelto trascinando: si cercano per percorso. Uno
+        // tolto nel frattempo si ignora.
+        let index: HashMap<PathBuf, usize> = self
+            .project
+            .files
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.path.clone(), i))
+            .collect();
+        for m in arrived {
+            let Some(&i) = index.get(&m.path) else {
                 continue;
             };
             let Some(file) = self.project.files.get_mut(i) else {
@@ -2093,6 +2165,7 @@ impl WinFilesApp {
             presets: self.presets.clone(),
             window,
             maximized,
+            hide_unsupported: self.hide_unsupported,
         }
     }
 

@@ -19,6 +19,7 @@ static ICONS: &[(&str, &[u8])] = icons![
     "chevron-right",
     "chevrons-left",
     "chevrons-right",
+    "file",
     "file-down",
     "file-plus",
     "folder-open",

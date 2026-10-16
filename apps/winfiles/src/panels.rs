@@ -104,6 +104,7 @@ fn folder_name(p: &Path) -> String {
 fn kind_icon(kind: FileKind) -> &'static str {
     match kind {
         FileKind::Image => "image",
+        FileKind::Unsupported => "file",
         _ => "layers",
     }
 }
@@ -150,6 +151,11 @@ fn file_info(f: &FileEntry, unit: Unit, error: Option<&String>, assumed: bool) -
     let Some(first) = f.pages.first() else {
         return if error.is_some_and(|e| e == crate::document::MISSING) {
             "file non trovato".into()
+        } else if f.kind == FileKind::Unsupported {
+            format!(
+                "{}  ·  senza anteprima e misure",
+                crate::unsupported::extension(&f.path)
+            )
         } else if error.is_some() {
             "misure non leggibili".into()
         } else {
@@ -386,13 +392,45 @@ impl WinFilesApp {
         ui.add_space(4.0);
     }
 
+    /// "Includi i file non supportati (N)", solo se ce ne sono: spenta li toglie tutti.
+    fn unsupported_box(&mut self, ui: &mut egui::Ui) {
+        let n = crate::unsupported::count(&self.project.files) + self.parked.len();
+        if n == 0 {
+            return;
+        }
+        let mut on = !self.hide_unsupported;
+        if ui
+            .add(fluent::checkbox(
+                &mut on,
+                format!("Includi i file non supportati ({n})"),
+            ))
+            .on_hover_text(
+                "File di altri tipi (Word, testo, archivi…): nell'elenco e sul foglio con il nome e \
+                 la nota, senza anteprima né misure. Spenta li toglie tutti; riaccesa li rimette.",
+            )
+            .changed()
+        {
+            self.include_unsupported(on);
+        }
+        ui.add_space(4.0);
+    }
+
     pub(crate) fn files_panel(&mut self, ui: &mut egui::Ui) {
         let t = Tokens::get(ui.ctx());
-        if self.project.files.is_empty() {
+        if self.project.files.is_empty() && self.parked.is_empty() {
             dim_label(ui, "Nessun file. Trascina file o cartelle nella finestra.");
             return;
         }
+        if self.project.files.is_empty() {
+            self.unsupported_box(ui);
+            dim_label(
+                ui,
+                "Ci sono solo file non supportati: accendi la casella per vederli.",
+            );
+            return;
+        }
         self.search_bar(ui);
+        self.unsupported_box(ui);
         let filter = &self.filter;
         let files = &self.project.files;
         let found: Vec<(usize, Found)> = files
@@ -1098,7 +1136,13 @@ impl WinFilesApp {
             let box_size = vec2(ui.available_width(), 170.0);
             let (area, _) = ui.allocate_exact_size(box_size, Sense::hover());
             ui.painter().rect_filled(area, t.radius, t.pasteboard);
-            match thumbs.get(&f.path, f.kind, 0) {
+            let unsupported = ThumbState::Failed("il tipo di file non è supportato".into());
+            let state = if f.kind == FileKind::Unsupported {
+                &unsupported
+            } else {
+                thumbs.get(&f.path, f.kind, 0)
+            };
+            match state {
                 ThumbState::Ready(tex) => {
                     let size = tex.size_vec2();
                     let k = ((area.width() - 16.0) / size.x).min((area.height() - 16.0) / size.y).min(1.0);

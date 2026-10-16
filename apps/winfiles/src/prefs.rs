@@ -94,6 +94,8 @@ pub struct Prefs {
     /// Misura interna della finestra, in punti.
     pub window: Option<[f32; 2]>,
     pub maximized: bool,
+    /// Spenta la casella "Includi i file non supportati": restano fuori dall'elenco.
+    pub hide_unsupported: bool,
 }
 
 impl Prefs {
@@ -215,6 +217,7 @@ mod tests {
             }],
             window: Some([1400.0, 900.0]),
             maximized: true,
+            hide_unsupported: true,
         };
         save_to(&file, &prefs).unwrap();
         assert_eq!(load_from(&file), prefs);

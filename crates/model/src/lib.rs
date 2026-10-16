@@ -106,6 +106,31 @@ pub struct ImageInfo {
     pub dpi_from_file: bool,
 }
 
+/// L'ordine dei file appena aggiunti: per cartella, e nella cartella per nome, senza badare alle
+/// maiuscole, come in Esplora file. I file di una cartella stanno tutti insieme, prima delle sue
+/// sottocartelle: in ordine di percorso puro "IMG_1.JPG" andrebbe prima della sottocartella
+/// "Stampa" e "foto.jpg" dopo, e la cartella comparirebbe due volte.
+pub fn file_order(a: &Path, b: &Path) -> std::cmp::Ordering {
+    file_order_key(a).cmp(&file_order_key(b))
+}
+
+/// La chiave di [`file_order`], da calcolare una volta per file con `sort_by_cached_key`.
+pub fn file_order_key(p: &Path) -> (Vec<String>, String, PathBuf) {
+    let folder = p
+        .parent()
+        .map(|f| {
+            f.components()
+                .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+                .collect()
+        })
+        .unwrap_or_default();
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    (folder, name, p.to_path_buf())
+}
+
 /// Un file del progetto.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FileEntry {
@@ -249,7 +274,8 @@ pub struct Totals {
     pub area_m2: f64,
     /// Metri quadrati al formato pagina, con abbondanza e crocini.
     pub area_full_m2: f64,
-    /// File di cui non si conoscono ancora (o non si possono leggere) le misure.
+    /// File di cui non si conoscono ancora (o non si possono leggere) le misure. Quelli di tipo
+    /// non supportato non contano: misure non ne avranno mai, sul foglio hanno una pagina.
     pub unmeasured: usize,
     /// Pagine lasciate fuori dalla stampa: non contano nei numeri qui sopra.
     pub excluded: usize,
@@ -264,7 +290,7 @@ impl Totals {
             return;
         }
         self.files += 1;
-        if file.pages.is_empty() {
+        if file.pages.is_empty() && file.kind != FileKind::Unsupported {
             self.unmeasured += 1;
         } else {
             self.pages += printed;
@@ -570,6 +596,32 @@ mod tests {
     }
 
     #[test]
+    fn i_file_di_una_cartella_stanno_insieme_prima_delle_sottocartelle() {
+        let mut paths: Vec<PathBuf> = [
+            "/l/foto.jpg",
+            "/l/Stampa/a.pdf",
+            "/l/IMG_1.JPG",
+            "/l/b.docx",
+            "/l2/x.png",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+        paths.sort_by(|a, b| file_order(a, b));
+        let got: Vec<_> = paths.iter().map(|p| p.display().to_string()).collect();
+        assert_eq!(
+            got,
+            [
+                "/l/b.docx",
+                "/l/foto.jpg",
+                "/l/IMG_1.JPG",
+                "/l/Stampa/a.pdf",
+                "/l2/x.png"
+            ]
+        );
+    }
+
+    #[test]
     fn le_note_nascoste_restano_nel_lavoro_ma_non_sul_foglio() {
         let mut p = sample();
         let folder = PathBuf::from("/lavori/cliente");
@@ -678,6 +730,14 @@ mod tests {
         f.set_printed(0, true);
         let t = Totals::of([&f]);
         assert_eq!((t.files, t.unmeasured, t.excluded), (1, 1, 0));
+    }
+
+    #[test]
+    fn un_file_non_supportato_e_una_pagina_senza_misure() {
+        let f = FileEntry::new(PathBuf::from("/x/lettera.docx"), FileKind::Unsupported);
+        let t = Totals::of([&f]);
+        assert_eq!((t.files, t.pages, t.unmeasured), (1, 1, 0));
+        assert_eq!(t.area_full_m2, 0.0);
     }
 
     #[test]

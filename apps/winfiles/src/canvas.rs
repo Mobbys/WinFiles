@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use winfiles_geom::Rect as MmRect;
 use winfiles_layout::{Header, Sheet};
-use winfiles_model::{PageInfo, PrintSettings, Project, Totals};
+use winfiles_model::{FileKind, PageInfo, PrintSettings, Project, Totals};
 use winfiles_scene::{Page, Picture, Source, Weight};
 
 use crate::captions::{
@@ -178,17 +178,22 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
         };
         let page_info = file.pages.get(slot.page);
         let image = item.image;
-        sk.picture(Picture {
-            rect: image,
-            source: Source {
-                path: file.path.clone(),
-                kind: file.kind,
-                page: slot.page,
-            },
-            crop: trim_crop(page_info),
-        });
-        // Un filo sottile attorno alla miniatura: le immagini chiare non si perdono nel foglio.
-        sk.rect(grow(image, 0.12), 0.0, None, Some((FRAME, 0.12)));
+        let unsupported = file.kind == FileKind::Unsupported;
+        if unsupported {
+            unsupported_tile(&mut sk, image, &file.path);
+        } else {
+            sk.picture(Picture {
+                rect: image,
+                source: Source {
+                    path: file.path.clone(),
+                    kind: file.kind,
+                    page: slot.page,
+                },
+                crop: trim_crop(page_info),
+            });
+            // Un filo sottile attorno alla miniatura: le immagini chiare non si perdono nel foglio.
+            sk.rect(grow(image, 0.12), 0.0, None, Some((FRAME, 0.12)));
+        }
 
         // Le pagine di uno stesso file: cornice ed etichetta "Pag. 2/4" nel colore del file.
         if let Some(color) = slot.color {
@@ -237,6 +242,7 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
                     y += line_mm(info_pt);
                 }
             }
+            None if unsupported => {}
             None => y += line_mm(info_pt),
         }
         let note = project.printed_note(file, slot.page);
@@ -305,6 +311,54 @@ pub fn draw(
     }
 
     out
+}
+
+/// Il posto di un file non supportato: un riquadro grigio chiaro con l'estensione in grande
+/// ("DOCX") e sotto "non supportato", se c'è spazio. Fa parte della scena: anteprima, PDF e
+/// stampa lo disegnano uguale, senza cercare una miniatura che non esiste.
+fn unsupported_tile(sk: &mut Sketch<'_>, r: MmRect, path: &Path) {
+    sk.rect(
+        r,
+        (r.w.min(r.h) * 0.04).min(1.5),
+        Some(TITLE_FILL),
+        Some((INK_SOFT, 0.25)),
+    );
+    let ext = crate::unsupported::extension(path);
+    // L'estensione larga al più tre quarti del riquadro e alta al più un quarto.
+    let probe = 10.0;
+    let (w, h) = Sketch::size_mm(&sk.layout_line(&ext, probe, Weight::SemiBold));
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    let size = (probe * (r.w * 0.75 / w).min(r.h * 0.25 / h)).max(0.5);
+    let big = sk.layout_line(&ext, size, Weight::SemiBold);
+    let (bw, bh) = Sketch::size_mm(&big);
+    let small_size = (size * 0.32).clamp(0.5, 3.0);
+    let small = sk.layout_line("non supportato", small_size, Weight::Regular);
+    let (sw, sh) = Sketch::size_mm(&small);
+    let gap = bh * 0.1;
+    let with_small = sw <= r.w * 0.9 && bh + gap + sh <= r.h * 0.9;
+    let total = if with_small { bh + gap + sh } else { bh };
+    let top = r.y + (r.h - total) / 2.0;
+    let cx = r.x + r.w / 2.0;
+    sk.text(
+        (cx - bw / 2.0, top),
+        &big,
+        size,
+        Weight::SemiBold,
+        INK_SOFT,
+        Some(r.bottom()),
+    );
+    if with_small {
+        sk.text(
+            (cx - sw / 2.0, top + bh + gap),
+            &small,
+            small_size,
+            Weight::Regular,
+            INK_SOFT,
+            Some(r.bottom()),
+        );
+    }
 }
 
 /// Il titolo in cima al foglio, in un riquadro dagli angoli arrotondati con un fondo appena

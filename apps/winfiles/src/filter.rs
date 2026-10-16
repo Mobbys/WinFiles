@@ -5,11 +5,12 @@
 use winfiles_model::{FileEntry, FileKind};
 
 /// I tipi che si possono scegliere, con il nome del loro pulsante.
-pub const KINDS: [(FileKind, &str); 4] = [
+pub const KINDS: [(FileKind, &str); 5] = [
     (FileKind::Image, "Immagini"),
     (FileKind::Pdf, "PDF"),
     (FileKind::Ai, "AI"),
     (FileKind::Eps, "EPS"),
+    (FileKind::Unsupported, "Altri"),
 ];
 
 /// Cosa mostrare nell'elenco dei file.
@@ -41,7 +42,6 @@ impl FileFilter {
     /// alcune pagine, quando una parola è il loro numero o sta nella loro nota. Per esempio
     /// "catalogo 3" trova la pagina 3 di catalogo.pdf, "pantone" le pagine con quella nota.
     pub fn find(&self, f: &FileEntry) -> Found {
-        // I tipi non supportati non hanno un pulsante: li mostra solo "Tutti".
         if !self.kinds.is_empty() && !self.kinds.contains(&f.kind) {
             return Found::Nothing;
         }

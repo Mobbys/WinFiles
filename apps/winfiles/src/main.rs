@@ -32,6 +32,7 @@ mod summary;
 mod table;
 mod theme;
 mod thumbs;
+mod unsupported;
 mod update;
 
 fn main() -> eframe::Result {
