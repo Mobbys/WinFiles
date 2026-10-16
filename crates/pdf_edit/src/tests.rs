@@ -509,3 +509,34 @@ fn le_sfumature_a_pattern_contano_come_la_loro_tinta() {
     assert_eq!(e.set_spot_overprint(b"Argento", true).unwrap(), 1);
     assert_eq!(e.spots().unwrap()[0].overprint, Overprint::All);
 }
+
+#[test]
+fn rinomina_anche_le_parti_indirette_delle_devicen() {
+    // Come le scrive Illustrator: l'elenco dei nomi, gli attributi e i Colorants in oggetti a sé.
+    let mut p = page([0.0, 0.0, 200.0, 100.0], 0, "/DN cs 1 sc 0 0 50 50 re f");
+    p.resources = "<< /ColorSpace << /DN [/DeviceN 5 0 R /DeviceCMYK \
+        << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0.2 0.8 0.25] /N 1 >> 6 0 R] >> >>";
+    let sep = "[/Separation /Oro /DeviceCMYK << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] \
+        /C1 [0 0.2 0.8 0.25] /N 1 >>]";
+    let colorants = format!("<< /Oro {sep} >>");
+    let mut e = Editor::new(
+        PdfFile::from_bytes(pdf_extra(
+            &[p],
+            &[
+                "[/Oro]",
+                "<< /Subtype /DeviceN /Colorants 7 0 R /MixingHints << /PrintingOrder [/Oro] \
+                 /Solidities << /Oro 0.5 >> >> >>",
+                &colorants,
+            ],
+        ))
+        .unwrap(),
+        PathBuf::from("prova.pdf"),
+    );
+    e.rename_spot(b"Oro", "Oro lucido").unwrap();
+    let bytes = e.to_bytes().unwrap();
+    // Nel file salvato il vecchio nome non c'è più da nessuna parte.
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(!text.contains("/Oro ") && !text.contains("/Oro]") && !text.contains("/Oro>"));
+    let names: Vec<_> = e.spots().unwrap().into_iter().map(|s| s.name).collect();
+    assert_eq!(names, ["Oro lucido"]);
+}

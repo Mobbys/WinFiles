@@ -698,11 +698,36 @@ pub(crate) fn list(doc: &Document) -> Result<Vec<Spot>, EditError> {
 pub(crate) fn rename(doc: &mut Document, from: &[u8], to: &[u8]) -> Result<usize, EditError> {
     let mut changed = 0;
     let numbers = doc.object_numbers();
+    // Prima si trovano le parti delle DeviceN che stanno in oggetti a sé (Illustrator e Acrobat
+    // le scrivono così): l'elenco dei nomi, gli attributi, i Colorants, i MixingHints.
+    let mut parts = Parts::default();
+    for (_, obj) in doc.scan_objects_subset(numbers.clone()) {
+        if let Ok(obj) = obj {
+            parts.collect(doc, &obj, 0);
+        }
+    }
     let mut updates: Vec<(ObjRef, Object)> = Vec::new();
     for (r, obj) in doc.scan_objects_subset(numbers) {
         let Ok(obj) = obj else { continue };
         let mut copy = (*obj).clone();
-        if rename_in(&mut copy, from, to, 0) {
+        let mut hit = rename_in(&mut copy, from, to, 0);
+        if parts.names.contains(&r) {
+            hit |= rename_names(&mut copy, from, to);
+        }
+        if parts.attrs.contains(&r)
+            && let Some(d) = dict_mut(&mut copy)
+        {
+            hit |= rename_attrs(d, from, to);
+        }
+        if parts.colorants.contains(&r)
+            && let Some(d) = dict_mut(&mut copy)
+        {
+            hit |= rename_key(d, from, to);
+        }
+        if parts.hints.contains(&r) {
+            hit |= rename_all(&mut copy, from, to, 0);
+        }
+        if hit {
             updates.push((r, copy));
         }
     }
@@ -742,13 +767,9 @@ fn rename_in(obj: &mut Object, from: &[u8], to: &[u8], depth: usize) -> bool {
                             }
                         }
                     }
-                    // Gli attributi: /Colorants ha le tinte per nome.
-                    if let Some(Object::Dict(attrs)) = a.get_mut(4)
-                        && let Some(Object::Dict(col)) = attrs.get_mut(b"Colorants")
-                        && let Some(v) = col.remove(from)
-                    {
-                        col.set(to.to_vec(), v);
-                        changed = true;
+                    // Gli attributi: /Colorants e /MixingHints hanno le tinte per nome.
+                    if let Some(Object::Dict(attrs)) = a.get_mut(4) {
+                        changed |= rename_attrs(attrs, from, to);
                     }
                 }
                 _ => {}
@@ -760,6 +781,153 @@ fn rename_in(obj: &mut Object, from: &[u8], to: &[u8], depth: usize) -> bool {
         }
         Object::Dict(d) => rename_dict(d, from, to, depth),
         Object::Stream(s) => rename_dict(&mut s.dict, from, to, depth),
+        _ => false,
+    }
+}
+
+/// Gli oggetti a sé che fanno parte di una DeviceN o di una Separation.
+#[derive(Default)]
+struct Parts {
+    /// L'elenco dei nomi delle tinte (o il nome solo di una Separation).
+    names: HashSet<ObjRef>,
+    /// Il dizionario degli attributi.
+    attrs: HashSet<ObjRef>,
+    /// Il dizionario /Colorants, con le tinte come chiavi.
+    colorants: HashSet<ObjRef>,
+    /// I /MixingHints, che nominano le tinte in chiavi e valori.
+    hints: HashSet<ObjRef>,
+}
+
+impl Parts {
+    fn collect(&mut self, doc: &Document, obj: &Object, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        match obj {
+            Object::Array(a) => {
+                if matches!(
+                    a.first().and_then(Object::as_name),
+                    Some(b"Separation" | b"DeviceN")
+                ) && let Some(r) = a.get(1).and_then(Object::as_ref)
+                {
+                    self.names.insert(r);
+                }
+                if a.first().and_then(Object::as_name) == Some(b"DeviceN".as_slice())
+                    && let Some(attrs) = a.get(4)
+                {
+                    if let Some(r) = attrs.as_ref() {
+                        self.attrs.insert(r);
+                    }
+                    let attrs = dict_of(doc, Some(attrs));
+                    if let Some(r) = attrs.get(b"Colorants").and_then(Object::as_ref) {
+                        self.colorants.insert(r);
+                    }
+                    if let Some(r) = attrs.get(b"MixingHints").and_then(Object::as_ref) {
+                        self.hints.insert(r);
+                    }
+                }
+                for item in a {
+                    self.collect(doc, item, depth + 1);
+                }
+            }
+            Object::Dict(d) => {
+                for (_, v) in d.iter() {
+                    self.collect(doc, v, depth + 1);
+                }
+            }
+            Object::Stream(st) => {
+                for (_, v) in st.dict.iter() {
+                    self.collect(doc, v, depth + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn dict_mut(obj: &mut Object) -> Option<&mut Dict> {
+    match obj {
+        Object::Dict(d) => Some(d),
+        Object::Stream(s) => Some(&mut s.dict),
+        _ => None,
+    }
+}
+
+/// Rinomina nell'elenco dei nomi di una DeviceN (o nel nome solo di una Separation).
+fn rename_names(obj: &mut Object, from: &[u8], to: &[u8]) -> bool {
+    match obj {
+        Object::Name(n) if n.as_slice() == from => {
+            *n = to.to_vec();
+            true
+        }
+        Object::Array(a) => {
+            let mut changed = false;
+            for n in a.iter_mut() {
+                if let Object::Name(n) = n
+                    && n.as_slice() == from
+                {
+                    *n = to.to_vec();
+                    changed = true;
+                }
+            }
+            changed
+        }
+        _ => false,
+    }
+}
+
+/// Cambia la chiave `from` in `to`.
+fn rename_key(d: &mut Dict, from: &[u8], to: &[u8]) -> bool {
+    match d.remove(from) {
+        Some(v) => {
+            d.set(to.to_vec(), v);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Gli attributi di una DeviceN: le chiavi di /Colorants e tutto ciò che nomina la tinta nei
+/// /MixingHints (Solidities, PrintingOrder, DotGain).
+fn rename_attrs(attrs: &mut Dict, from: &[u8], to: &[u8]) -> bool {
+    let mut changed = false;
+    if let Some(Object::Dict(col)) = attrs.get_mut(b"Colorants") {
+        changed |= rename_key(col, from, to);
+    }
+    if let Some(h) = attrs.get_mut(b"MixingHints") {
+        changed |= rename_all(h, from, to, 0);
+    }
+    changed
+}
+
+/// Ogni nome e ogni chiave uguale a `from`, a qualsiasi profondità (senza seguire i riferimenti).
+fn rename_all(obj: &mut Object, from: &[u8], to: &[u8], depth: usize) -> bool {
+    if depth > MAX_DEPTH {
+        return false;
+    }
+    match obj {
+        Object::Name(n) if n.as_slice() == from => {
+            *n = to.to_vec();
+            true
+        }
+        Object::Array(a) => {
+            let mut changed = false;
+            for item in a.iter_mut() {
+                changed |= rename_all(item, from, to, depth + 1);
+            }
+            changed
+        }
+        Object::Dict(_) | Object::Stream(_) => {
+            let Some(d) = dict_mut(obj) else { return false };
+            let mut changed = rename_key(d, from, to);
+            let keys: Vec<Vec<u8>> = d.iter().map(|(k, _)| k.clone()).collect();
+            for k in keys {
+                if let Some(v) = d.get_mut(&k) {
+                    changed |= rename_all(v, from, to, depth + 1);
+                }
+            }
+            changed
+        }
         _ => false,
     }
 }

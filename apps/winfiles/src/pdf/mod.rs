@@ -1551,12 +1551,12 @@ impl PdfModule {
             paint_lens(ui, board, paper, at, tex);
         }
         if self.cutter.crop.is_some() {
-            self.cut_bar(ui, board, unit);
+            self.cut_bar(ui, board, unit, size);
         }
     }
 
     /// Sotto la pagina, mentre c'è un rettangolo: la misura e i pulsanti per tagliare.
-    fn cut_bar(&mut self, ui: &mut egui::Ui, board: Rect, unit: Unit) {
+    fn cut_bar(&mut self, ui: &mut egui::Ui, board: Rect, unit: Unit, page: Size) {
         let Some(c) = self.cutter.crop.map(crate::cutter::Crop::normalized) else {
             return;
         };
@@ -1564,34 +1564,72 @@ impl PdfModule {
         let chosen = self.chosen().len();
         let total = self.infos.len();
         let area = Rect::from_center_size(
-            egui::pos2(board.center().x, board.bottom() - 34.0),
-            vec2(board.width().min(620.0) - 24.0, 44.0),
+            egui::pos2(board.center().x, board.bottom() - 66.0),
+            vec2(board.width().min(620.0) - 24.0, 108.0),
         );
-        let mut bar = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(area)
-                .layout(egui::Layout::left_to_right(Align::Center)),
-        );
-        bar.painter().rect(
+        ui.painter().rect(
             area,
             8.0,
             t.panel,
             Stroke::new(1.0, t.border),
             egui::StrokeKind::Outside,
         );
-        bar.add_space(12.0);
-        icons::paint(
-            &bar,
-            "square-dashed",
-            Rect::from_center_size(egui::pos2(area.left() + 20.0, area.center().y), Vec2::splat(16.0)),
-            t.icon,
+        // Sopra: il riquadro in numeri, da aggiustare dopo averlo tracciato a occhio.
+        let mut fields = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(area.shrink2(vec2(12.0, 10.0)).with_max_y(area.top() + 62.0))
+                .layout(egui::Layout::left_to_right(Align::Min)),
         );
-        bar.add_space(18.0);
-        let size = Size::new(f64::from(c.width()), f64::from(c.height()));
+        let (mut x, mut y) = (f64::from(c.x0), f64::from(c.y0));
+        let (mut w, mut h) = (f64::from(c.width()), f64::from(c.height()));
+        let before = (x, y, w, h);
+        let column = |ui: &mut egui::Ui, label: &str, hint: &str, value: &mut f64, max: f64| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(label).size(11.5).color(t.text_dim));
+                crate::fluent::number(ui, 104.0, length_field(value, max, unit)).on_hover_text(hint);
+            });
+            ui.add_space(8.0);
+        };
+        column(
+            &mut fields,
+            "Da sinistra",
+            "Distanza del riquadro dal bordo sinistro della pagina",
+            &mut x,
+            page.w - 1.0,
+        );
+        column(
+            &mut fields,
+            "Dall'alto",
+            "Distanza del riquadro dal bordo in alto della pagina",
+            &mut y,
+            page.h - 1.0,
+        );
+        column(&mut fields, "Larghezza", "Larghezza del riquadro", &mut w, page.w);
+        column(&mut fields, "Altezza", "Altezza del riquadro", &mut h, page.h);
+        if (x, y, w, h) != before {
+            // Il riquadro resta dentro la pagina e largo almeno 1 mm.
+            let x = x.clamp(0.0, (page.w - 1.0).max(0.0));
+            let y = y.clamp(0.0, (page.h - 1.0).max(0.0));
+            let w = w.clamp(1.0, (page.w - x).max(1.0));
+            let h = h.clamp(1.0, (page.h - y).max(1.0));
+            self.cutter.crop = Some(crate::cutter::Crop {
+                x0: x as f32,
+                y0: y as f32,
+                x1: (x + w) as f32,
+                y1: (y + h) as f32,
+            });
+        }
+        // Sotto: i pulsanti.
+        let mut bar = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(area.with_min_y(area.bottom() - 44.0))
+                .layout(egui::Layout::left_to_right(Align::Center)),
+        );
+        bar.add_space(12.0);
         bar.label(
-            egui::RichText::new(format_size(size, unit))
-                .font(semibold(13.0))
-                .color(t.text_strong),
+            egui::RichText::new(format!("Pagina {}", format_size(page, unit)))
+                .size(12.0)
+                .color(t.text_dim),
         );
         let mut action = None;
         bar.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
@@ -1931,6 +1969,24 @@ fn file_stem(p: &Path) -> String {
     p.file_stem()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "PDF".into())
+}
+
+/// Una misura in millimetri mostrata e scritta nell'unità scelta (mm o cm), con la virgola.
+fn length_field(value: &mut f64, max: f64, unit: Unit) -> egui::DragValue<'_> {
+    let (factor, suffix) = match unit {
+        Unit::Mm => (1.0, "mm"),
+        Unit::Cm => (10.0, "cm"),
+    };
+    egui::DragValue::new(value)
+        .range(0.0..=max.max(0.0))
+        .speed(0.2)
+        .custom_formatter(move |v, _| {
+            format!("{} {suffix}", winfiles_geom::format_number(v / factor, 1, false))
+        })
+        .custom_parser(move |text| {
+            let clean = text.trim().trim_end_matches(suffix).trim().replace(',', ".");
+            clean.parse::<f64>().ok().map(|v| v * factor)
+        })
 }
 
 #[cfg(test)]
