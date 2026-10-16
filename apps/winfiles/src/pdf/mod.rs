@@ -79,6 +79,12 @@ pub struct PdfModule {
     spots: Option<(u64, Result<Vec<Spot>, String>)>,
     /// La tinta che si sta rinominando, con il nome in scrittura.
     renaming: Option<(Vec<u8>, String)>,
+    /// Per il PDF aperto: togliere (`true`) o tenere la copia di Illustrator al salvataggio;
+    /// `None` finché non lo si è chiesto (ADR 0020).
+    illustrator: Option<bool>,
+    /// Il salvataggio fermo sulla domanda della copia di Illustrator: con "Salva con nome" o no,
+    /// e cosa fare dopo.
+    illustrator_ask: Option<(bool, Option<Then>)>,
 }
 
 impl PdfModule {
@@ -106,6 +112,8 @@ impl PdfModule {
             spots_open: true,
             spots: None,
             renaming: None,
+            illustrator: None,
+            illustrator_ask: None,
         }
     }
 
@@ -200,6 +208,8 @@ impl PdfModule {
     fn set_editor(&mut self, e: Editor, target: Option<PathBuf>) {
         self.editor = Some(e);
         self.target = target;
+        self.illustrator = None;
+        self.illustrator_ask = None;
         self.selected.clear();
         self.anchor = None;
         self.current = 0;
@@ -449,6 +459,11 @@ impl PdfModule {
         let Some(e) = self.editor.as_ref() else {
             return false;
         };
+        // Prima si chiede che fare della copia di Illustrator: la risposta riprende il salvataggio.
+        if self.illustrator.is_none() && e.has_illustrator_data() {
+            self.illustrator_ask = Some((ask, None));
+            return false;
+        }
         let path = match (&self.target, ask) {
             (Some(p), false) => Some(p.clone()),
             _ => {
@@ -965,6 +980,7 @@ impl PdfModule {
     /// Le finestre aperte: domanda sulle modifiche e finestre dei comandi.
     pub fn windows(&mut self, ctx: &egui::Context) {
         self.unsaved_dialog(ctx);
+        self.illustrator_dialog(ctx);
         if let Some(mut d) = self.dialog.take() {
             let info = dialogs::Context {
                 chosen: self.chosen().len(),
@@ -1041,6 +1057,8 @@ impl PdfModule {
                 self.asking = None;
                 if self.save(false) {
                     self.run(ctx, then);
+                } else if let Some((_, after)) = self.illustrator_ask.as_mut() {
+                    *after = Some(then);
                 }
             }
             Some(false) => {
@@ -1051,6 +1069,88 @@ impl PdfModule {
                 self.run(ctx, then);
             }
             None => {}
+        }
+    }
+
+    /// Il PDF da salvare porta la copia di Illustrator: toglierla o tenerla (ADR 0020).
+    fn illustrator_dialog(&mut self, ctx: &egui::Context) {
+        if self.illustrator_ask.is_none() {
+            return;
+        }
+        let t = Tokens::get(ctx);
+        let mut answer = None;
+        let mut cancel = false;
+        let modal = egui::Modal::new(egui::Id::new("pdf-illustrator")).show(ctx, |ui| {
+            ui.set_width(440.0);
+            ui.label(
+                egui::RichText::new("Questo PDF contiene il file di Illustrator")
+                    .font(semibold(15.0))
+                    .color(t.text_strong),
+            );
+            ui.add_space(6.0);
+            ui.label(
+                "Riaprendo il PDF, Illustrator mostra quella copia e non le modifiche fatte qui. \
+                 Acrobat e la stampa usano sempre le pagine vere.",
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(
+                    "Togliendola, Illustrator apre il PDF con le modifiche, ma come PDF importato \
+                     e non più come il suo file .ai con livelli e testi modificabili.",
+                )
+                .color(t.text_dim),
+            );
+            ui.add_space(14.0);
+            ui.allocate_ui_with_layout(
+                vec2(ui.available_width(), 36.0),
+                egui::Layout::right_to_left(Align::Center),
+                |ui| {
+                    let strip = egui::Button::new(
+                        egui::RichText::new("Togli e salva")
+                            .font(semibold(13.0))
+                            .color(t.on_primary),
+                    )
+                    .fill(t.primary)
+                    .min_size(vec2(110.0, 30.0));
+                    if ui.add(strip).clicked() {
+                        answer = Some(true);
+                    }
+                    if ui
+                        .add(egui::Button::new("Tienila e salva").min_size(vec2(120.0, 30.0)))
+                        .clicked()
+                    {
+                        answer = Some(false);
+                    }
+                    if ui
+                        .add(egui::Button::new("Annulla").min_size(vec2(80.0, 30.0)))
+                        .clicked()
+                    {
+                        cancel = true;
+                    }
+                },
+            );
+        });
+        if cancel || modal.should_close() {
+            self.illustrator_ask = None;
+            return;
+        }
+        let Some(strip) = answer else {
+            return;
+        };
+        let Some((ask, then)) = self.illustrator_ask.take() else {
+            return;
+        };
+        self.illustrator = Some(strip);
+        if strip {
+            self.apply(|e| {
+                e.strip_illustrator_data()?;
+                Ok("Tolta la copia di Illustrator".into())
+            });
+        }
+        if self.save(ask)
+            && let Some(then) = then
+        {
+            self.run(ctx, then);
         }
     }
 

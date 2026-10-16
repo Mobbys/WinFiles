@@ -15,6 +15,7 @@ use pdfcraft_organize::{self as organize, BoxSpec, OrganizeError, PageBox};
 use winfiles_geom::{Paper, Size, pt_to_mm};
 
 mod frame;
+mod illustrator;
 mod spots;
 
 pub use spots::{Overprint, Spot};
@@ -442,6 +443,20 @@ impl Editor {
         }
         let label = if on { "Sovrastampa" } else { "Togli sovrastampa" };
         self.edit(label, |d| spots::set_overprint(d, name, on))
+    }
+
+    /// Il PDF porta la copia del file di Illustrator, quella che Illustrator apre al posto delle
+    /// pagine (ADR 0020).
+    pub fn has_illustrator_data(&self) -> bool {
+        illustrator::has(&self.doc)
+    }
+
+    /// Toglie la copia di Illustrator: riaperto in Illustrator, il PDF mostra le pagine vere.
+    pub fn strip_illustrator_data(&mut self) -> Result<usize, EditError> {
+        if !self.has_illustrator_data() {
+            return Ok(0);
+        }
+        self.edit("Togli i dati di Illustrator", illustrator::strip)
     }
 
     /// Il PDF intero, com'è adesso.

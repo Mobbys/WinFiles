@@ -533,10 +533,80 @@ fn rinomina_anche_le_parti_indirette_delle_devicen() {
         PathBuf::from("prova.pdf"),
     );
     e.rename_spot(b"Oro", "Oro lucido").unwrap();
-    let bytes = e.to_bytes().unwrap();
-    // Nel file salvato il vecchio nome non c'è più da nessuna parte.
-    let text = String::from_utf8_lossy(&bytes);
-    assert!(!text.contains("/Oro ") && !text.contains("/Oro]") && !text.contains("/Oro>"));
+    // Nel file salvato e riletto il vecchio nome non c'è più da nessuna parte.
+    let again = Editor::new(
+        PdfFile::from_bytes(e.to_bytes().unwrap()).unwrap(),
+        PathBuf::from("prova.pdf"),
+    );
+    let doc = &again.doc;
+    for (_, o) in doc.scan_objects_subset(doc.object_numbers()) {
+        assert!(!names_in(&o.unwrap()).iter().any(|n| n == b"Oro"));
+    }
     let names: Vec<_> = e.spots().unwrap().into_iter().map(|s| s.name).collect();
     assert_eq!(names, ["Oro lucido"]);
+}
+
+#[test]
+fn toglie_la_copia_di_illustrator() {
+    let mut p = page([0.0, 0.0, 200.0, 100.0], 0, "0 0 1 rg 0 0 50 50 re f");
+    p.resources = "<< >> /PieceInfo << /Illustrator << /LastModified (D:20261016) \
+        /Private 5 0 R >> /Altro << /Dato 1 >> >>";
+    let mut e = Editor::new(
+        PdfFile::from_bytes(pdf_extra(
+            &[p],
+            &[
+                "<< /AIMetaData 6 0 R /ContainerVersion 12 >>",
+                "<< /Length 9 >>\nstream\n%AI12_File\nendstream",
+            ],
+        ))
+        .unwrap(),
+        PathBuf::from("prova.pdf"),
+    );
+    assert!(e.has_illustrator_data());
+    assert_eq!(e.strip_illustrator_data().unwrap(), 1);
+    assert!(!e.has_illustrator_data());
+    // Riletto il file salvato: la copia non c'è più, le altre voci di PieceInfo restano.
+    let again = Editor::new(
+        PdfFile::from_bytes(e.to_bytes().unwrap()).unwrap(),
+        PathBuf::from("prova.pdf"),
+    );
+    assert!(!again.has_illustrator_data());
+    let doc = &again.doc;
+    let objects: Vec<_> = doc
+        .scan_objects_subset(doc.object_numbers())
+        .filter_map(|(_, o)| o.ok())
+        .collect();
+    let piece = objects.iter().find_map(|o| match &**o {
+        pdfcraft_cos::Object::Dict(d) => d.get(b"PieceInfo").and_then(|p| doc.dict(p)),
+        _ => None,
+    });
+    assert!(piece.is_some_and(|p| p.get(b"Altro").is_some()));
+    // La copia stessa, non più raggiunta da niente, non è stata scritta.
+    assert!(!objects.iter().any(|o| match &**o {
+        pdfcraft_cos::Object::Dict(d) => d.get(b"ContainerVersion").is_some(),
+        _ => false,
+    }));
+    let img = render(&reread(&e), 0);
+    assert_eq!((img.1, img.2), (200, 100));
+    // Annullabile, e senza copia non c'è niente da fare.
+    assert!(e.undo());
+    assert!(e.has_illustrator_data());
+    let mut plain = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, "")]);
+    assert_eq!(plain.strip_illustrator_data().unwrap(), 0);
+    assert_eq!(plain.undo_label(), None);
+}
+
+/// Tutti i nomi e le chiavi di un oggetto, a qualsiasi profondità.
+fn names_in(o: &pdfcraft_cos::Object) -> Vec<Vec<u8>> {
+    use pdfcraft_cos::Object;
+    match o {
+        Object::Name(n) => vec![n.clone()],
+        Object::Array(a) => a.iter().flat_map(names_in).collect(),
+        Object::Dict(d) => d
+            .iter()
+            .flat_map(|(k, v)| [vec![k.clone()], names_in(v)].concat())
+            .collect(),
+        Object::Stream(s) => names_in(&Object::Dict(s.dict.clone())),
+        _ => Vec::new(),
+    }
 }
