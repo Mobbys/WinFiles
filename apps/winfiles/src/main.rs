@@ -17,6 +17,7 @@ mod filter;
 mod fluent;
 mod icons;
 mod images;
+mod legacy;
 mod measure;
 mod paint;
 mod panels;

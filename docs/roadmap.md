@@ -81,6 +81,8 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Rilascio automatico da un tag `vX.Y.Z`: MSI, eseguibile portatile e novità su GitHub
 - [x] Repository pubblico (Michel) e primo rilascio, 0.1.0
 - [x] Installer provato da Michel; Liste Anteprime della 4.9 non serve più (15 ottobre 2026)
+- [x] Passaggio dalla 4.9: barra "Togli WinFile 4.9" e icona sul Desktop ([ADR 0019](adr/0019-passaggio-dalla-4-9.md))
+- [ ] Rilascio `5.0` su `Mobbys/WinFile` con l'MSI di WinFiles (a mano, Michel)
 
 ## Fase 9 in dettaglio
 - [x] Motore `crates/pdf_edit` sopra `pdfcraft`: apre, modifica la struttura, salva in modo atomico ([ADR 0015](adr/0015-modifica-pdf.md))

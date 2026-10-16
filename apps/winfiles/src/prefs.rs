@@ -96,6 +96,8 @@ pub struct Prefs {
     pub maximized: bool,
     /// Spenta la casella "Includi i file non supportati": restano fuori dall'elenco.
     pub hide_unsupported: bool,
+    /// Si è scelto di tenere la vecchia WinFile 4.9: non lo si chiede più.
+    pub keep_legacy: bool,
 }
 
 impl Prefs {
@@ -218,6 +220,7 @@ mod tests {
             window: Some([1400.0, 900.0]),
             maximized: true,
             hide_unsupported: true,
+            keep_legacy: true,
         };
         save_to(&file, &prefs).unwrap();
         assert_eq!(load_from(&file), prefs);

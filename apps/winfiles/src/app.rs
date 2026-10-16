@@ -42,6 +42,10 @@ pub struct WinFilesApp {
     pub(crate) errors: HashMap<PathBuf, String>,
     /// I file non supportati restano fuori dall'elenco (la casella spenta).
     pub(crate) hide_unsupported: bool,
+    /// La vecchia WinFile 4.9 sullo stesso PC: la ricerca in corso, poi quella trovata.
+    legacy_search: Option<std::sync::mpsc::Receiver<Option<crate::legacy::Legacy>>>,
+    legacy: Option<crate::legacy::Legacy>,
+    keep_legacy: bool,
     /// I file non supportati tolti con la casella, da rimettere se la si riaccende.
     pub(crate) parked: Vec<winfiles_model::FileEntry>,
     pub(crate) theme: ThemeChoice,
@@ -180,6 +184,9 @@ impl WinFilesApp {
             shown_zoom: 1.0,
             errors: HashMap::new(),
             hide_unsupported: prefs.hide_unsupported,
+            legacy_search: (!prefs.keep_legacy).then(crate::legacy::find),
+            legacy: None,
+            keep_legacy: prefs.keep_legacy,
             parked: Vec::new(),
             theme: prefs.theme,
             applied: None,
@@ -336,7 +343,78 @@ impl WinFilesApp {
     }
 
     /// La barra sotto i comandi che annuncia la versione nuova.
+    /// La barra che propone di togliere la vecchia WinFile 4.9, se c'è ancora.
+    fn legacy_bar(&mut self, ui: &mut egui::Ui) {
+        if let Some(rx) = &self.legacy_search
+            && let Ok(found) = rx.try_recv()
+        {
+            self.legacy = found;
+            self.legacy_search = None;
+        }
+        let Some(old) = self.legacy.clone() else {
+            return;
+        };
+        let t = Tokens::get(ui.ctx());
+        let name = match old.version.as_str() {
+            "" => "WinFile".to_string(),
+            v => format!("WinFile {v}"),
+        };
+        let frame = egui::Frame::NONE
+            .fill(t.panel)
+            .stroke(egui::Stroke::new(1.0, t.border))
+            .corner_radius(t.card_radius)
+            .inner_margin(egui::Margin::symmetric(12, 4))
+            .outer_margin(egui::Margin {
+                left: 10,
+                right: 10,
+                top: 0,
+                bottom: 6,
+            });
+        egui::Panel::top("barra-vecchia-winfile")
+            .frame(egui::Frame::NONE.fill(t.app_bar))
+            .show(ui, |ui| {
+                frame.show(ui, |ui| {
+                    ui.set_min_height(30.0);
+                    ui.horizontal_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Su questo PC c'è ancora {name}: WinFiles la sostituisce, puoi toglierla."
+                            ))
+                            .font(semibold(13.0))
+                            .color(t.text_strong),
+                        );
+                        ui.label(
+                            egui::RichText::new("Tienila solo se usi la Simulazione quote.")
+                                .size(12.5)
+                                .color(t.text_dim),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if ui.button("Tienila").clicked() {
+                                self.legacy = None;
+                                self.keep_legacy = true;
+                            }
+                            let remove = egui::Button::new(
+                                egui::RichText::new(format!("Togli {name}"))
+                                    .font(semibold(13.0))
+                                    .color(t.on_primary),
+                            )
+                            .fill(t.primary)
+                            .min_size(vec2(96.0, 26.0));
+                            if ui.add(remove).clicked() {
+                                match crate::legacy::remove(&old) {
+                                    Ok(()) => self.status = format!("Avviata la disinstallazione di {name}"),
+                                    Err(e) => self.status = format!("Non riesco a togliere {name}: {e}"),
+                                }
+                                self.legacy = None;
+                            }
+                        });
+                    });
+                });
+            });
+    }
+
     fn update_bar(&mut self, ui: &mut egui::Ui) {
+        self.legacy_bar(ui);
         use crate::update::State;
         self.updater.poll();
         let installed = crate::update::installed();
@@ -2192,6 +2270,7 @@ impl WinFilesApp {
             window,
             maximized,
             hide_unsupported: self.hide_unsupported,
+            keep_legacy: self.keep_legacy,
         }
     }
 

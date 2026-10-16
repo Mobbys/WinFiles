@@ -23,3 +23,4 @@ Una decisione si cambia con un nuovo ADR che sostituisce il precedente, mai risc
 | [0016](0016-modifica-immagini.md) | Modifica delle immagini: misura e ricampionamento separati, colore conservato | Accettata |
 | [0017](0017-raw-e-psd.md) | Foto RAW e file di Photoshop con le librerie di PhotoCraft | Accettata |
 | [0018](0018-tinte-piatte.md) | Tinte piatte: elenco, nome e sovrastampa dentro il contenuto delle pagine | Accettata |
+| [0019](0019-passaggio-dalla-4-9.md) | Passaggio dalla WinFile 4.9 a WinFiles con l'aggiornamento della 4.9 | Accettata |

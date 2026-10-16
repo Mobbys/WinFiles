@@ -2,7 +2,7 @@
 <!-- L'installer MSI di WinFiles (ADR 0014). Si compila con wixl (msitools), in CI e a mano:
      installer/crea-msi.sh winfiles.exe WinFiles.msi
      Installazione per l'utente, senza permessi di amministratore: %LocalAppData%\Programs\WinFiles,
-     collegamento nel menu Start, file .winfiles che si aprono con WinFiles. Una versione nuova
+     collegamento nel menu Start e sul Desktop, file .winfiles che si aprono con WinFiles. Una versione nuova
      sostituisce la vecchia (stesso UpgradeCode, che non cambia mai). -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="WinFiles" Language="1040" Codepage="1252" Version="$(var.Version)"
@@ -42,12 +42,21 @@
           <RegistryValue Root="HKCU" Key="Software\WinFiles" Name="MenuStart" Type="integer" Value="1" KeyPath="yes" />
         </Component>
       </Directory>
+      <!-- L'icona sul Desktop, come quella della vecchia WinFile 4.9: chi passa da lì la ritrova. -->
+      <Directory Id="DesktopFolder">
+        <Component Id="Desktop" Guid="3E263354-72F4-4F20-9702-99BFCAFBB417">
+          <Shortcut Id="CollegamentoDesktop" Name="WinFiles" Description="Stampa delle miniature di file e cartelle"
+                    Target="[INSTALLDIR]WinFiles.exe" WorkingDirectory="INSTALLDIR" Icon="WinFilesIcon" />
+          <RegistryValue Root="HKCU" Key="Software\WinFiles" Name="Desktop" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
     </Directory>
 
     <Feature Id="Completa" Title="WinFiles" Level="1">
       <ComponentRef Id="Programma" />
       <ComponentRef Id="FileWinfiles" />
       <ComponentRef Id="MenuStart" />
+      <ComponentRef Id="Desktop" />
     </Feature>
   </Product>
 </Wix>
