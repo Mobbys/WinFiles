@@ -9,6 +9,7 @@ mod app;
 mod calibrate;
 mod canvas;
 mod captions;
+mod cutter;
 mod dock;
 mod document;
 mod export;

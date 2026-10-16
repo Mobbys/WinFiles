@@ -53,6 +53,8 @@ pub struct WinFilesApp {
     slots: Vec<Slot>,
     /// Cartella di cui si sta rinominando l'intestazione nell'elenco, con il testo in modifica.
     pub(crate) renaming: Option<(PathBuf, String)>,
+    /// Il file su cui si è aperto il menu del tasto destro nell'anteprima del foglio.
+    pub(crate) sheet_menu: Option<usize>,
     /// Cosa mostra l'elenco dei file: cerca per nome e filtra per tipo.
     pub(crate) filter: crate::filter::FileFilter,
     /// Ctrl+F: il campo di ricerca prende il fuoco al prossimo disegno.
@@ -186,6 +188,7 @@ impl WinFilesApp {
             thumbs: Thumbnails::start(move || wake2.request_repaint()),
             slots: Vec::new(),
             renaming: None,
+            sheet_menu: None,
             filter: Default::default(),
             focus_search: false,
             drag: None,
@@ -1614,6 +1617,29 @@ impl WinFilesApp {
             let mods = ui.input(|i| i.modifiers);
             self.pick(file, mods);
             self.selected_page = page;
+        }
+        // Il tasto destro su una miniatura apre lo stesso menu dell'elenco dei file.
+        if let Some(hit) = out.secondary {
+            self.sheet_menu = hit.map(|(file, _)| file);
+            if let Some((file, page)) = hit {
+                self.pick_for_menu(file);
+                self.selected_page = page;
+            }
+        }
+        if let (Some(resp), Some(i)) = (out.response, self.sheet_menu) {
+            let count = if self.marked.contains(&i) {
+                self.marked.len().max(1)
+            } else {
+                1
+            };
+            let mut action = None;
+            if let Some(f) = self.project.files.get(i) {
+                let state = f.print_state();
+                resp.context_menu(|ui| action = crate::panels::file_menu(ui, f, count, state));
+            }
+            if let Some(a) = action {
+                self.file_action(ui.ctx(), a);
+            }
         }
     }
 }

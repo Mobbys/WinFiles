@@ -66,6 +66,9 @@ krilla = { version = "0.8", default-features = false, features = ["raster-images
 # il file senza perdere annotazioni, segnalibri e livelli. A commit fissato. Licenza MIT/Apache.
 pdfcraft-cos = { git = "https://github.com/storytold/pdfcraft", rev = "afa8e1843cfed613f3d403119f6c2649bce824c9" }
 pdfcraft-organize = { git = "https://github.com/storytold/pdfcraft", rev = "afa8e1843cfed613f3d403119f6c2649bce824c9" }
+# Lettura e scrittura degli operatori del contenuto, per la sovrastampa delle tinte piatte; era già
+# nel progetto come dipendenza di pdfcraft-organize.
+pdfcraft-content = { git = "https://github.com/storytold/pdfcraft", rev = "afa8e1843cfed613f3d403119f6c2649bce824c9" }
 
 # interfaccia
 eframe = "0.36"

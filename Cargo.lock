@@ -6528,6 +6528,7 @@ name = "winfiles-pdf-edit"
 version = "0.2.1"
 dependencies = [
  "hayro",
+ "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-organize",
  "thiserror 2.0.21",

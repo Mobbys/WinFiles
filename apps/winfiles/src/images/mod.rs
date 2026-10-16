@@ -14,6 +14,7 @@ use winfiles_geom::{Size, Unit, format_area, format_number, format_size};
 use winfiles_image_edit::{Axis, CropPx, Editor, Format, Op, SaveOptions};
 
 use crate::app::card;
+use crate::cutter::{Crop, Cutter};
 use crate::icons;
 use crate::theme::{Tokens, semibold};
 use dialogs::{Action, Dialog};
@@ -25,73 +26,12 @@ const CELL_H: f32 = 96.0;
 const LENS_ZOOM: f32 = 5.0;
 /// Lato della lente a schermo, in punti.
 const LENS_SIDE: f32 = 116.0;
-/// Quanto vicino bisogna essere a una maniglia perché risponda.
-const GRIP: f32 = 9.0;
 
 /// Cosa fare dopo la domanda "salvare le modifiche?".
 #[derive(Clone, Debug)]
 enum Then {
     Close(usize),
     Quit,
-}
-
-/// Come si sta trascinando il ritaglio.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Grab {
-    /// Si sta disegnando un rettangolo nuovo.
-    Draw,
-    /// Si sposta tutto il ritaglio.
-    Move,
-    /// Si tira un lato o un angolo: sinistra, destra, sopra, sotto (uno o due veri).
-    Edge {
-        left: bool,
-        right: bool,
-        top: bool,
-        bottom: bool,
-    },
-}
-
-/// Un ritaglio in pixel dell'immagine, con gli angoli in qualsiasi ordine finché si trascina.
-#[derive(Clone, Copy)]
-struct Crop {
-    x0: f32,
-    y0: f32,
-    x1: f32,
-    y1: f32,
-}
-
-impl Crop {
-    fn normalized(self) -> Self {
-        Self {
-            x0: self.x0.min(self.x1),
-            y0: self.y0.min(self.y1),
-            x1: self.x0.max(self.x1),
-            y1: self.y0.max(self.y1),
-        }
-    }
-
-    fn width(self) -> f32 {
-        (self.x1 - self.x0).abs()
-    }
-
-    fn height(self) -> f32 {
-        (self.y1 - self.y0).abs()
-    }
-
-    /// Il ritaglio in pixel interi, dentro un'immagine di `w` × `h`.
-    fn to_px(self, w: u32, h: u32) -> Option<CropPx> {
-        let c = self.normalized();
-        let x = c.x0.round().clamp(0.0, w as f32) as u32;
-        let y = c.y0.round().clamp(0.0, h as f32) as u32;
-        let right = c.x1.round().clamp(0.0, w as f32) as u32;
-        let bottom = c.y1.round().clamp(0.0, h as f32) as u32;
-        (right > x && bottom > y).then_some(CropPx {
-            x,
-            y,
-            width: right - x,
-            height: bottom - y,
-        })
-    }
 }
 
 /// Un'immagine aperta.
@@ -118,10 +58,8 @@ struct Fields {
 pub struct ImagesModule {
     docs: Vec<Doc>,
     current: usize,
-    crop: Option<Crop>,
-    grab: Option<(Grab, egui::Pos2, Crop)>,
-    /// Dove tenere la lente, mentre si trascina.
-    lens: Option<egui::Pos2>,
+    /// La taglierina sull'anteprima, in pixel dell'immagine.
+    cutter: Cutter,
     fields: Fields,
     dialog: Option<Dialog>,
     asking: Option<Then>,
@@ -156,9 +94,7 @@ impl ImagesModule {
         Self {
             docs: Vec::new(),
             current: 0,
-            crop: None,
-            grab: None,
-            lens: None,
+            cutter: Cutter::default(),
             fields: Fields::default(),
             dialog: None,
             asking: None,
@@ -266,7 +202,7 @@ impl ImagesModule {
                     if !l.shown {
                         l.shown = true;
                         self.current = self.docs.len() - 1;
-                        self.crop = None;
+                        self.cutter.crop = None;
                         self.fields.owner = None;
                     }
                 }
@@ -290,6 +226,19 @@ impl ImagesModule {
         }
     }
 
+    /// Dalle miniature (tasto destro › Modifica immagine): le immagini già aperte non si aprono
+    /// una seconda volta, si mostra la prima.
+    pub fn open_from_list(&mut self, paths: &[PathBuf]) {
+        let open = |p: &PathBuf| self.docs.iter().position(|d| d.editor.path() == p.as_path());
+        if let Some(i) = paths.first().and_then(open) {
+            self.current = i;
+            self.cutter.crop = None;
+            self.fields.owner = None;
+        }
+        let new: Vec<PathBuf> = paths.iter().filter(|p| open(p).is_none()).cloned().collect();
+        self.open(&new);
+    }
+
     pub fn dropped(&mut self, paths: Vec<PathBuf>) {
         let images: Vec<PathBuf> = paths.into_iter().filter(|p| !p.is_dir()).collect();
         if !images.is_empty() {
@@ -307,7 +256,7 @@ impl ImagesModule {
         }
         self.docs.remove(i);
         self.current = self.current.min(self.docs.len().saturating_sub(1));
-        self.crop = None;
+        self.cutter.crop = None;
         self.fields.owner = None;
         self.renderer.keep(&self.live());
     }
@@ -330,7 +279,7 @@ impl ImagesModule {
             Ok(()) => {
                 d.generation += 1;
                 self.status = op.label();
-                self.crop = None;
+                self.cutter.crop = None;
                 self.fields.owner = None;
                 let live = self.live();
                 self.renderer.keep(&live);
@@ -348,7 +297,7 @@ impl ImagesModule {
             Ok(()) => {
                 d.generation += 1;
                 self.status = label.map_or("Annullato".into(), |l| format!("Annullato: {l}"));
-                self.crop = None;
+                self.cutter.crop = None;
                 self.fields.owner = None;
                 let live = self.live();
                 self.renderer.keep(&live);
@@ -366,7 +315,7 @@ impl ImagesModule {
             Ok(()) => {
                 d.generation += 1;
                 self.status = label.map_or("Rifatto".into(), |l| format!("Rifatto: {l}"));
-                self.crop = None;
+                self.cutter.crop = None;
                 self.fields.owner = None;
                 let live = self.live();
                 self.renderer.keep(&live);
@@ -376,12 +325,12 @@ impl ImagesModule {
     }
 
     fn crop_now(&mut self) {
-        let Some(crop) = self.crop else { return };
+        let Some(crop) = self.cutter.crop else { return };
         let Some(d) = self.docs.get(self.current) else {
             return;
         };
         let (w, h) = (d.editor.picture().width(), d.editor.picture().height());
-        match crop.to_px(w, h) {
+        match to_px(crop, w, h) {
             Some(px) => self.apply(Op::Crop(px)),
             None => self.status = "Il ritaglio è troppo piccolo".into(),
         }
@@ -484,11 +433,11 @@ impl ImagesModule {
         if pressed(Modifiers::COMMAND, Key::R) {
             self.apply(Op::Rotate(1));
         }
-        if ctx.input(|i| i.key_pressed(Key::Enter)) && self.crop.is_some() {
+        if ctx.input(|i| i.key_pressed(Key::Enter)) && self.cutter.crop.is_some() {
             self.crop_now();
         }
-        if ctx.input(|i| i.key_pressed(Key::Escape)) && self.crop.is_some() {
-            self.crop = None;
+        if ctx.input(|i| i.key_pressed(Key::Escape)) && self.cutter.crop.is_some() {
+            self.cutter.crop = None;
         }
         let step =
             ctx.input(|i| i32::from(i.key_pressed(Key::ArrowDown)) - i32::from(i.key_pressed(Key::ArrowUp)));
@@ -502,7 +451,7 @@ impl ImagesModule {
     fn choose(&mut self, i: usize) {
         if i != self.current {
             self.current = i;
-            self.crop = None;
+            self.cutter.crop = None;
             self.fields.owner = None;
         }
     }
@@ -642,7 +591,7 @@ impl ImagesModule {
                         self.apply(Op::Flip(Axis::Vertical));
                     }
                     separator(ui);
-                    let can_crop = self.crop.is_some();
+                    let can_crop = self.cutter.crop.is_some();
                     if text_button(ui, "crop", "Ritaglia", can_crop)
                         .on_hover_text("Taglia l'immagine sul rettangolo scelto (Invio)")
                         .clicked()
@@ -654,7 +603,7 @@ impl ImagesModule {
                         .on_hover_text("Toglie il rettangolo di ritaglio (Esc)")
                         .clicked()
                     {
-                        self.crop = None;
+                        self.cutter.crop = None;
                     }
                     separator(ui);
                     if text_button(ui, "scaling", "Ridimensiona", open)
@@ -1150,7 +1099,7 @@ impl ImagesModule {
             });
         // Il ritaglio, quando c'è.
         let mut cut = false;
-        if let Some(crop) = self.crop.map(Crop::normalized) {
+        if let Some(crop) = self.cutter.crop.map(Crop::normalized) {
             ui.add_space(12.0);
             ui.label(
                 egui::RichText::new("Ritaglio")
@@ -1209,7 +1158,7 @@ impl ImagesModule {
         // lungo si accorcia con "…" invece di finire sotto il menu.
         let name = d.editor.file_name();
         let size = format_size(p.size_mm(), unit);
-        let hint = self.crop.is_none();
+        let hint = self.cutter.crop.is_none();
         bar.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             egui::ComboBox::from_id_salt("img-zoom")
                 .icon(crate::fluent::combo_icon)
@@ -1303,200 +1252,15 @@ impl ImagesModule {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(80));
         }
-        self.crop_interaction(ui, paper, iw, ih);
-        self.paint_crop(ui, paper, iw, ih);
+        self.cutter
+            .interact(ui, ui.id().with("ritaglio"), paper, iw as f32, ih as f32);
+        self.cutter.paint(ui, paper, iw as f32);
         self.paint_lens(ui, board, paper, iw, ih);
-    }
-
-    /// Il rettangolo di ritaglio si disegna, si sposta e si tira per i lati, come nella 4.9.
-    fn crop_interaction(&mut self, ui: &mut egui::Ui, paper: Rect, iw: u32, ih: u32) {
-        let id = ui.id().with("ritaglio");
-        let resp = ui.interact(paper, id, Sense::click_and_drag());
-        let scale = paper.width() / iw as f32;
-        let to_image = |p: egui::Pos2| -> egui::Pos2 {
-            pos2(
-                ((p.x - paper.left()) / scale).clamp(0.0, iw as f32),
-                ((p.y - paper.top()) / scale).clamp(0.0, ih as f32),
-            )
-        };
-        if resp.drag_started() {
-            // Dove il pulsante è stato premuto, non dove si trova ora: il primo movimento può
-            // essere già lontano, e si deve capire che cosa si è afferrato.
-            let origin = ui
-                .ctx()
-                .input(|i| i.pointer.press_origin())
-                .or_else(|| resp.interact_pointer_pos());
-            if let Some(pos) = origin {
-                let at = to_image(pos);
-                let grab = self.hit(at, scale);
-                let here = Crop {
-                    x0: at.x,
-                    y0: at.y,
-                    x1: at.x,
-                    y1: at.y,
-                };
-                // Disegnando un rettangolo nuovo si parte da dove si è premuto, anche se ce
-                // n'era già uno.
-                let start = match grab {
-                    Grab::Draw => {
-                        self.crop = Some(here);
-                        here
-                    }
-                    _ => self.crop.unwrap_or(here),
-                };
-                self.grab = Some((grab, at, start));
-            }
-        }
-        if let (true, Some((grab, from, start)), Some(pos)) =
-            (resp.dragged(), self.grab, resp.interact_pointer_pos())
-        {
-            {
-                let at = to_image(pos);
-                let (dx, dy) = (at.x - from.x, at.y - from.y);
-                let c = match grab {
-                    Grab::Draw => Crop {
-                        x0: start.x0,
-                        y0: start.y0,
-                        x1: at.x,
-                        y1: at.y,
-                    },
-                    Grab::Move => {
-                        let n = start.normalized();
-                        let dx = dx.clamp(-n.x0, iw as f32 - n.x1);
-                        let dy = dy.clamp(-n.y0, ih as f32 - n.y1);
-                        Crop {
-                            x0: n.x0 + dx,
-                            y0: n.y0 + dy,
-                            x1: n.x1 + dx,
-                            y1: n.y1 + dy,
-                        }
-                    }
-                    Grab::Edge {
-                        left,
-                        right,
-                        top,
-                        bottom,
-                    } => {
-                        let n = start.normalized();
-                        Crop {
-                            x0: if left { at.x } else { n.x0 },
-                            x1: if right { at.x } else { n.x1 },
-                            y0: if top { at.y } else { n.y0 },
-                            y1: if bottom { at.y } else { n.y1 },
-                        }
-                    }
-                };
-                self.crop = Some(c);
-                self.lens = resp.interact_pointer_pos();
-            }
-        }
-        if resp.drag_stopped() {
-            self.grab = None;
-            self.lens = None;
-            self.crop = self.crop.map(Crop::normalized).filter(|c| {
-                // Un clic senza trascinare toglie il ritaglio invece di lasciarne uno vuoto.
-                c.width() * scale > 4.0 && c.height() * scale > 4.0
-            });
-        }
-        // Il cursore dice cosa si sta per fare.
-        if let Some(pos) = ui.ctx().pointer_latest_pos().filter(|p| paper.contains(*p)) {
-            let cursor = match self.hit(to_image(pos), scale) {
-                Grab::Draw => egui::CursorIcon::Crosshair,
-                Grab::Move => egui::CursorIcon::Move,
-                Grab::Edge { left, right, .. } if !left && !right => egui::CursorIcon::ResizeVertical,
-                Grab::Edge { top, bottom, .. } if !top && !bottom => egui::CursorIcon::ResizeHorizontal,
-                Grab::Edge { .. } => egui::CursorIcon::ResizeNwSe,
-            };
-            ui.ctx().set_cursor_icon(cursor);
-        }
-    }
-
-    /// Che cosa c'è sotto il cursore: un lato, un angolo, il mezzo o niente.
-    fn hit(&self, at: egui::Pos2, scale: f32) -> Grab {
-        let Some(c) = self.crop.map(Crop::normalized) else {
-            return Grab::Draw;
-        };
-        let near = GRIP / scale.max(0.0001);
-        let left = (at.x - c.x0).abs() <= near;
-        let right = (at.x - c.x1).abs() <= near;
-        let top = (at.y - c.y0).abs() <= near;
-        let bottom = (at.y - c.y1).abs() <= near;
-        let inside_x = at.x >= c.x0 - near && at.x <= c.x1 + near;
-        let inside_y = at.y >= c.y0 - near && at.y <= c.y1 + near;
-        if (left || right) && inside_y || (top || bottom) && inside_x {
-            return Grab::Edge {
-                left: left && inside_y,
-                right: right && inside_y,
-                top: top && inside_x,
-                bottom: bottom && inside_x,
-            };
-        }
-        if at.x > c.x0 && at.x < c.x1 && at.y > c.y0 && at.y < c.y1 {
-            return Grab::Move;
-        }
-        Grab::Draw
-    }
-
-    fn paint_crop(&self, ui: &egui::Ui, paper: Rect, iw: u32, ih: u32) {
-        let Some(c) = self.crop.map(Crop::normalized) else {
-            return;
-        };
-        let t = Tokens::get(ui.ctx());
-        let scale = paper.width() / iw.max(1) as f32;
-        let r = Rect::from_min_max(
-            pos2(paper.left() + c.x0 * scale, paper.top() + c.y0 * scale),
-            pos2(paper.left() + c.x1 * scale, paper.top() + c.y1 * scale),
-        );
-        let _ = ih;
-        let p = ui.painter().with_clip_rect(paper);
-        // Fuori dal ritaglio l'immagine si scurisce, così si vede subito cosa resta.
-        let shade = egui::Color32::from_black_alpha(110);
-        p.rect_filled(
-            Rect::from_min_max(paper.min, pos2(paper.right(), r.top())),
-            0.0,
-            shade,
-        );
-        p.rect_filled(
-            Rect::from_min_max(pos2(paper.left(), r.bottom()), paper.max),
-            0.0,
-            shade,
-        );
-        p.rect_filled(
-            Rect::from_min_max(pos2(paper.left(), r.top()), pos2(r.left(), r.bottom())),
-            0.0,
-            shade,
-        );
-        p.rect_filled(
-            Rect::from_min_max(pos2(r.right(), r.top()), pos2(paper.right(), r.bottom())),
-            0.0,
-            shade,
-        );
-        p.rect_stroke(r, 0.0, Stroke::new(1.5, t.accent), StrokeKind::Middle);
-        // Le maniglie: quattro angoli e quattro lati.
-        let handles = [
-            r.left_top(),
-            r.center_top(),
-            r.right_top(),
-            r.right_center(),
-            r.right_bottom(),
-            r.center_bottom(),
-            r.left_bottom(),
-            r.left_center(),
-        ];
-        for h in handles {
-            p.rect(
-                Rect::from_center_size(h, Vec2::splat(8.0)),
-                1.0,
-                t.accent,
-                Stroke::new(1.0, egui::Color32::WHITE),
-                StrokeKind::Middle,
-            );
-        }
     }
 
     /// La lente: mentre si tira un lato mostra i pixel veri attorno al cursore, come la 4.9.
     fn paint_lens(&mut self, ui: &mut egui::Ui, board: Rect, paper: Rect, iw: u32, ih: u32) {
-        let Some(at) = self.lens else { return };
+        let Some(at) = self.cutter.lens else { return };
         let Some(d) = self.docs.get(self.current) else {
             return;
         };
@@ -1543,6 +1307,21 @@ impl ImagesModule {
         p.line_segment([pos2(c.x, rect.top()), pos2(c.x, rect.bottom())], cross);
         p.line_segment([pos2(rect.left(), c.y), pos2(rect.right(), c.y)], cross);
     }
+}
+
+/// Il ritaglio in pixel interi, dentro un'immagine di `w` × `h`.
+fn to_px(c: Crop, w: u32, h: u32) -> Option<CropPx> {
+    let c = c.normalized();
+    let x = c.x0.round().clamp(0.0, w as f32) as u32;
+    let y = c.y0.round().clamp(0.0, h as f32) as u32;
+    let right = c.x1.round().clamp(0.0, w as f32) as u32;
+    let bottom = c.y1.round().clamp(0.0, h as f32) as u32;
+    (right > x && bottom > y).then_some(CropPx {
+        x,
+        y,
+        width: right - x,
+        height: bottom - y,
+    })
 }
 
 fn fit_rect(bounds: Rect, size: Size) -> Rect {

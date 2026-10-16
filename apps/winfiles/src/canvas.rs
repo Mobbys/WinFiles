@@ -60,6 +60,10 @@ pub struct Selection<'a> {
 pub struct CanvasOutput {
     /// File e pagina della miniatura cliccata.
     pub clicked: Option<(usize, usize)>,
+    /// Il tasto destro: file e pagina sotto il puntatore, o niente fuori dalle miniature.
+    pub secondary: Option<Option<(usize, usize)>>,
+    /// Il foglio, per aprirci sopra il menu del tasto destro.
+    pub response: Option<egui::Response>,
 }
 
 /// Una riga di testo che si tronca con "…" se non sta nella larghezza (`width` in mm), centrata.
@@ -286,6 +290,9 @@ pub fn draw(
     crate::paint::page(&painter, origin, scale, scene, thumbs);
 
     let pointer = response.interact_pointer_pos();
+    if response.secondary_clicked() {
+        out.secondary = Some(None);
+    }
     for item in &sheet.items {
         let Some(slot) = slots.get(item.id) else {
             continue;
@@ -308,8 +315,11 @@ pub fn draw(
         if response.clicked() && pointer.is_some_and(|p| cell.contains(p)) {
             out.clicked = Some((slot.file, slot.page));
         }
+        if response.secondary_clicked() && pointer.is_some_and(|p| cell.contains(p)) {
+            out.secondary = Some(Some((slot.file, slot.page)));
+        }
     }
-
+    out.response = Some(response);
     out
 }
 

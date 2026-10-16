@@ -15,6 +15,9 @@ use pdfcraft_organize::{self as organize, BoxSpec, OrganizeError, PageBox};
 use winfiles_geom::{Paper, Size, pt_to_mm};
 
 mod frame;
+mod spots;
+
+pub use spots::{Overprint, Spot};
 
 #[cfg(test)]
 mod tests;
@@ -324,24 +327,68 @@ impl Editor {
         })
     }
 
-    /// Margini attorno alle pagine, in millimetri, del colore scelto.
+    /// Margini attorno alle pagine, in millimetri, del colore scelto. Un margine negativo toglie
+    /// dal bordo invece di aggiungere; la pagina deve restare larga e alta almeno 1 mm.
     pub fn add_margins(
         &mut self,
         pages: &[usize],
         margins: winfiles_geom::Margins,
         color: [u8; 3],
     ) -> Result<(), EditError> {
-        let ok = [margins.top, margins.right, margins.bottom, margins.left]
+        let sides = [margins.top, margins.right, margins.bottom, margins.left];
+        let ok = sides
             .iter()
-            .all(|m| m.is_finite() && (0.0..=5000.0).contains(m));
+            .all(|m| m.is_finite() && (-5000.0..=5000.0).contains(m));
         if !ok {
             return Err(EditError::Invalid("margini non validi".into()));
         }
-        self.edit("Aggiungi margini", |d| {
+        let label = if sides.iter().all(|m| *m <= 0.0) {
+            "Togli dai bordi"
+        } else {
+            "Margini"
+        };
+        self.edit(label, |d| {
             for &i in pages {
                 frame::margins(d, i, margins, color)?;
             }
             Ok(())
+        })
+    }
+
+    /// La taglierina: di ogni pagina resta solo il riquadro `cut`, in millimetri dall'angolo in
+    /// alto a sinistra della pagina come si vede. Il riquadro si ferma al bordo di ogni pagina; le
+    /// pagine che non tocca restano come sono. Restituisce quante pagine sono state tagliate.
+    pub fn crop(&mut self, pages: &[usize], cut: winfiles_geom::Rect) -> Result<usize, EditError> {
+        let ok = [cut.x, cut.y, cut.w, cut.h].iter().all(|v| v.is_finite());
+        if !ok || cut.w < 1.0 || cut.h < 1.0 {
+            return Err(EditError::Invalid("riquadro da tagliare non valido".into()));
+        }
+        let infos = self.pages();
+        let todo: Vec<(usize, winfiles_geom::Margins)> = pages
+            .iter()
+            .filter_map(|&i| {
+                let size = infos.get(i)?.size;
+                let (x0, y0) = (cut.x.max(0.0), cut.y.max(0.0));
+                let (x1, y1) = (cut.right().min(size.w), cut.bottom().min(size.h));
+                (x1 - x0 >= 1.0 && y1 - y0 >= 1.0).then_some((
+                    i,
+                    winfiles_geom::Margins {
+                        top: -y0,
+                        left: -x0,
+                        right: -(size.w - x1),
+                        bottom: -(size.h - y1),
+                    },
+                ))
+            })
+            .collect();
+        if todo.is_empty() {
+            return Ok(0);
+        }
+        self.edit("Taglia", |d| {
+            for (i, m) in &todo {
+                frame::margins(d, *i, *m, [255, 255, 255])?;
+            }
+            Ok(todo.len())
         })
     }
 
@@ -365,6 +412,36 @@ impl Editor {
             }
             Ok(())
         })
+    }
+
+    /// Le tinte piatte (Separation e DeviceN) del documento, con le pagine e la sovrastampa.
+    pub fn spots(&self) -> Result<Vec<Spot>, EditError> {
+        spots::list(&self.doc)
+    }
+
+    /// Rinomina una tinta piatta dovunque sia definita. Due tinte con lo stesso nome diventano una.
+    pub fn rename_spot(&mut self, from: &[u8], to: &str) -> Result<(), EditError> {
+        let to = to.trim();
+        if to.is_empty() || to.len() > 127 || to.as_bytes() == from {
+            return Err(EditError::Invalid("nome della tinta non valido".into()));
+        }
+        self.edit("Rinomina tinta", |d| {
+            match spots::rename(d, from, to.as_bytes())? {
+                0 => Err(EditError::Invalid("tinta non trovata".into())),
+                _ => Ok(()),
+            }
+        })
+    }
+
+    /// Accende o spegne la sovrastampa degli oggetti dipinti con una tinta piatta. Restituisce
+    /// quanti contenuti (pagine e moduli) sono cambiati: 0 se era già così.
+    pub fn set_spot_overprint(&mut self, name: &[u8], on: bool) -> Result<usize, EditError> {
+        let mut probe = self.doc.clone();
+        if spots::set_overprint(&mut probe, name, on)? == 0 {
+            return Ok(0);
+        }
+        let label = if on { "Sovrastampa" } else { "Togli sovrastampa" };
+        self.edit(label, |d| spots::set_overprint(d, name, on))
     }
 
     /// Il PDF intero, com'è adesso.

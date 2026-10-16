@@ -101,7 +101,7 @@ impl Dialog {
         let t = Tokens::get(ctx);
         let mut out = None;
         let title = match self {
-            Dialog::Margins { .. } => "Aggiungi margini",
+            Dialog::Margins { .. } => "Aggiungi o togli margini",
             Dialog::Resize { .. } => "Ridimensiona pagine",
             Dialog::Insert { .. } => "Aggiungi pagine",
             Dialog::Extract { .. } => "Estrai pagine",
@@ -235,31 +235,36 @@ fn margins_body(ui: &mut egui::Ui, m: &mut Margins, same: &mut bool, color: &mut
             if *same {
                 dim_label(ui, "Tutti i lati");
                 let before = m.top;
-                fluent::number(ui, 104.0, mm_field(&mut m.top, 2000.0));
+                fluent::number(ui, 104.0, side(&mut m.top));
                 if m.top != before {
                     *m = Margins::uniform(m.top);
                 }
                 ui.end_row();
             } else {
                 dim_label(ui, "Sopra");
-                fluent::number(ui, 104.0, mm_field(&mut m.top, 2000.0));
+                fluent::number(ui, 104.0, side(&mut m.top));
                 dim_label(ui, "Sotto");
-                fluent::number(ui, 104.0, mm_field(&mut m.bottom, 2000.0));
+                fluent::number(ui, 104.0, side(&mut m.bottom));
                 ui.end_row();
                 dim_label(ui, "Sinistra");
-                fluent::number(ui, 104.0, mm_field(&mut m.left, 2000.0));
+                fluent::number(ui, 104.0, side(&mut m.left));
                 dim_label(ui, "Destra");
-                fluent::number(ui, 104.0, mm_field(&mut m.right, 2000.0));
+                fluent::number(ui, 104.0, side(&mut m.right));
                 ui.end_row();
             }
         });
+    ui.add_space(4.0);
+    dim_label(
+        ui,
+        "Con un valore negativo si toglie dal bordo: -3 mm toglie 3 mm.",
+    );
     ui.add_space(6.0);
     if ui.add(fluent::checkbox(same, "Uguali su tutti i lati")).changed() && *same {
         *m = Margins::uniform(m.top);
     }
     ui.add_space(8.0);
     ui.horizontal(|ui| {
-        dim_label(ui, "Colore");
+        dim_label(ui, "Colore dei margini aggiunti");
         ui.color_edit_button_srgba(color);
         for (c, name) in [(egui::Color32::WHITE, "Bianco"), (egui::Color32::BLACK, "Nero")] {
             if ui.small_button(name).clicked() {
@@ -267,6 +272,11 @@ fn margins_body(ui: &mut egui::Ui, m: &mut Margins, same: &mut bool, color: &mut
             }
         }
     });
+}
+
+/// Un lato dei margini: anche negativo, per togliere dal bordo.
+fn side(value: &mut f64) -> egui::DragValue<'_> {
+    mm_field(value, 2000.0).range(-2000.0..=2000.0)
 }
 
 fn resize_body(ui: &mut egui::Ui, size: &mut Size, keep: &mut bool, current: Size) {

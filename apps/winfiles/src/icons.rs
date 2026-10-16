@@ -43,6 +43,7 @@ static ICONS: &[(&str, &[u8])] = icons![
     "crop",
     "file-output",
     "files",
+    "palette",
     "frame",
     "redo-2",
     "rotate-ccw",

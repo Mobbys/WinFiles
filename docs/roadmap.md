@@ -92,6 +92,11 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Estrai le pagine scelte in un file nuovo; dividi in più file ai punti scelti
 - [x] Rifila al TrimBox, margini colorati, misura libera, adatta ad A4 o A3 senza ridisegnare la pagina
 - [x] Annulla e Ripeti con l'etichetta dell'operazione; "Salvare le modifiche?" prima di chiudere o aprire
+- [x] "Modifica PDF" e "Modifica immagine" dal tasto destro sui file, nell'elenco e sul foglio
+- [x] Taglierina sull'anteprima della pagina, con lente, Invio ed Esc; taglia una pagina o tutte
+- [x] Margini negativi: un valore sotto zero toglie dal bordo
+- [x] Pannello "Tinte piatte" a destra, chiudibile: elenco con colore e pagine, rinomina,
+  sovrastampa solo sugli oggetti della tinta ([ADR 0018](adr/0018-tinte-piatte.md))
 - [ ] Provata da Michel su file veri
 
 ## Fase 8 in dettaglio

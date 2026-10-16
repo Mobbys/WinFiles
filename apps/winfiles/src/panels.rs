@@ -302,13 +302,17 @@ fn section(ui: &mut egui::Ui, title: &str) {
 }
 
 /// Cosa fare dei file dal menu del tasto destro.
-enum FileAction {
+pub(crate) enum FileAction {
     /// Toglie dall'elenco i file scelti.
     RemoveMarked,
     /// Toglie dall'elenco i file di una cartella che l'elenco mostra.
     RemoveSet(std::collections::BTreeSet<usize>),
     Open(std::path::PathBuf),
     Reveal(std::path::PathBuf),
+    /// Apre il PDF nel modulo Modifica PDF.
+    EditPdf(std::path::PathBuf),
+    /// Apre l'immagine (o le immagini scelte, se è tra quelle) nel modulo Modifica immagini.
+    EditImages(std::path::PathBuf),
     /// Mette in stampa (o ne toglie) i file scelti.
     PrintMarked(bool),
     /// Mette in stampa (o ne toglie) un file solo, dalla sua casella.
@@ -321,6 +325,87 @@ enum FileAction {
     Expand(std::path::PathBuf),
     /// Copia negli appunti la tabella dei file scelti.
     CopyMarked,
+}
+
+/// Il menu del tasto destro su un file, nell'elenco e nell'anteprima del foglio: `count` file
+/// scelti (il clic destro su un file non scelto lo sceglie da solo), `state` se è in stampa.
+pub(crate) fn file_menu(
+    ui: &mut egui::Ui,
+    f: &FileEntry,
+    count: usize,
+    state: PrintState,
+) -> Option<FileAction> {
+    let mut action = None;
+    let path = &f.path;
+    match f.kind {
+        FileKind::Pdf => {
+            if ui.button("Modifica PDF").clicked() {
+                action = Some(FileAction::EditPdf(path.clone()));
+                ui.close();
+            }
+        }
+        FileKind::Image => {
+            let label = if count > 1 {
+                "Modifica le immagini scelte"
+            } else {
+                "Modifica immagine"
+            };
+            if ui.button(label).clicked() {
+                action = Some(FileAction::EditImages(path.clone()));
+                ui.close();
+            }
+        }
+        _ => {}
+    }
+    if ui.button("Apri con il programma predefinito").clicked() {
+        action = Some(FileAction::Open(path.clone()));
+        ui.close();
+    }
+    if ui.button("Mostra nella cartella").clicked() {
+        action = Some(FileAction::Reveal(path.clone()));
+        ui.close();
+    }
+    let label = match count {
+        1 => "Copia negli appunti".to_string(),
+        n => format!("Copia negli appunti i {n} file scelti"),
+    };
+    if ui
+        .button(label)
+        .on_hover_text("Nome, pagine, misure, m² e note, da incollare in Excel o in una mail")
+        .clicked()
+    {
+        action = Some(FileAction::CopyMarked);
+        ui.close();
+    }
+    ui.separator();
+    let on = state != PrintState::All;
+    let label = match (count, on) {
+        (1, true) => "Metti in stampa".to_string(),
+        (1, false) => "Togli dalla stampa".to_string(),
+        (n, true) => format!("Metti in stampa i {n} file scelti"),
+        (n, false) => format!("Togli dalla stampa i {n} file scelti"),
+    };
+    if ui
+        .button(label)
+        .on_hover_text("Il file resta nell'elenco con le sue note. Tasto Spazio.")
+        .clicked()
+    {
+        action = Some(FileAction::PrintMarked(on));
+        ui.close();
+    }
+    let label = match count {
+        1 => "Togli dall'elenco".to_string(),
+        n => format!("Togli dall'elenco i {n} file scelti"),
+    };
+    if ui
+        .button(label)
+        .on_hover_text("Il file resta sul disco. Tasto Canc.")
+        .clicked()
+    {
+        action = Some(FileAction::RemoveMarked);
+        ui.close();
+    }
+    action
 }
 
 /// Cosa fare dell'intestazione di una cartella nell'elenco.
@@ -838,57 +923,11 @@ impl WinFilesApp {
                             if resp.secondary_clicked() {
                                 menu_on = Some(*i);
                             }
-                            let path = &f.path;
                             resp.context_menu(|ui| {
                                 // Il clic destro su un file non scelto lo sceglie da solo.
                                 let count = if selected { marked.max(1) } else { 1 };
-                                if ui.button("Apri con il programma predefinito").clicked() {
-                                    action = Some(FileAction::Open(path.clone()));
-                                    ui.close();
-                                }
-                                if ui.button("Mostra nella cartella").clicked() {
-                                    action = Some(FileAction::Reveal(path.clone()));
-                                    ui.close();
-                                }
-                                let label = match count {
-                                    1 => "Copia negli appunti".to_string(),
-                                    n => format!("Copia negli appunti i {n} file scelti"),
-                                };
-                                if ui
-                                    .button(label)
-                                    .on_hover_text("Nome, pagine, misure, m² e note, da incollare in Excel o in una mail")
-                                    .clicked()
-                                {
-                                    action = Some(FileAction::CopyMarked);
-                                    ui.close();
-                                }
-                                ui.separator();
-                                let on = state != PrintState::All;
-                                let label = match (count, on) {
-                                    (1, true) => "Metti in stampa".to_string(),
-                                    (1, false) => "Togli dalla stampa".to_string(),
-                                    (n, true) => format!("Metti in stampa i {n} file scelti"),
-                                    (n, false) => format!("Togli dalla stampa i {n} file scelti"),
-                                };
-                                if ui
-                                    .button(label)
-                                    .on_hover_text("Il file resta nell'elenco con le sue note. Tasto Spazio.")
-                                    .clicked()
-                                {
-                                    action = Some(FileAction::PrintMarked(on));
-                                    ui.close();
-                                }
-                                let label = match count {
-                                    1 => "Togli dall'elenco".to_string(),
-                                    n => format!("Togli dall'elenco i {n} file scelti"),
-                                };
-                                if ui
-                                    .button(label)
-                                    .on_hover_text("Il file resta sul disco. Tasto Canc.")
-                                    .clicked()
-                                {
-                                    action = Some(FileAction::RemoveMarked);
-                                    ui.close();
+                                if let Some(a) = file_menu(ui, f, count, state) {
+                                    action = Some(a);
                                 }
                             });
                         }
@@ -1039,51 +1078,8 @@ impl WinFilesApp {
         if let Some(i) = menu_on {
             self.pick_for_menu(i);
         }
-        match action {
-            Some(FileAction::RemoveMarked) => {
-                let marked = std::mem::take(&mut self.marked);
-                self.remove_files(&marked);
-            }
-            Some(FileAction::RemoveSet(set)) => self.remove_files(&set),
-            Some(FileAction::PrintMarked(on)) => {
-                let marked = self.marked.clone();
-                self.set_printed(&marked, on);
-            }
-            Some(FileAction::PrintFile(i, on)) => {
-                // La casella di un file scelto insieme ad altri vale per tutti, come in Esplora file.
-                let set = if self.marked.contains(&i) {
-                    self.marked.clone()
-                } else {
-                    std::collections::BTreeSet::from([i])
-                };
-                self.set_printed(&set, on);
-            }
-            Some(FileAction::PrintSet(set, on)) => self.set_printed(&set, on),
-            Some(FileAction::PrintPage(i, p, on)) => {
-                if let Some(f) = self.project.files.get_mut(i) {
-                    f.set_printed(p, on);
-                }
-            }
-            Some(FileAction::Expand(path)) => {
-                if !self.expanded.remove(&path) {
-                    self.expanded.insert(path);
-                }
-            }
-            Some(FileAction::Open(path)) => {
-                if let Err(e) = crate::shell::open(&path) {
-                    self.status = format!("Non riesco ad aprire {}: {e}", path.display());
-                }
-            }
-            Some(FileAction::CopyMarked) => {
-                let marked = self.marked.clone();
-                self.copy_table(Some(&marked));
-            }
-            Some(FileAction::Reveal(path)) => {
-                if let Err(e) = crate::shell::reveal(&path) {
-                    self.status = format!("Non riesco a mostrare {}: {e}", path.display());
-                }
-            }
-            None => {}
+        if let Some(a) = action {
+            self.file_action(ui.ctx(), a);
         }
         match rename {
             Some(Rename::Start(path, label)) => self.renaming = Some((path, label)),
@@ -1104,6 +1100,79 @@ impl WinFilesApp {
                 }
             }
             None => {}
+        }
+    }
+
+    /// Fa quello che si è scelto nel menu di un file, dall'elenco o dall'anteprima del foglio.
+    pub(crate) fn file_action(&mut self, ctx: &egui::Context, action: FileAction) {
+        match action {
+            FileAction::RemoveMarked => {
+                let marked = std::mem::take(&mut self.marked);
+                self.remove_files(&marked);
+            }
+            FileAction::RemoveSet(set) => self.remove_files(&set),
+            FileAction::PrintMarked(on) => {
+                let marked = self.marked.clone();
+                self.set_printed(&marked, on);
+            }
+            FileAction::PrintFile(i, on) => {
+                // La casella di un file scelto insieme ad altri vale per tutti, come in Esplora file.
+                let set = if self.marked.contains(&i) {
+                    self.marked.clone()
+                } else {
+                    std::collections::BTreeSet::from([i])
+                };
+                self.set_printed(&set, on);
+            }
+            FileAction::PrintSet(set, on) => self.set_printed(&set, on),
+            FileAction::PrintPage(i, p, on) => {
+                if let Some(f) = self.project.files.get_mut(i) {
+                    f.set_printed(p, on);
+                }
+            }
+            FileAction::Expand(path) => {
+                if !self.expanded.remove(&path) {
+                    self.expanded.insert(path);
+                }
+            }
+            FileAction::EditPdf(path) => {
+                self.module = crate::app::Module::Pdf;
+                self.pdf.open_from_list(ctx, &path);
+            }
+            FileAction::EditImages(path) => {
+                // Con il file tra quelli scelti si aprono tutte le immagini scelte.
+                let marked: Vec<std::path::PathBuf> = self
+                    .marked
+                    .iter()
+                    .filter_map(|i| self.project.files.get(*i))
+                    .filter(|f| f.kind == FileKind::Image)
+                    .map(|f| f.path.clone())
+                    .collect();
+                let paths = if marked.contains(&path) {
+                    let mut rest: Vec<std::path::PathBuf> =
+                        marked.into_iter().filter(|p| *p != path).collect();
+                    rest.insert(0, path);
+                    rest
+                } else {
+                    vec![path]
+                };
+                self.module = crate::app::Module::Images;
+                self.images.open_from_list(&paths);
+            }
+            FileAction::Open(path) => {
+                if let Err(e) = crate::shell::open(&path) {
+                    self.status = format!("Non riesco ad aprire {}: {e}", path.display());
+                }
+            }
+            FileAction::CopyMarked => {
+                let marked = self.marked.clone();
+                self.copy_table(Some(&marked));
+            }
+            FileAction::Reveal(path) => {
+                if let Err(e) = crate::shell::reveal(&path) {
+                    self.status = format!("Non riesco a mostrare {}: {e}", path.display());
+                }
+            }
         }
     }
 

@@ -70,6 +70,8 @@ struct Plan {
     keep_trim: bool,
 }
 
+/// Margini attorno alla pagina; quelli negativi tolgono dal bordo (il modulo resta intero, è la
+/// pagina più piccola a nasconderne una parte).
 pub(crate) fn margins(doc: &mut Document, page: usize, m: Margins, color: [u8; 3]) -> Result<(), EditError> {
     let (top, right, bottom, left) = (
         mm_to_pt(m.top),
@@ -243,6 +245,13 @@ fn reframe(doc: &mut Document, index: usize, plan: impl FnOnce(f64, f64) -> Plan
     };
     let upright = upright(rotation, crop);
     let plan = plan(w, h);
+    // Con i margini negativi la pagina si accorcia: almeno 1 mm deve restare.
+    let min = mm_to_pt(1.0);
+    if !(plan.width.is_finite() && plan.height.is_finite() && plan.width >= min && plan.height >= min) {
+        return Err(EditError::Invalid(format!(
+            "la pagina {number} diventerebbe troppo piccola"
+        )));
+    }
 
     // Il modulo: il contenuto della pagina con le sue risorse, così com'è.
     let mut form = Dict::new();

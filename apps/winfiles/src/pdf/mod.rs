@@ -11,9 +11,10 @@ use std::path::{Path, PathBuf};
 
 use egui::{Align, Rect, Sense, Stroke, Vec2, vec2};
 use winfiles_geom::{Paper, Size, Unit, format_size};
-use winfiles_pdf_edit::{Editor, PageInfo, PdfFile};
+use winfiles_pdf_edit::{Editor, Overprint, PageInfo, PdfFile, Spot};
 
 use crate::app::{POINTS_PER_MM, card};
+use crate::cutter::Cutter;
 use crate::icons;
 use crate::theme::{Tokens, semibold};
 use dialogs::{Action, Dialog, Position, Scope};
@@ -70,6 +71,14 @@ pub struct PdfModule {
     pub quit_confirmed: bool,
     /// Portare l'elenco alla pagina corrente al prossimo disegno.
     reveal: bool,
+    /// La taglierina sull'anteprima, in millimetri della pagina come si vede.
+    cutter: Cutter,
+    /// Il pannello delle tinte piatte a destra è aperto.
+    spots_open: bool,
+    /// Le tinte piatte del documento e di quale versione sono.
+    spots: Option<(u64, Result<Vec<Spot>, String>)>,
+    /// La tinta che si sta rinominando, con il nome in scrittura.
+    renaming: Option<(Vec<u8>, String)>,
 }
 
 impl PdfModule {
@@ -93,6 +102,10 @@ impl PdfModule {
             asking: None,
             quit_confirmed: false,
             reveal: false,
+            cutter: Cutter::default(),
+            spots_open: true,
+            spots: None,
+            renaming: None,
         }
     }
 
@@ -161,6 +174,15 @@ impl PdfModule {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
+    }
+
+    /// Dalle miniature (tasto destro › Modifica PDF): se il PDF aperto ha modifiche non salvate
+    /// prima si chiede; se è già quello aperto si resta lì.
+    pub fn open_from_list(&mut self, ctx: &egui::Context, path: &Path) {
+        if self.editor.as_ref().is_some_and(|e| e.path() == path) {
+            return;
+        }
+        self.guard(ctx, Then::Open(Some(path.to_path_buf())));
     }
 
     /// Apre un PDF al posto di quello aperto (le modifiche sono già state salvate o lasciate).
@@ -352,6 +374,28 @@ impl PdfModule {
         });
     }
 
+    /// La taglierina: di ogni pagina resta il rettangolo disegnato sull'anteprima.
+    fn cut(&mut self, scope: Scope) {
+        let Some(c) = self.cutter.crop.map(crate::cutter::Crop::normalized) else {
+            return;
+        };
+        let rect = winfiles_geom::Rect::new(
+            f64::from(c.x0),
+            f64::from(c.y0),
+            f64::from(c.width()),
+            f64::from(c.height()),
+        );
+        let pages = self.scope_pages(scope);
+        self.apply(|e| {
+            let n = e.crop(&pages, rect)?;
+            Ok(match n {
+                0 => "Il riquadro non tocca le pagine scelte".into(),
+                n => format!("Tagliate {}", crate::canvas::pages_text(n)),
+            })
+        });
+        self.cutter.clear();
+    }
+
     fn fit_paper(&mut self, paper: Paper) {
         let pages = self.chosen();
         self.apply(|e| {
@@ -429,7 +473,7 @@ impl PdfModule {
                 self.apply(|e| {
                     e.add_margins(&pages, m, color)?;
                     Ok(format!(
-                        "Margini aggiunti a {}",
+                        "Margini cambiati su {}",
                         crate::canvas::pages_text(pages.len())
                     ))
                 });
@@ -582,6 +626,17 @@ impl PdfModule {
         }
         if ctx.egui_wants_keyboard_input() || self.infos.is_empty() {
             return;
+        }
+        // Con la taglierina aperta Invio taglia e Esc la chiude, come nelle immagini.
+        if self.cutter.crop.is_some() {
+            if ctx.input(|i| i.key_pressed(Key::Enter)) {
+                self.cut(Scope::Chosen);
+                return;
+            }
+            if ctx.input(|i| i.key_pressed(Key::Escape)) {
+                self.cutter.clear();
+                return;
+            }
         }
         let n = self.infos.len();
         if pressed(Modifiers::COMMAND, Key::A) {
@@ -758,7 +813,7 @@ impl PdfModule {
                         self.trim();
                     }
                     if text_button(ui, "frame", "Margini", open)
-                        .on_hover_text("Aggiungi margini attorno alle pagine")
+                        .on_hover_text("Aggiungi margini attorno alle pagine, o toglili con valori negativi")
                         .clicked()
                     {
                         self.dialog = Some(Dialog::margins());
@@ -784,6 +839,19 @@ impl PdfModule {
                         {
                             self.fit_paper(paper);
                         }
+                    }
+                    separator(ui);
+                    if icons::button(
+                        ui,
+                        "palette",
+                        "Tinte piatte: elenco, rinomina e sovrastampa",
+                        self.spots_open,
+                        open,
+                        32.0,
+                    )
+                    .clicked()
+                    {
+                        self.spots_open = !self.spots_open;
                     }
                     separator(ui);
                     if icons::button(ui, "file-output", "Estrai le pagine scelte", false, open, 32.0)
@@ -967,9 +1035,17 @@ impl PdfModule {
         }
         let list_w = (full.width() * 0.3).clamp(170.0, 460.0);
         let list = Rect::from_min_size(full.min, vec2(list_w, full.height()));
-        let view = Rect::from_min_max(egui::pos2(list.right() + 10.0, full.top()), full.max);
+        let side_w = if self.spots_open { SPOTS_W } else { 0.0 };
+        let view = Rect::from_min_max(
+            egui::pos2(list.right() + 10.0, full.top()),
+            egui::pos2(full.right() - side_w, full.bottom()),
+        );
         self.page_list(ui, list, unit);
         self.preview(ui, view, unit);
+        if self.spots_open {
+            let side = Rect::from_min_max(egui::pos2(view.right() + 10.0, full.top()), full.max);
+            self.spots_panel(ui, side);
+        }
     }
 
     fn empty(&mut self, ui: &mut egui::Ui, rect: Rect) {
@@ -1418,9 +1494,14 @@ impl PdfModule {
 
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(board));
         child.set_clip_rect(board);
+        let mut lens = None;
         egui::ScrollArea::both()
             .id_salt("pdf-anteprima")
             .auto_shrink([false, false])
+            // Trascinare sulla pagina disegna la taglierina, non sposta la vista.
+            .scroll_source(
+                egui::scroll_area::ScrollSource::MOUSE_WHEEL | egui::scroll_area::ScrollSource::SCROLL_BAR,
+            )
             .show(&mut child, |ui| {
                 let area = vec2(shown.x + 48.0, shown.y + 48.0).max(board.size());
                 let (space, _) = ui.allocate_exact_size(area, Sense::hover());
@@ -1459,8 +1540,342 @@ impl PdfModule {
                     ui.ctx()
                         .request_repaint_after(std::time::Duration::from_millis(100));
                 }
+                let (w, h) = (size.w as f32, size.h as f32);
+                self.cutter.interact(ui, ui.id().with("taglierina"), paper, w, h);
+                self.cutter.paint(ui, paper, w);
+                if let (Some(at), Some(Image::Ready(tex))) = (self.cutter.lens, big.or(small)) {
+                    lens = Some((at, paper, tex.id()));
+                }
             });
+        if let Some((at, paper, tex)) = lens {
+            paint_lens(ui, board, paper, at, tex);
+        }
+        if self.cutter.crop.is_some() {
+            self.cut_bar(ui, board, unit);
+        }
     }
+
+    /// Sotto la pagina, mentre c'è un rettangolo: la misura e i pulsanti per tagliare.
+    fn cut_bar(&mut self, ui: &mut egui::Ui, board: Rect, unit: Unit) {
+        let Some(c) = self.cutter.crop.map(crate::cutter::Crop::normalized) else {
+            return;
+        };
+        let t = Tokens::get(ui.ctx());
+        let chosen = self.chosen().len();
+        let total = self.infos.len();
+        let area = Rect::from_center_size(
+            egui::pos2(board.center().x, board.bottom() - 34.0),
+            vec2(board.width().min(620.0) - 24.0, 44.0),
+        );
+        let mut bar = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(area)
+                .layout(egui::Layout::left_to_right(Align::Center)),
+        );
+        bar.painter().rect(
+            area,
+            8.0,
+            t.panel,
+            Stroke::new(1.0, t.border),
+            egui::StrokeKind::Outside,
+        );
+        bar.add_space(12.0);
+        icons::paint(
+            &bar,
+            "square-dashed",
+            Rect::from_center_size(egui::pos2(area.left() + 20.0, area.center().y), Vec2::splat(16.0)),
+            t.icon,
+        );
+        bar.add_space(18.0);
+        let size = Size::new(f64::from(c.width()), f64::from(c.height()));
+        bar.label(
+            egui::RichText::new(format_size(size, unit))
+                .font(semibold(13.0))
+                .color(t.text_strong),
+        );
+        let mut action = None;
+        bar.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+            ui.add_space(8.0);
+            if ui
+                .add(egui::Button::new("Annulla").min_size(vec2(0.0, 30.0)))
+                .on_hover_text("Togli la taglierina (Esc)")
+                .clicked()
+            {
+                action = Some(None);
+            }
+            if total > 1
+                && chosen < total
+                && ui
+                    .add(egui::Button::new("Tutte le pagine").min_size(vec2(0.0, 30.0)))
+                    .on_hover_text("Taglia allo stesso riquadro tutte le pagine del PDF")
+                    .clicked()
+            {
+                action = Some(Some(Scope::All));
+            }
+            let label = if chosen > 1 {
+                format!("Taglia le {chosen} pagine")
+            } else {
+                "Taglia la pagina".into()
+            };
+            let button = egui::Button::new(
+                egui::RichText::new(label)
+                    .font(semibold(13.0))
+                    .color(t.on_primary),
+            )
+            .fill(t.primary)
+            .min_size(vec2(0.0, 30.0));
+            if ui.add(button).on_hover_text("Invio").clicked() {
+                action = Some(Some(Scope::Chosen));
+            }
+        });
+        match action {
+            Some(Some(scope)) => self.cut(scope),
+            Some(None) => self.cutter.clear(),
+            None => {}
+        }
+    }
+}
+
+/// Larghezza del pannello delle tinte piatte, con lo spazio prima.
+const SPOTS_W: f32 = 290.0;
+
+impl PdfModule {
+    /// Il pannello a destra con le tinte piatte: colore, nome (si rinomina), pagine e sovrastampa.
+    fn spots_panel(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let t = Tokens::get(ui.ctx());
+        card(ui, rect);
+        if self.spots.as_ref().is_none_or(|(g, _)| *g != self.generation)
+            && let Some(e) = &self.editor
+        {
+            let list = e.spots().map_err(|e| e.to_string());
+            self.spots = Some((self.generation, list));
+        }
+        let inner = rect.shrink2(vec2(14.0, 10.0));
+        let mut ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(inner)
+                .layout(egui::Layout::top_down(Align::Min)),
+        );
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Tinte piatte")
+                    .font(semibold(14.0))
+                    .color(t.text_strong),
+            );
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if icons::button(ui, "x", "Chiudi il pannello", false, true, 24.0).clicked() {
+                    self.spots_open = false;
+                }
+            });
+        });
+        ui.add_space(6.0);
+        let spots = match &self.spots {
+            Some((_, Ok(list))) => list.clone(),
+            Some((_, Err(e))) => {
+                ui.colored_label(t.error, format!("Tinte non leggibili: {e}"));
+                return;
+            }
+            None => Vec::new(),
+        };
+        if spots.is_empty() {
+            ui.label(egui::RichText::new("Nessuna tinta piatta in questo PDF.").color(t.text_dim));
+            return;
+        }
+        let total = self.infos.len();
+        let mut rename: Option<(Vec<u8>, String)> = None;
+        let mut overprint: Option<(Vec<u8>, bool)> = None;
+        egui::ScrollArea::vertical()
+            .id_salt("pdf-tinte")
+            .auto_shrink([false, false])
+            .show(&mut ui, |ui| {
+                for s in &spots {
+                    egui::Frame::NONE
+                        .fill(t.panel_darker)
+                        .corner_radius(t.radius)
+                        .inner_margin(egui::Margin::same(10))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                let (dot, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+                                match s.swatch {
+                                    Some([r, g, b]) => {
+                                        ui.painter().rect(
+                                            dot,
+                                            4.0,
+                                            egui::Color32::from_rgb(r, g, b),
+                                            Stroke::new(1.0, t.border),
+                                            egui::StrokeKind::Inside,
+                                        );
+                                    }
+                                    None => {
+                                        ui.painter().rect_stroke(
+                                            dot,
+                                            4.0,
+                                            Stroke::new(1.0, t.border),
+                                            egui::StrokeKind::Inside,
+                                        );
+                                    }
+                                }
+                                let editing = self.renaming.as_ref().is_some_and(|(raw, _)| *raw == s.raw);
+                                if editing {
+                                    if let Some((raw, text)) = self.renaming.as_mut() {
+                                        let edit = egui::TextEdit::singleline(text)
+                                            .desired_width(ui.available_width() - 4.0);
+                                        let resp = crate::fluent::text_field(ui, edit);
+                                        resp.request_focus();
+                                        let (enter, esc) = ui.input(|i| {
+                                            (
+                                                i.key_pressed(egui::Key::Enter),
+                                                i.key_pressed(egui::Key::Escape),
+                                            )
+                                        });
+                                        if enter || (resp.lost_focus() && !esc) {
+                                            rename = Some((raw.clone(), text.clone()));
+                                        } else if esc {
+                                            rename = Some((Vec::new(), String::new()));
+                                        }
+                                    }
+                                } else {
+                                    let name = ui
+                                        .add(
+                                            egui::Label::new(
+                                                egui::RichText::new(&s.name)
+                                                    .font(semibold(13.0))
+                                                    .color(t.text_strong),
+                                            )
+                                            .truncate()
+                                            .sense(Sense::click()),
+                                        )
+                                        .on_hover_text(format!("{}\nDoppio clic per rinominare", s.name));
+                                    if name.double_clicked() {
+                                        self.renaming = Some((s.raw.clone(), s.name.clone()));
+                                    }
+                                }
+                            });
+                            let pages = match s.pages.len() {
+                                0 => "non usata nelle pagine".to_string(),
+                                n if n == total && total > 1 => "su tutte le pagine".to_string(),
+                                _ => pages_list(&s.pages),
+                            };
+                            ui.label(egui::RichText::new(pages).size(12.0).color(t.text_dim));
+                            ui.add_space(2.0);
+                            ui.horizontal(|ui| {
+                                let mut on = s.overprint == Overprint::All;
+                                let used = s.overprint != Overprint::Unused;
+                                let label = if s.overprint == Overprint::Some {
+                                    "Sovrastampa (solo in parte)"
+                                } else {
+                                    "Sovrastampa"
+                                };
+                                let resp = ui
+                                    .add_enabled(used, crate::fluent::checkbox(&mut on, label))
+                                    .on_hover_text(
+                                        "Gli oggetti di questa tinta si stampano sopra gli altri colori, \
+                                         senza togliere quello che c'è sotto",
+                                    );
+                                if resp.changed() {
+                                    overprint = Some((s.raw.clone(), on));
+                                }
+                                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                                    if icons::button(ui, "pencil", "Rinomina la tinta", false, true, 24.0)
+                                        .clicked()
+                                    {
+                                        self.renaming = Some((s.raw.clone(), s.name.clone()));
+                                    }
+                                });
+                            });
+                        });
+                    ui.add_space(6.0);
+                }
+            });
+        if let Some((raw, text)) = rename {
+            self.renaming = None;
+            let unchanged = spots.iter().any(|s| s.raw == raw && s.name == text.trim());
+            if !raw.is_empty() && !unchanged {
+                self.apply(|e| {
+                    e.rename_spot(&raw, &text)?;
+                    Ok(format!("Tinta rinominata in {}", text.trim()))
+                });
+            }
+        }
+        if let Some((raw, on)) = overprint {
+            let name = String::from_utf8_lossy(&raw).into_owned();
+            self.apply(|e| {
+                Ok(match (e.set_spot_overprint(&raw, on)?, on) {
+                    (0, _) => format!("{name}: niente da cambiare"),
+                    (_, true) => format!("{name} in sovrastampa"),
+                    (_, false) => format!("{name} senza sovrastampa"),
+                })
+            });
+        }
+    }
+}
+
+/// "pag. 1, 3, 5–8": le pagine (da 0) in breve, con gli intervalli.
+fn pages_list(pages: &[usize]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut i = 0;
+    while let Some(&start) = pages.get(i) {
+        let mut end = start;
+        while pages.get(i + 1) == Some(&(end + 1)) {
+            end += 1;
+            i += 1;
+        }
+        parts.push(if end > start + 1 {
+            format!("{}–{}", start + 1, end + 1)
+        } else if end == start + 1 {
+            format!("{}, {}", start + 1, end + 1)
+        } else {
+            format!("{}", start + 1)
+        });
+        i += 1;
+    }
+    let prefix = if pages.len() == 1 { "pag." } else { "pagg." };
+    format!("{prefix} {}", parts.join(", "))
+}
+
+/// Quanto ingrandisce la lente della taglierina.
+const LENS_ZOOM: f32 = 5.0;
+/// Lato della lente a schermo, in punti.
+const LENS_SIDE: f32 = 116.0;
+
+/// La lente: mentre si tira la taglierina mostra ingrandito il punto sotto il cursore.
+fn paint_lens(ui: &egui::Ui, board: Rect, paper: Rect, at: egui::Pos2, tex: egui::TextureId) {
+    let t = Tokens::get(ui.ctx());
+    let span = LENS_SIDE / LENS_ZOOM;
+    let uv = |x: f32, w: f32| x / w.max(1.0);
+    let half = vec2(uv(span, paper.width()), uv(span, paper.height())) / 2.0;
+    let c = egui::pos2(
+        uv(at.x - paper.left(), paper.width()),
+        uv(at.y - paper.top(), paper.height()),
+    );
+    let mut rect = Rect::from_min_size(at + vec2(18.0, 18.0), Vec2::splat(LENS_SIDE));
+    if rect.right() > board.right() {
+        rect = rect.translate(vec2(-LENS_SIDE - 36.0, 0.0));
+    }
+    if rect.bottom() > board.bottom() {
+        rect = rect.translate(vec2(0.0, -LENS_SIDE - 36.0));
+    }
+    let p = ui.painter();
+    p.rect_filled(rect.expand(2.0), 4.0, t.panel);
+    p.rect_filled(rect, 0.0, egui::Color32::WHITE);
+    p.image(
+        tex,
+        rect,
+        Rect::from_min_max(c - half, c + half),
+        egui::Color32::WHITE,
+    );
+    p.rect_stroke(rect, 4.0, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
+    let mid = rect.center();
+    let cross = Stroke::new(1.0, t.accent);
+    p.line_segment(
+        [egui::pos2(mid.x, rect.top()), egui::pos2(mid.x, rect.bottom())],
+        cross,
+    );
+    p.line_segment(
+        [egui::pos2(rect.left(), mid.y), egui::pos2(rect.right(), mid.y)],
+        cross,
+    );
 }
 
 /// Il rettangolo con le proporzioni di `size` più grande che sta in `bounds`, al centro.
@@ -1516,4 +1931,16 @@ fn file_stem(p: &Path) -> String {
     p.file_stem()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "PDF".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pages_list;
+
+    #[test]
+    fn pagine_in_breve() {
+        assert_eq!(pages_list(&[0]), "pag. 1");
+        assert_eq!(pages_list(&[0, 2]), "pagg. 1, 3");
+        assert_eq!(pages_list(&[0, 1, 4, 5, 6, 7]), "pagg. 1, 2, 5–8");
+    }
 }

@@ -10,6 +10,7 @@ struct TestPage {
     trim: Option<[f64; 4]>,
     rotate: i64,
     content: &'static str,
+    resources: &'static str,
 }
 
 /// Quadrato rosso nell'angolo in alto a sinistra di una pagina 200 × 100 (non ruotata).
@@ -21,11 +22,17 @@ fn page(media: [f64; 4], rotate: i64, content: &'static str) -> TestPage {
         trim: None,
         rotate,
         content,
+        resources: "<< >>",
     }
 }
 
 /// PDF con offset xref corretti.
 fn pdf(pages: &[TestPage]) -> Vec<u8> {
+    pdf_extra(pages, &[])
+}
+
+/// Come [`pdf`], con altri oggetti dopo le pagine (numerati da 3 + 2 × pagine).
+fn pdf_extra(pages: &[TestPage], extra: &[&str]) -> Vec<u8> {
     let n = pages.len();
     let mut objects = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
@@ -41,10 +48,11 @@ fn pdf(pages: &[TestPage]) -> Vec<u8> {
     for (i, p) in pages.iter().enumerate() {
         let trim = p.trim.map(|t| format!(" /TrimBox {}", r(t))).unwrap_or_default();
         objects.push(format!(
-            "<< /Type /Page /Parent 2 0 R /MediaBox {}{trim} /Rotate {} /Contents {} 0 R /Resources << >> >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox {}{trim} /Rotate {} /Contents {} 0 R /Resources {} >>",
             r(p.media),
             p.rotate,
-            4 + 2 * i
+            4 + 2 * i,
+            p.resources
         ));
         objects.push(format!(
             "<< /Length {} >>\nstream\n{}\nendstream",
@@ -52,6 +60,7 @@ fn pdf(pages: &[TestPage]) -> Vec<u8> {
             p.content
         ));
     }
+    objects.extend(extra.iter().map(|o| o.to_string()));
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objects.iter().enumerate() {
@@ -225,6 +234,72 @@ fn margini_su_una_pagina_ruotata() {
 }
 
 #[test]
+fn margini_negativi_tolgono_dai_bordi() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, RED_TOP_LEFT)]);
+    let m = Margins {
+        top: pt_to_mm(-10.0),
+        right: pt_to_mm(-50.0),
+        bottom: pt_to_mm(-20.0),
+        left: pt_to_mm(-5.0),
+    };
+    e.add_margins(&[0], m, [0, 0, 255]).unwrap();
+    let info = e.pages()[0];
+    assert!(near(info.size.w, pt_to_mm(145.0)) && near(info.size.h, pt_to_mm(70.0)));
+    let img = render(&reread(&e), 0);
+    assert_eq!((img.1, img.2), (145, 70));
+    // Il quadrato rosso (0..20 × 0..20 dall'alto) ora parte da 0 e arriva a 15 × 10.
+    assert_eq!(pixel(&img, 2, 2), [255, 0, 0]);
+    assert_eq!(pixel(&img, 14, 9), [255, 0, 0]);
+    assert_eq!(pixel(&img, 20, 2), [255, 255, 255]);
+    // Niente fasce blu: i margini negativi tolgono, non aggiungono.
+    assert_eq!(pixel(&img, 140, 65), [255, 255, 255]);
+}
+
+#[test]
+fn margini_negativi_non_tolgono_tutta_la_pagina() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, RED_TOP_LEFT)]);
+    let m = Margins::uniform(pt_to_mm(-60.0));
+    assert!(e.add_margins(&[0], m, [255, 255, 255]).is_err());
+    assert_eq!(e.undo_label(), None);
+}
+
+#[test]
+fn la_taglierina_tiene_solo_il_riquadro() {
+    let mut e = editor(&[
+        page([0.0, 0.0, 200.0, 100.0], 0, RED_TOP_LEFT),
+        page([0.0, 0.0, 100.0, 50.0], 0, RED_TOP_LEFT),
+    ]);
+    // Il quadrato rosso in alto a sinistra, 20 × 20 punti, con un po' d'aria a destra e sotto.
+    let cut = winfiles_geom::Rect::new(0.0, 0.0, pt_to_mm(30.0), pt_to_mm(30.0));
+    assert_eq!(e.crop(&[0], cut).unwrap(), 1);
+    let info = e.pages()[0];
+    assert!(near(info.size.w, pt_to_mm(30.0)) && near(info.size.h, pt_to_mm(30.0)));
+    let img = render(&reread(&e), 0);
+    assert_eq!(pixel(&img, 10, 10), [255, 0, 0]);
+    assert_eq!(pixel(&img, 25, 25), [255, 255, 255]);
+    // La seconda pagina non era tra quelle scelte.
+    assert!(near(e.pages()[1].size.w, pt_to_mm(100.0)));
+    assert_eq!(e.undo_label(), Some("Taglia"));
+}
+
+#[test]
+fn la_taglierina_si_ferma_al_bordo_della_pagina() {
+    let mut e = editor(&[
+        page([0.0, 0.0, 200.0, 100.0], 0, RED_TOP_LEFT),
+        page([0.0, 0.0, 100.0, 50.0], 0, RED_TOP_LEFT),
+    ]);
+    // Più largo della seconda pagina: su quella si taglia solo quello che c'è.
+    let cut = winfiles_geom::Rect::new(pt_to_mm(10.0), pt_to_mm(10.0), pt_to_mm(150.0), pt_to_mm(80.0));
+    assert_eq!(e.crop(&[0, 1], cut).unwrap(), 2);
+    let pages = e.pages();
+    assert!(near(pages[0].size.w, pt_to_mm(150.0)) && near(pages[0].size.h, pt_to_mm(80.0)));
+    assert!(near(pages[1].size.w, pt_to_mm(90.0)) && near(pages[1].size.h, pt_to_mm(40.0)));
+    // Un riquadro fuori dalla pagina non la tocca.
+    let outside = winfiles_geom::Rect::new(pt_to_mm(500.0), 0.0, 10.0, 10.0);
+    assert_eq!(e.crop(&[1], outside).unwrap(), 0);
+}
+
+#[test]
 fn adatta_ad_a4_in_orizzontale() {
     let mut p = page([0.0, 0.0, 200.0, 100.0], 0, RED_TOP_LEFT);
     p.trim = Some([10.0, 10.0, 190.0, 90.0]);
@@ -304,4 +379,133 @@ fn salva_senza_rovinare_il_file_se_fallisce() {
 #[test]
 fn file_non_pdf() {
     assert!(PdfFile::from_bytes(b"ciao".to_vec()).is_err());
+}
+
+/// Due tinte piatte: un Pantone (nome con spazi) e un oro, più un DeviceN con il Pantone.
+const SPOT_RESOURCES: &str = "<< /ColorSpace << \
+    /P [/Separation /PANTONE#20185#20C /DeviceCMYK << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0.9 0.8 0] /N 1 >>] \
+    /O [/Separation /Oro /DeviceCMYK << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0.2 0.8 0.2] /N 1 >>] \
+    /R [/Separation /All /DeviceCMYK << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [1 1 1 1] /N 1 >>] \
+    >> /ExtGState << /Sovra << /OP true /op true >> >> >>";
+
+/// Un quadrato Pantone, uno blu, una linea oro, una croce di registrazione.
+const SPOT_CONTENT: &str = "/P cs 1 sc 0 0 50 50 re f 0 0 1 rg 50 50 20 20 re f \
+    /O CS 1 SC 0 0 m 100 100 l S /R CS 1 SC 90 0 m 100 0 l S";
+
+fn spot_page() -> TestPage {
+    let mut p = page([0.0, 0.0, 200.0, 100.0], 0, SPOT_CONTENT);
+    p.resources = SPOT_RESOURCES;
+    p
+}
+
+#[test]
+fn elenca_le_tinte_piatte_senza_registrazione() {
+    let e = editor(&[
+        spot_page(),
+        page([0.0, 0.0, 200.0, 100.0], 0, RED_TOP_LEFT),
+        spot_page(),
+    ]);
+    let spots = e.spots().unwrap();
+    let names: Vec<_> = spots.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Oro", "PANTONE 185 C"]);
+    assert!(spots.iter().all(|s| s.pages == [0, 2]));
+    assert!(spots.iter().all(|s| s.overprint == Overprint::None));
+    // Il Pantone 185 è rosso: 0 90 80 0 in CMYK.
+    assert_eq!(spots[1].swatch, Some([255, 25, 51]));
+}
+
+#[test]
+fn rinomina_una_tinta() {
+    let mut e = editor(&[spot_page()]);
+    e.rename_spot(b"Oro", "PANTONE 871 C").unwrap();
+    let names: Vec<_> = e.spots().unwrap().into_iter().map(|s| s.name).collect();
+    assert_eq!(names, ["PANTONE 185 C", "PANTONE 871 C"]);
+    // Rinominata come l'altra, le due diventano una lastra sola.
+    e.rename_spot(b"PANTONE 871 C", "PANTONE 185 C").unwrap();
+    assert_eq!(e.spots().unwrap().len(), 1);
+    // Il PDF salvato si rilegge e si disegna.
+    let img = render(&reread(&e), 0);
+    assert_eq!((img.1, img.2), (200, 100));
+    assert!(e.rename_spot(b"Nessuna", "X").is_err());
+}
+
+#[test]
+fn sovrastampa_solo_sulla_tinta_scelta() {
+    let mut e = editor(&[spot_page()]);
+    assert_eq!(e.set_spot_overprint(b"PANTONE 185 C", true).unwrap(), 1);
+    let spots = e.spots().unwrap();
+    let get = |n: &str| spots.iter().find(|s| s.name == n).unwrap().overprint;
+    assert_eq!(get("PANTONE 185 C"), Overprint::All);
+    assert_eq!(get("Oro"), Overprint::None);
+    // Già in sovrastampa: niente da fare, niente da annullare.
+    assert_eq!(e.set_spot_overprint(b"PANTONE 185 C", true).unwrap(), 0);
+    assert_eq!(e.undo_label(), Some("Sovrastampa"));
+    // Il quadrato blu dopo il Pantone non è in sovrastampa: il disegno resta quello di prima.
+    let before = render(&Pdf::new(pdf(&[spot_page()])).unwrap(), 0);
+    let img = render(&reread(&e), 0);
+    assert_eq!(pixel(&img, 60, 40), pixel(&before, 60, 40));
+    // E si toglie.
+    e.set_spot_overprint(b"PANTONE 185 C", false).unwrap();
+    let spots = e.spots().unwrap();
+    assert!(spots.iter().all(|s| s.overprint == Overprint::None));
+}
+
+#[test]
+fn la_sovrastampa_del_documento_si_legge() {
+    let mut p = page(
+        [0.0, 0.0, 200.0, 100.0],
+        0,
+        "/Sovra gs /P cs 1 sc 0 0 50 50 re f /O CS 1 SC 0 0 m 100 100 l S",
+    );
+    p.resources = SPOT_RESOURCES;
+    let e = editor(&[p]);
+    assert!(e.spots().unwrap().iter().all(|s| s.overprint == Overprint::All));
+}
+
+#[test]
+fn la_sovrastampa_entra_nei_moduli() {
+    // La pagina disegna un modulo (oggetto 5) che dipinge col Pantone.
+    let mut p = page([0.0, 0.0, 200.0, 100.0], 0, "/F Do");
+    p.resources = "<< /XObject << /F 5 0 R >> >>";
+    let form_content = "/P cs 1 sc 0 0 50 50 re f";
+    let form = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 200 100] /Resources {SPOT_RESOURCES} /Length {} >>\nstream\n{form_content}\nendstream",
+        form_content.len() + 1
+    );
+    let mut e = Editor::new(
+        PdfFile::from_bytes(pdf_extra(&[p], &[&form])).unwrap(),
+        PathBuf::from("prova.pdf"),
+    );
+    let spots = e.spots().unwrap();
+    // L'oro è definito nelle risorse ma il modulo non lo usa.
+    assert_eq!(spots[0].name, "Oro");
+    assert_eq!(spots[0].overprint, Overprint::Unused);
+    assert!(spots[0].pages.is_empty());
+    assert_eq!(spots[1].pages, [0]);
+    assert_eq!(e.set_spot_overprint(b"PANTONE 185 C", true).unwrap(), 1);
+    assert_eq!(e.spots().unwrap()[1].overprint, Overprint::All);
+    let img = render(&reread(&e), 0);
+    assert_eq!((img.1, img.2), (200, 100));
+}
+
+#[test]
+fn le_sfumature_a_pattern_contano_come_la_loro_tinta() {
+    // Una sfumatura di Illustrator: riempimento con un pattern di sfumatura sull'Argento.
+    let mut p = page(
+        [0.0, 0.0, 200.0, 100.0],
+        0,
+        "/Pattern cs /S0 scn 0 0 200 100 re f 0 0 1 rg 10 10 20 20 re f",
+    );
+    p.resources = "<< /Pattern << /S0 << /PatternType 2 /Shading << /ShadingType 2 \
+        /ColorSpace [/Separation /Argento /DeviceCMYK << /FunctionType 2 /Domain [0 1] \
+        /C0 [0 0 0 0] /C1 [0 0 0 0.4] /N 1 >>] /Coords [0 0 200 0] \
+        /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> >> >> >>";
+    let mut e = editor(&[p]);
+    let spots = e.spots().unwrap();
+    assert_eq!(spots.len(), 1);
+    assert_eq!(spots[0].name, "Argento");
+    assert_eq!(spots[0].pages, vec![0]);
+    assert_eq!(spots[0].overprint, Overprint::None);
+    assert_eq!(e.set_spot_overprint(b"Argento", true).unwrap(), 1);
+    assert_eq!(e.spots().unwrap()[0].overprint, Overprint::All);
 }
