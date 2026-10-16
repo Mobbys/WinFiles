@@ -375,6 +375,22 @@ impl PdfModule {
     }
 
     /// La taglierina: di ogni pagina resta il rettangolo disegnato sull'anteprima.
+    /// Il riquadro di partenza di "Rifila libero": la pagina corrente con 10 mm in meno per lato
+    /// (meno, se la pagina è piccola), così le maniglie si vedono e si prendono.
+    fn start_free_crop(&mut self) {
+        let Some(page) = self.infos.get(self.current).map(|p| p.size) else {
+            return;
+        };
+        let inset = 10.0_f64.min(page.w / 6.0).min(page.h / 6.0);
+        self.cutter.clear();
+        self.cutter.crop = Some(crate::cutter::Crop {
+            x0: inset as f32,
+            y0: inset as f32,
+            x1: (page.w - inset) as f32,
+            y1: (page.h - inset) as f32,
+        });
+    }
+
     fn cut(&mut self, scope: Scope) {
         let Some(c) = self.cutter.crop.map(crate::cutter::Crop::normalized) else {
             return;
@@ -811,6 +827,20 @@ impl PdfModule {
                         .clicked()
                     {
                         self.trim();
+                    }
+                    let free = self.cutter.crop.is_some();
+                    if text_button(ui, "square-dashed", "Rifila libero", open)
+                        .on_hover_text(
+                            "Un riquadro sulla pagina da tirare per i lati o da scrivere a numeri, \
+                             poi Taglia (si può anche trascinare sulla pagina)",
+                        )
+                        .clicked()
+                    {
+                        if free {
+                            self.cutter.clear();
+                        } else {
+                            self.start_free_crop();
+                        }
                     }
                     if text_button(ui, "frame", "Margini", open)
                         .on_hover_text("Aggiungi margini attorno alle pagine, o toglili con valori negativi")
@@ -1473,8 +1503,14 @@ impl PdfModule {
         ui.painter().rect_filled(board, t.radius, t.pasteboard);
         let size = info.map_or(Size::new(210.0, 297.0), |p| p.size);
         let natural = vec2(size.w as f32, size.h as f32) * POINTS_PER_MM;
+        // Sotto la pagina, mentre c'è la taglierina, la barra con i numeri: la pagina le sta sopra.
+        let reserve = if self.cutter.crop.is_some() {
+            CUT_BAR_SPACE
+        } else {
+            0.0
+        };
         let fit = ((board.width() - 48.0) / natural.x)
-            .min((board.height() - 48.0) / natural.y)
+            .min((board.height() - 48.0 - reserve) / natural.y)
             .max(0.01);
         // Ctrl+rotella ingrandisce, come nell'anteprima delle miniature.
         if let Some(z) = crate::app::wheel_zoom(ui, board) {
@@ -1503,9 +1539,10 @@ impl PdfModule {
                 egui::scroll_area::ScrollSource::MOUSE_WHEEL | egui::scroll_area::ScrollSource::SCROLL_BAR,
             )
             .show(&mut child, |ui| {
-                let area = vec2(shown.x + 48.0, shown.y + 48.0).max(board.size());
+                let area = vec2(shown.x + 48.0, shown.y + 48.0 + reserve).max(board.size());
                 let (space, _) = ui.allocate_exact_size(area, Sense::hover());
-                let paper = Rect::from_center_size(space.center(), shown);
+                let paper =
+                    Rect::from_center_size(space.with_max_y(space.bottom() - reserve).center(), shown);
                 let key = self.keys.get(self.current).copied();
                 let big = key.and_then(|k| self.renderer.get((k, side)));
                 let small = key.and_then(|k| self.renderer.get((k, THUMB_SIDE)));
@@ -1564,8 +1601,8 @@ impl PdfModule {
         let chosen = self.chosen().len();
         let total = self.infos.len();
         let area = Rect::from_center_size(
-            egui::pos2(board.center().x, board.bottom() - 66.0),
-            vec2(board.width().min(620.0) - 24.0, 108.0),
+            egui::pos2(board.center().x, board.bottom() - 12.0 - CUT_BAR_HEIGHT / 2.0),
+            vec2(board.width().min(620.0) - 24.0, CUT_BAR_HEIGHT),
         );
         ui.painter().rect(
             area,
@@ -1970,6 +2007,10 @@ fn file_stem(p: &Path) -> String {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "PDF".into())
 }
+
+/// L'altezza della barra della taglierina e lo spazio che le si lascia sotto la pagina.
+const CUT_BAR_HEIGHT: f32 = 108.0;
+const CUT_BAR_SPACE: f32 = CUT_BAR_HEIGHT + 12.0;
 
 /// Una misura in millimetri mostrata e scritta nell'unità scelta (mm o cm), con la virgola.
 fn length_field(value: &mut f64, max: f64, unit: Unit) -> egui::DragValue<'_> {
