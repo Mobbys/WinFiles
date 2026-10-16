@@ -1,6 +1,6 @@
 # 0019. Passaggio dalla WinFile 4.9 a WinFiles con l'aggiornamento della 4.9
 
-**Stato:** accettata, 2026-10-16
+**Stato:** accettata in parte, 2026-10-16 (il rilascio `5.0` non si fa: vedi in fondo)
 
 ## Contesto
 Michel vuole che chi ha installata la vecchia WinFile 4.9 veda un aggiornamento e, accettandolo,
@@ -36,3 +36,9 @@ La 4.9 non si può più cambiare: chi la usa ha questo codice.
 - Chi usa la 4.9 portatile (senza installer) riceve lo stesso MSI: si trova WinFiles installata
   e la sua cartella della 4.9 resta dov'è.
 - Le versioni dopo la `5.0` su `Mobbys/WinFile` non servono: chi ha WinFiles non guarda più lì.
+
+## Aggiornamento, 2026-10-16
+Michel ha scelto di non fare il rilascio `5.0`: disinstalla lui la 4.9 e installa WinFiles sui
+PC dei colleghi. Restano la barra "Togli WinFile 4.9" (se una 4.9 sfugge, la si toglie da
+WinFiles) e l'icona sul Desktop.
+
