@@ -16,6 +16,7 @@ use winfiles_image_edit::{Axis, CropPx, Editor, Format, Op, SaveOptions};
 use crate::app::card;
 use crate::cutter::{Crop, Cutter};
 use crate::icons;
+use crate::quotes::Quotes;
 use crate::theme::{Tokens, semibold};
 use dialogs::{Action, Dialog};
 
@@ -60,6 +61,11 @@ pub struct ImagesModule {
     current: usize,
     /// La taglierina sull'anteprima, in pixel dell'immagine.
     cutter: Cutter,
+    /// Le quote sono accese: trascinare sull'immagine traccia quote invece del ritaglio, e a
+    /// destra c'è il loro pannello al posto dei dati.
+    quoting: bool,
+    /// Le quote dell'immagine corrente, in pixel.
+    quotes: Quotes,
     fields: Fields,
     dialog: Option<Dialog>,
     asking: Option<Then>,
@@ -95,6 +101,8 @@ impl ImagesModule {
             docs: Vec::new(),
             current: 0,
             cutter: Cutter::default(),
+            quoting: false,
+            quotes: Quotes::default(),
             fields: Fields::default(),
             dialog: None,
             asking: None,
@@ -257,6 +265,7 @@ impl ImagesModule {
         self.docs.remove(i);
         self.current = self.current.min(self.docs.len().saturating_sub(1));
         self.cutter.crop = None;
+        self.quotes.forget();
         self.fields.owner = None;
         self.renderer.keep(&self.live());
     }
@@ -432,6 +441,15 @@ impl ImagesModule {
         }
         if pressed(Modifiers::COMMAND, Key::R) {
             self.apply(Op::Rotate(1));
+        }
+        // Con le quote accese Canc toglie la quota scelta ed Esc la lascia, poi spegne le quote.
+        if self.quoting {
+            if ctx.input(|i| i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace)) {
+                self.quotes.remove_selected();
+            }
+            if ctx.input(|i| i.key_pressed(Key::Escape)) && self.quotes.selected.take().is_none() {
+                self.quoting = false;
+            }
         }
         if ctx.input(|i| i.key_pressed(Key::Enter)) && self.cutter.crop.is_some() {
             self.crop_now();
@@ -611,6 +629,19 @@ impl ImagesModule {
                         .clicked()
                     {
                         self.open_resize();
+                    }
+                    separator(ui);
+                    if text_toggle(ui, "ruler", "Quote", open, self.quoting)
+                        .on_hover_text(
+                            "Misure in proporzione su un rettangolo o una linea: scrivi una misura e \
+                             le altre si adeguano (l'immagine non cambia)",
+                        )
+                        .clicked()
+                    {
+                        self.quoting = !self.quoting;
+                        if self.quoting {
+                            self.cutter.crop = None;
+                        }
                     }
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         let (fill, ink) = if open {
@@ -940,6 +971,10 @@ impl ImagesModule {
         if self.docs.get(self.current).is_none() {
             return;
         }
+        if self.quoting {
+            self.quotes_panel(ui, rect);
+            return;
+        }
         let body = rect.shrink2(vec2(14.0, 12.0));
         let mut child = ui.new_child(
             egui::UiBuilder::new()
@@ -951,6 +986,43 @@ impl ImagesModule {
             .id_salt("dati-immagine")
             .auto_shrink([false, false])
             .show(&mut child, |ui| self.data_contents(ui));
+    }
+
+    /// Al posto dei dati, mentre le quote sono accese: il loro pannello.
+    fn quotes_panel(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let t = Tokens::get(ui.ctx());
+        let mut ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect.shrink2(vec2(14.0, 12.0)))
+                .layout(egui::Layout::top_down(Align::Min)),
+        );
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Quote")
+                    .font(semibold(14.0))
+                    .color(t.text_strong),
+            );
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if icons::button(
+                    ui,
+                    "x",
+                    "Spegni le quote e torna ai dati (Esc)",
+                    false,
+                    true,
+                    24.0,
+                )
+                .clicked()
+                {
+                    self.quoting = false;
+                }
+            });
+        });
+        ui.add_space(6.0);
+        let unit = self.unit;
+        egui::ScrollArea::vertical()
+            .id_salt("quote-immagine")
+            .auto_shrink([false, false])
+            .show(&mut ui, |ui| self.quotes.panel(ui, unit));
     }
 
     fn data_contents(&mut self, ui: &mut egui::Ui) {
@@ -1158,7 +1230,7 @@ impl ImagesModule {
         // lungo si accorcia con "…" invece di finire sotto il menu.
         let name = d.editor.file_name();
         let size = format_size(p.size_mm(), unit);
-        let hint = self.cutter.crop.is_none();
+        let hint = self.cutter.crop.is_none() && !self.quoting;
         bar.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             egui::ComboBox::from_id_salt("img-zoom")
                 .icon(crate::fluent::combo_icon)
@@ -1252,15 +1324,34 @@ impl ImagesModule {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(80));
         }
-        self.cutter
-            .interact(ui, ui.id().with("ritaglio"), paper, iw as f32, ih as f32);
-        self.cutter.paint(ui, paper, iw as f32);
-        self.paint_lens(ui, board, paper, iw, ih);
+        let lens = if self.quoting {
+            // Le quote in pixel: un pixel vale 25,4 / DPI millimetri.
+            let owner = (self.current as u64).wrapping_shl(40) ^ generation;
+            self.quotes.prepare(owner, 25.4 / p.dpi());
+            self.quotes
+                .interact(ui, ui.id().with("quote"), paper, iw as f32, ih as f32);
+            self.quotes.paint(ui, paper, iw as f32, unit);
+            self.quotes.lens
+        } else {
+            self.cutter
+                .interact(ui, ui.id().with("ritaglio"), paper, iw as f32, ih as f32);
+            self.cutter.paint(ui, paper, iw as f32);
+            self.cutter.lens
+        };
+        self.paint_lens(ui, board, paper, iw, ih, lens);
     }
 
     /// La lente: mentre si tira un lato mostra i pixel veri attorno al cursore, come la 4.9.
-    fn paint_lens(&mut self, ui: &mut egui::Ui, board: Rect, paper: Rect, iw: u32, ih: u32) {
-        let Some(at) = self.cutter.lens else { return };
+    fn paint_lens(
+        &mut self,
+        ui: &mut egui::Ui,
+        board: Rect,
+        paper: Rect,
+        iw: u32,
+        ih: u32,
+        at: Option<egui::Pos2>,
+    ) {
+        let Some(at) = at else { return };
         let Some(d) = self.docs.get(self.current) else {
             return;
         };
@@ -1335,6 +1426,25 @@ fn separator(ui: &mut egui::Ui) {
     let (r, _) = ui.allocate_exact_size(vec2(13.0, 24.0), Sense::hover());
     ui.painter()
         .vline(r.center().x, r.y_range(), Stroke::new(1.0, t.divider));
+}
+
+/// Come [`text_button`], ma resta evidenziato finché `on`: per gli strumenti che si accendono.
+fn text_toggle(ui: &mut egui::Ui, icon: &str, text: &str, enabled: bool, on: bool) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let tint = match (enabled, on) {
+        (false, _) => t.text_disabled,
+        (true, true) => t.accent_text,
+        (true, false) => t.text_strong,
+    };
+    let mut button = egui::Button::image_and_text(
+        icons::image(icon, 17.0, tint),
+        egui::RichText::new(text).color(tint),
+    )
+    .min_size(vec2(0.0, 32.0));
+    if on && enabled {
+        button = button.fill(t.selection).stroke(Stroke::new(1.0, t.accent));
+    }
+    ui.add_enabled(enabled, button)
 }
 
 fn text_button(ui: &mut egui::Ui, icon: &str, text: &str, enabled: bool) -> egui::Response {

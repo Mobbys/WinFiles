@@ -16,6 +16,7 @@ use winfiles_pdf_edit::{Editor, Overprint, PageInfo, PdfFile, Spot};
 use crate::app::{POINTS_PER_MM, card};
 use crate::cutter::Cutter;
 use crate::icons;
+use crate::quotes::Quotes;
 use crate::theme::{Tokens, semibold};
 use dialogs::{Action, Dialog, Position, Scope};
 use render::{Image, Renderer};
@@ -75,6 +76,11 @@ pub struct PdfModule {
     cutter: Cutter,
     /// Il pannello delle tinte piatte a destra è aperto.
     spots_open: bool,
+    /// Le quote sono accese: trascinare sulla pagina traccia quote invece della taglierina, e a
+    /// destra c'è il loro pannello.
+    quoting: bool,
+    /// Le quote della pagina corrente, in millimetri della pagina come si vede.
+    quotes: Quotes,
     /// Le tinte piatte del documento e di quale versione sono.
     spots: Option<(u64, Result<Vec<Spot>, String>)>,
     /// La tinta che si sta rinominando, con il nome in scrittura.
@@ -110,6 +116,8 @@ impl PdfModule {
             reveal: false,
             cutter: Cutter::default(),
             spots_open: true,
+            quoting: false,
+            quotes: Quotes::default(),
             spots: None,
             renaming: None,
             illustrator: None,
@@ -392,6 +400,7 @@ impl PdfModule {
             return;
         };
         let inset = 10.0_f64.min(page.w / 6.0).min(page.h / 6.0);
+        self.quoting = false;
         self.cutter.clear();
         self.cutter.crop = Some(crate::cutter::Crop {
             x0: inset as f32,
@@ -658,6 +667,20 @@ impl PdfModule {
         if ctx.egui_wants_keyboard_input() || self.infos.is_empty() {
             return;
         }
+        // Con le quote accese Canc toglie la quota scelta (mai le pagine) ed Esc la lascia, poi
+        // spegne le quote.
+        if self.quoting {
+            if ctx.input(|i| i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace)) {
+                self.quotes.remove_selected();
+                return;
+            }
+            if ctx.input(|i| i.key_pressed(Key::Escape)) {
+                if self.quotes.selected.take().is_none() {
+                    self.quoting = false;
+                }
+                return;
+            }
+        }
         // Con la taglierina aperta Invio taglia e Esc la chiude, come nelle immagini.
         if self.cutter.crop.is_some() {
             if ctx.input(|i| i.key_pressed(Key::Enter)) {
@@ -897,6 +920,21 @@ impl PdfModule {
                     .clicked()
                     {
                         self.spots_open = !self.spots_open;
+                        if self.spots_open {
+                            self.quoting = false;
+                        }
+                    }
+                    if text_toggle(ui, "ruler", "Quote", open, self.quoting)
+                        .on_hover_text(
+                            "Misure in proporzione su un rettangolo o una linea: scrivi una misura e \
+                             le altre si adeguano (il PDF non cambia)",
+                        )
+                        .clicked()
+                    {
+                        self.quoting = !self.quoting;
+                        if self.quoting {
+                            self.cutter.clear();
+                        }
                     }
                     separator(ui);
                     if icons::button(ui, "file-output", "Estrai le pagine scelte", false, open, 32.0)
@@ -1165,15 +1203,21 @@ impl PdfModule {
         }
         let list_w = (full.width() * 0.3).clamp(170.0, 460.0);
         let list = Rect::from_min_size(full.min, vec2(list_w, full.height()));
-        let side_w = if self.spots_open { SPOTS_W } else { 0.0 };
+        let side_w = if self.spots_open || self.quoting {
+            SPOTS_W
+        } else {
+            0.0
+        };
         let view = Rect::from_min_max(
             egui::pos2(list.right() + 10.0, full.top()),
             egui::pos2(full.right() - side_w, full.bottom()),
         );
         self.page_list(ui, list, unit);
         self.preview(ui, view, unit);
-        if self.spots_open {
-            let side = Rect::from_min_max(egui::pos2(view.right() + 10.0, full.top()), full.max);
+        let side = Rect::from_min_max(egui::pos2(view.right() + 10.0, full.top()), full.max);
+        if self.quoting {
+            self.quotes_panel(ui, side, unit);
+        } else if self.spots_open {
             self.spots_panel(ui, side);
         }
     }
@@ -1678,9 +1722,17 @@ impl PdfModule {
                         .request_repaint_after(std::time::Duration::from_millis(100));
                 }
                 let (w, h) = (size.w as f32, size.h as f32);
-                self.cutter.interact(ui, ui.id().with("taglierina"), paper, w, h);
-                self.cutter.paint(ui, paper, w);
-                if let (Some(at), Some(Image::Ready(tex))) = (self.cutter.lens, big.or(small)) {
+                let at = if self.quoting {
+                    self.quotes.prepare(key.unwrap_or(0), 1.0);
+                    self.quotes.interact(ui, ui.id().with("quote"), paper, w, h);
+                    self.quotes.paint(ui, paper, w, unit);
+                    self.quotes.lens
+                } else {
+                    self.cutter.interact(ui, ui.id().with("taglierina"), paper, w, h);
+                    self.cutter.paint(ui, paper, w);
+                    self.cutter.lens
+                };
+                if let (Some(at), Some(Image::Ready(tex))) = (at, big.or(small)) {
                     lens = Some((at, paper, tex.id()));
                 }
             });
@@ -1811,10 +1863,39 @@ impl PdfModule {
     }
 }
 
-/// Larghezza del pannello delle tinte piatte, con lo spazio prima.
+/// Larghezza del pannello delle tinte piatte (e delle quote), con lo spazio prima.
 const SPOTS_W: f32 = 290.0;
 
 impl PdfModule {
+    /// Il pannello a destra con le quote della pagina.
+    fn quotes_panel(&mut self, ui: &mut egui::Ui, rect: Rect, unit: Unit) {
+        let t = Tokens::get(ui.ctx());
+        card(ui, rect);
+        let inner = rect.shrink2(vec2(14.0, 10.0));
+        let mut ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(inner)
+                .layout(egui::Layout::top_down(Align::Min)),
+        );
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Quote")
+                    .font(semibold(14.0))
+                    .color(t.text_strong),
+            );
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if icons::button(ui, "x", "Spegni le quote (Esc)", false, true, 24.0).clicked() {
+                    self.quoting = false;
+                }
+            });
+        });
+        ui.add_space(6.0);
+        egui::ScrollArea::vertical()
+            .id_salt("pdf-quote")
+            .auto_shrink([false, false])
+            .show(&mut ui, |ui| self.quotes.panel(ui, unit));
+    }
+
     /// Il pannello a destra con le tinte piatte: colore, nome (si rinomina), pagine e sovrastampa.
     fn spots_panel(&mut self, ui: &mut egui::Ui, rect: Rect) {
         let t = Tokens::get(ui.ctx());
@@ -2065,6 +2146,25 @@ fn separator(ui: &mut egui::Ui) {
     let (r, _) = ui.allocate_exact_size(vec2(13.0, 24.0), Sense::hover());
     ui.painter()
         .vline(r.center().x, r.y_range(), Stroke::new(1.0, t.divider));
+}
+
+/// Come [`text_button`], ma resta evidenziato finché `on`: per gli strumenti che si accendono.
+fn text_toggle(ui: &mut egui::Ui, icon: &str, text: &str, enabled: bool, on: bool) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let tint = match (enabled, on) {
+        (false, _) => t.text_disabled,
+        (true, true) => t.accent_text,
+        (true, false) => t.text_strong,
+    };
+    let mut button = egui::Button::image_and_text(
+        icons::image(icon, 17.0, tint),
+        egui::RichText::new(text).color(tint),
+    )
+    .min_size(vec2(0.0, 32.0));
+    if on && enabled {
+        button = button.fill(t.selection).stroke(Stroke::new(1.0, t.accent));
+    }
+    ui.add_enabled(enabled, button)
 }
 
 fn text_button(ui: &mut egui::Ui, icon: &str, text: &str, enabled: bool) -> egui::Response {

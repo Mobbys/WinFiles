@@ -25,3 +25,4 @@ Una decisione si cambia con un nuovo ADR che sostituisce il precedente, mai risc
 | [0018](0018-tinte-piatte.md) | Tinte piatte: elenco, nome e sovrastampa dentro il contenuto delle pagine | Accettata |
 | [0019](0019-passaggio-dalla-4-9.md) | Passaggio dalla WinFile 4.9 a WinFiles con l'aggiornamento della 4.9 | Accettata |
 | [0020](0020-copia-di-illustrator.md) | La copia di Illustrator nei PDF: si chiede al salvataggio se toglierla | Accettata |
+| [0021](0021-quote.md) | Quote in proporzione sull'anteprima di Modifica PDF e Modifica immagini | Accettata |

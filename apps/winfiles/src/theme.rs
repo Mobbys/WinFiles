@@ -83,6 +83,13 @@ pub struct Tokens {
     pub button_border: Color32,
     pub warning: Color32,
     pub error: Color32,
+    /// Le quote sopra l'anteprima (linee, rettangoli, etichette): uguali nei due temi, perché
+    /// stanno sopra la pagina o la foto, non sul pannello.
+    pub quote: Color32,
+    /// La quota master, a cui le altre si adeguano.
+    pub quote_master: Color32,
+    /// Il testo sulle etichette delle quote.
+    pub on_quote: Color32,
     /// Raggio degli angoli dei comandi.
     pub radius: u8,
     /// Raggio degli angoli delle schede.
@@ -125,6 +132,9 @@ pub const DARK: Tokens = Tokens {
     button_border: hex(0x45454d),
     warning: hex(0xffb547),
     error: hex(0xff7a7a),
+    quote: hex(0x0f766e),
+    quote_master: hex(0xc2410c),
+    on_quote: hex(0xffffff),
     radius: 4,
     card_radius: 8,
 };
@@ -161,6 +171,9 @@ pub const LIGHT: Tokens = Tokens {
     button_border: hex(0xd5d8de),
     warning: hex(0x955700),
     error: hex(0xc62828),
+    quote: hex(0x0f766e),
+    quote_master: hex(0xc2410c),
+    on_quote: hex(0xffffff),
     radius: 4,
     card_radius: 8,
 };
@@ -394,6 +407,9 @@ mod tests {
                 "accent_text (scuro: {})",
                 t.dark
             );
+            for bg in [t.quote, t.quote_master] {
+                assert!(contrast(t.on_quote, bg) >= 4.5, "on_quote su {bg:?}");
+            }
             // Il bordo inferiore dice dov'è il campo (WCAG 1.4.11: 3:1 per i componenti).
             for bg in [t.panel, t.field, t.field_hover] {
                 assert!(

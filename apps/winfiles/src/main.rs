@@ -25,6 +25,7 @@ mod pdf;
 mod prefs;
 mod presets;
 mod printing;
+mod quotes;
 mod recent;
 mod reorder;
 mod scan;
