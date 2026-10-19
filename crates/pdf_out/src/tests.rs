@@ -60,6 +60,7 @@ fn scene(pdf: &Path, png: &Path) -> Page {
             page: 0,
         },
         crop: Rect::new(0.0, 0.0, 1.0, 1.0),
+        dpi: None,
     }));
     page.push(Item::Picture(Picture {
         rect: Rect::new(80.0, 40.0, 60.0, 40.0),
@@ -69,6 +70,7 @@ fn scene(pdf: &Path, png: &Path) -> Page {
             page: 0,
         },
         crop: Rect::new(0.0, 0.0, 1.0, 1.0),
+        dpi: None,
     }));
     page
 }
@@ -143,6 +145,7 @@ fn le_miniature_pesano_poco_anche_se_il_file_e_grande() {
             page: 0,
         },
         crop: Rect::new(0.0, 0.0, 1.0, 1.0),
+        dpi: None,
     }));
     let (bytes, report) = write(&[page], &FONTS, &AtomicBool::new(false), |_| {}).unwrap();
     assert!(report.warnings.is_empty());
@@ -162,6 +165,7 @@ fn un_file_mancante_lascia_un_riquadro_e_un_avviso() {
             page: 0,
         },
         crop: Rect::new(0.0, 0.0, 1.0, 1.0),
+        dpi: None,
     }));
     // Anche un PDF che non c'è o una pagina oltre l'ultima non devono far fallire tutto.
     page.push(Item::Picture(Picture {
@@ -172,6 +176,7 @@ fn un_file_mancante_lascia_un_riquadro_e_un_avviso() {
             page: 7,
         },
         crop: Rect::new(0.0, 0.0, 1.0, 1.0),
+        dpi: None,
     }));
     let (bytes, report) = write(&[page], &FONTS, &AtomicBool::new(false), |_| {}).unwrap();
     assert!(!bytes.is_empty());

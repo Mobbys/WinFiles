@@ -28,7 +28,14 @@ ha chiesto di averla sia nei PDF sia nelle immagini, senza salvare niente nel fi
   cambiando pagina, o modificando il file, si ricomincia.
 - Con le quote accese, trascinare sull'anteprima traccia quote e non la taglierina; Canc toglie
   la quota scelta e mai le pagine; la lente è quella della taglierina.
-- Prospettiva, ritaglio ed esportazione dell'immagine con le quote della 4.9 restano fuori.
+- Prospettiva e ritaglio con le quote della 4.9 restano fuori.
+- Stampa e "Salva con le quote" (0.2.7): il documento com'è adesso va in un file temporaneo
+  (il PDF da `Editor::to_bytes`, l'immagine in PNG con i pixel che bastano a 300 DPI) e ogni
+  pagina diventa una scena (`quotes::page`): il file su tutto il foglio, alla misura vera, con
+  `Picture::dpi` = 300 invece dei 150 delle miniature, e le quote disegnate sopra da
+  `Quotes::sketch` in millimetri della pagina. Stampa e PDF passano dallo stesso lavoro e dalla
+  stessa finestra Stampa delle miniature (ADR 0008, 0009, calibrazione compresa). Il PDF salvato
+  è un'immagine della pagina, non un vettoriale: serve da promemoria, il file vero non cambia.
 
 ## Conseguenze
 - Niente da salvare né da annullare: le quote non toccano il documento.

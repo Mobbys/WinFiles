@@ -10,7 +10,9 @@ use egui::{Align, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use winfiles_geom::{Unit, format_number};
 
 use crate::icons;
+use crate::sketch::{Sketch, grow};
 use crate::theme::{Tokens, semibold};
+use winfiles_scene::Weight;
 
 /// Quanto vicino bisogna essere a una maniglia o a una linea perché risponda, in punti.
 const GRIP: f32 = 9.0;
@@ -69,7 +71,7 @@ impl Shape {
 }
 
 /// Quale misura di una quota: la lunghezza di una linea, la base o l'altezza di un rettangolo.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Side {
     Length,
     Base,
@@ -135,6 +137,9 @@ pub struct Quotes {
     pub lens: Option<Pos2>,
     /// La misura da aprire per scriverla, dopo un doppio clic sull'anteprima.
     focus: Option<(usize, Side)>,
+    /// La misura che si sta scrivendo, con il testo com'è: finché il campo ha la tastiera il
+    /// testo resta quello battuto, non il numero riformattato.
+    typing: Option<(usize, Side, String)>,
 }
 
 impl Default for Quotes {
@@ -150,6 +155,7 @@ impl Default for Quotes {
             grab: None,
             lens: None,
             focus: None,
+            typing: None,
         }
     }
 }
@@ -171,6 +177,11 @@ impl Quotes {
         } else {
             1.0
         };
+    }
+
+    /// Di chi sono le quote (la pagina o l'immagine), se ci sono.
+    pub fn owner(&self) -> Option<u64> {
+        self.owner.filter(|_| !self.items.is_empty())
     }
 
     /// Dimentica le quote e di chi erano: la prossima `prepare` ricomincia comunque.
@@ -277,6 +288,7 @@ impl Quotes {
         self.grab = None;
         self.lens = None;
         self.focus = None;
+        self.typing = None;
     }
 
     /// Toglie la quota scelta; dice se ce n'era una.
@@ -659,11 +671,115 @@ impl Quotes {
         }
     }
 
+    // --- Sulla carta --------------------------------------------------------------------------
+
+    /// Le quote sulla scena di una pagina (per la stampa o il PDF), in millimetri della pagina:
+    /// come sull'anteprima, con spessori e caratteri proporzionati al foglio.
+    pub fn sketch(&self, sk: &mut Sketch<'_>, ctx: &egui::Context, unit: Unit) {
+        let t = Tokens::get(ctx);
+        let size = sk.page.size;
+        // Su un A4 un millimetro; i fogli grandi hanno quote più grosse, che si leggano da lontano.
+        let u = (size.w.max(size.h) / 297.0).max(0.5);
+        let mm = |p: Pos2| {
+            (
+                f64::from(p.x) * self.mm_per_unit,
+                f64::from(p.y) * self.mm_per_unit,
+            )
+        };
+        let halo = egui::Color32::from_white_alpha(190);
+        let line = 0.35 * u;
+        for (i, shape) in self.items.iter().enumerate() {
+            let master = self.master_side(i);
+            let color_of = |side: Side| {
+                if master == Some(side) {
+                    t.quote_master
+                } else {
+                    t.quote
+                }
+            };
+            match shape.normalized() {
+                Shape::Line { a, b } => {
+                    let (a, b) = (mm(a), mm(b));
+                    let color = color_of(Side::Length);
+                    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                    let len = dx.hypot(dy).max(1e-9);
+                    let normal = (-dy / len, dx / len);
+                    let tick = 2.0 * u;
+                    for (c, w) in [(halo, line * 2.5), (color, line)] {
+                        sk.line(a, b, c, w);
+                        for e in [a, b] {
+                            sk.line(
+                                (e.0 - normal.0 * tick, e.1 - normal.1 * tick),
+                                (e.0 + normal.0 * tick, e.1 + normal.1 * tick),
+                                c,
+                                w,
+                            );
+                        }
+                    }
+                    let up = if normal.1 > 0.0 {
+                        (-normal.0, -normal.1)
+                    } else {
+                        normal
+                    };
+                    let at = (
+                        (a.0 + b.0) / 2.0 + up.0 * 4.5 * u,
+                        (a.1 + b.1) / 2.0 + up.1 * 4.5 * u,
+                    );
+                    paper_pill(
+                        sk,
+                        at,
+                        &length_text(self.shown(i, Side::Length), unit),
+                        color,
+                        t.on_quote,
+                        u,
+                    );
+                }
+                Shape::Rect { a, b } => {
+                    let (a, b) = (mm(a), mm(b));
+                    let r = winfiles_geom::Rect::new(a.0, a.1, b.0 - a.0, b.1 - a.1);
+                    let color = if master.is_some() { t.quote_master } else { t.quote };
+                    sk.rect(r, 0.0, None, Some((halo, line * 2.5)));
+                    sk.rect(r, 0.0, None, Some((color, line)));
+                    let base = length_text(self.shown(i, Side::Base), unit);
+                    let top = if a.1 > 6.0 * u {
+                        a.1 - 4.0 * u
+                    } else {
+                        a.1 + 4.0 * u
+                    };
+                    paper_pill(
+                        sk,
+                        ((a.0 + b.0) / 2.0, top),
+                        &base,
+                        color_of(Side::Base),
+                        t.on_quote,
+                        u,
+                    );
+                    let height = length_text(self.shown(i, Side::Height), unit);
+                    let half = sk_text_width(sk, &height, 3.2 * u) / 2.0 + 2.5 * u;
+                    let x = if b.0 + 2.0 * half < size.w {
+                        b.0 + half
+                    } else {
+                        b.0 - half
+                    };
+                    paper_pill(
+                        sk,
+                        (x, (a.1 + b.1) / 2.0),
+                        &height,
+                        color_of(Side::Height),
+                        t.on_quote,
+                        u,
+                    );
+                }
+            }
+        }
+    }
+
     // --- Il pannello -------------------------------------------------------------------------
 
     /// Il pannello delle quote: cosa tracciare, la scala, ogni quota con le sue misure da
     /// scrivere, e i pulsanti per copiarle o toglierle.
-    pub fn panel(&mut self, ui: &mut egui::Ui, unit: Unit) {
+    pub fn panel(&mut self, ui: &mut egui::Ui, unit: Unit) -> Option<PanelAction> {
+        let mut action = None;
         let t = Tokens::get(ui.ctx());
         ui.label(egui::RichText::new("Trascina sull'anteprima per tracciare").color(t.text_dim));
         ui.add_space(4.0);
@@ -793,27 +909,48 @@ impl Quotes {
                                     ui.label(egui::RichText::new("master").size(11.5).color(t.warning));
                                 }
                             });
-                            let mut v = self.shown(i, *side).unwrap_or(0.0);
-                            let resp = crate::fluent::number(ui, 104.0, value_field(&mut v, unit));
+                            // Un campo di testo: si clicca e si scrive (Invio o un clic fuori
+                            // per finire); le altre quote si adeguano già mentre si scrive.
+                            let id = ui.id().with(("quota", i, *side));
+                            let mut text = match &self.typing {
+                                Some((a, b, typed)) if *a == i && b == side => typed.clone(),
+                                _ => length_text(self.shown(i, *side), unit),
+                            };
+                            let resp = crate::fluent::text_field(
+                                ui,
+                                egui::TextEdit::singleline(&mut text)
+                                    .id(id)
+                                    .desired_width(104.0)
+                                    .margin(crate::fluent::MARGIN),
+                            );
                             // Il doppio clic sull'anteprima apre la misura da scrivere: si insiste
                             // finché il campo non ha davvero la tastiera (il clic appena finito
                             // gliela toglierebbe).
                             if self.focus == Some((i, *side)) {
-                                if ui.memory(|m| m.has_focus(resp.id)) {
+                                if ui.memory(|m| m.has_focus(id)) {
                                     self.focus = None;
                                 } else {
                                     resp.request_focus();
-                                    // Il numero di adesso già scelto: si scrive sopra.
-                                    select_all(ui, resp.id, &length_text(Some(v), unit));
+                                    select_all(ui, id, &text);
                                 }
                             }
-                            // Solo un numero diverso fa la master: entrare e uscire dal campo no.
-                            let before = self.shown(i, *side).unwrap_or(0.0);
-                            if resp.changed() && (v - before).abs() > before.abs() * 1e-9 + 1e-9 {
-                                self.set_value(i, *side, v);
+                            if resp.gained_focus() {
+                                // Il numero di adesso già scelto: si scrive sopra.
+                                select_all(ui, id, &text);
                             }
-                            if resp.gained_focus() || resp.clicked() {
-                                select = Some(i);
+                            if resp.changed() {
+                                let typed = text.trim().trim_end_matches(unit.symbol());
+                                if let Some(v) = parse_number(typed).map(|v| v * unit.mm()) {
+                                    // Solo un numero diverso fa la master.
+                                    let before = self.shown(i, *side).unwrap_or(0.0);
+                                    if (v - before).abs() > before.abs() * 1e-9 + 1e-9 {
+                                        self.set_value(i, *side, v);
+                                    }
+                                }
+                                self.typing = Some((i, *side, text));
+                            }
+                            if resp.lost_focus() {
+                                self.typing = None;
                             }
                         });
                     }
@@ -827,7 +964,12 @@ impl Quotes {
                     );
                 }
             });
-            if row.response.interact(Sense::click()).clicked() {
+            // Un clic sulla scheda la sceglie, senza rubarlo ai campi e ai pulsanti che ci sono
+            // dentro (un `interact` sopra di loro si prenderebbe i loro clic).
+            let rect = row.response.rect;
+            if ui.input(|inp| {
+                inp.pointer.primary_clicked() && inp.pointer.interact_pos().is_some_and(|p| rect.contains(p))
+            }) {
                 select = Some(i);
             }
             ui.add_space(6.0);
@@ -857,8 +999,88 @@ impl Quotes {
                     self.clear();
                 }
             });
+            ui.add_space(6.0);
+            // Uno sotto l'altro, larghi quanto il pannello: affiancati non ci stanno.
+            let wide = vec2(ui.available_width(), 30.0);
+            if ui
+                .add(
+                    egui::Button::image_and_text(icons::image("printer", 16.0, t.text_strong), "Stampa")
+                        .min_size(wide),
+                )
+                .on_hover_text("Stampa con le quote disegnate sopra, alla misura vera (Ctrl+P)")
+                .clicked()
+            {
+                action = Some(PanelAction::Print);
+            }
+            if ui
+                .add(
+                    egui::Button::image_and_text(
+                        icons::image("file-down", 16.0, t.text_strong),
+                        "Salva con le quote",
+                    )
+                    .min_size(wide),
+                )
+                .on_hover_text("Un PDF con le quote disegnate sopra, alla misura vera")
+                .clicked()
+            {
+                action = Some(PanelAction::Save);
+            }
         }
+        action
     }
+}
+
+/// Cosa si è chiesto dal pannello delle quote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelAction {
+    Print,
+    Save,
+}
+
+/// Le pagine pronte da stampare o da salvare, che i moduli di modifica passano all'app: la
+/// stampa e il PDF passano dalla stessa finestra e dallo stesso lavoro delle miniature.
+pub enum Output {
+    /// Da stampare: le pagine, il nome del lavoro e quella in anteprima (da 0).
+    Print {
+        pages: Vec<winfiles_scene::Page>,
+        title: String,
+        current: usize,
+    },
+    /// Da scrivere in un PDF.
+    Save {
+        pages: Vec<winfiles_scene::Page>,
+        path: std::path::PathBuf,
+    },
+}
+
+/// Il file temporaneo da cui la stampa legge la pagina o l'immagine com'è adesso (anche con
+/// modifiche non salvate). Uno solo per WinFiles aperto: un lavoro alla volta.
+pub fn temp_source(ext: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("winfiles-stampa-{}.{ext}", std::process::id()))
+}
+
+/// Le pagine stampate da Modifica PDF e Modifica immagini vanno nel PDF a questa risoluzione.
+pub const PRINT_DPI: f64 = 300.0;
+
+/// Una pagina da stampare o salvare: `source` disegnata su tutto il foglio di `size` mm, con
+/// sopra le quote, se ci sono.
+pub fn page(
+    ctx: &egui::Context,
+    size: winfiles_geom::Size,
+    source: winfiles_scene::Source,
+    quotes: Option<(&Quotes, Unit)>,
+) -> winfiles_scene::Page {
+    let mut sk = Sketch::new(ctx, size);
+    sk.picture(winfiles_scene::Picture {
+        rect: winfiles_geom::Rect::new(0.0, 0.0, size.w, size.h),
+        source,
+        crop: winfiles_geom::Rect::new(0.0, 0.0, 1.0, 1.0),
+        dpi: Some(PRINT_DPI),
+    });
+    if let Some((q, unit)) = quotes {
+        q.sketch(&mut sk, ctx, unit);
+    }
+    sk.page
 }
 
 /// Il punto `to` portato sulla linea orizzontale o verticale che passa da `from`, la più vicina.
@@ -907,17 +1129,6 @@ fn ratio_text(base: Option<f64>, height: Option<f64>) -> String {
     }
 }
 
-/// Il campo di una misura in millimetri, mostrata e scritta nell'unità scelta.
-fn value_field(value: &mut f64, unit: Unit) -> egui::DragValue<'_> {
-    let (factor, suffix, decimals) = (unit.mm(), unit.symbol(), unit.decimals());
-    let speed = (*value * 0.002).max(0.01);
-    egui::DragValue::new(value)
-        .range(0.0..=MAX_VALUE)
-        .speed(speed)
-        .custom_formatter(move |v, _| format!("{} {suffix}", format_number(v / factor, decimals, true)))
-        .custom_parser(move |text| parse_number(text.trim().trim_end_matches(suffix)).map(|v| v * factor))
-}
-
 /// Un numero scritto all'italiana (`1.500,5`), ma anche col punto decimale (`1500.5`).
 fn parse_number(text: &str) -> Option<f64> {
     let text = text.trim();
@@ -933,6 +1144,46 @@ fn parse_number(text: &str) -> Option<f64> {
         text.to_string()
     };
     clean.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+fn sk_text_width(sk: &Sketch<'_>, text: &str, size: f64) -> f64 {
+    Sketch::size_mm(&sk.layout_line(text, size, Weight::SemiBold)).0
+}
+
+/// L'etichetta di una misura sulla carta, centrata in `at` (mm): come [`pill`], in scala `u`.
+fn paper_pill(
+    sk: &mut Sketch<'_>,
+    at: (f64, f64),
+    text: &str,
+    fill: egui::Color32,
+    ink: egui::Color32,
+    u: f64,
+) {
+    let size = 3.2 * u;
+    let galley = sk.layout_line(text, size, Weight::SemiBold);
+    let (w, h) = Sketch::size_mm(&galley);
+    let (pad_x, pad_y) = (1.6 * u, 0.6 * u);
+    let r = winfiles_geom::Rect::new(
+        at.0 - w / 2.0 - pad_x,
+        at.1 - h / 2.0 - pad_y,
+        w + 2.0 * pad_x,
+        h + 2.0 * pad_y,
+    );
+    sk.rect(
+        grow(r, 0.3 * u),
+        1.4 * u,
+        Some(egui::Color32::from_white_alpha(190)),
+        None,
+    );
+    sk.rect(r, 1.2 * u, Some(fill), None);
+    sk.text(
+        (at.0 - w / 2.0, at.1 - h / 2.0),
+        &galley,
+        size,
+        Weight::SemiBold,
+        ink,
+        None,
+    );
 }
 
 /// Tutto il testo del campo `id` scelto, così quello che si scrive lo sostituisce.
@@ -1202,5 +1453,36 @@ mod tests {
         assert_eq!(parse_number("1.500"), Some(1500.0));
         assert_eq!(parse_number("12.5"), Some(12.5));
         assert_eq!(parse_number("abc"), None);
+    }
+
+    #[test]
+    fn la_pagina_stampata_ha_il_file_a_300_dpi_e_le_quote_sopra() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let ctx = ui.ctx();
+            let size = winfiles_geom::Size::new(210.0, 297.0);
+            let source = winfiles_scene::Source {
+                path: "pagina.pdf".into(),
+                kind: winfiles_model::FileKind::Pdf,
+                page: 0,
+            };
+            let bare = page(ctx, size, source.clone(), None);
+            assert_eq!(bare.items.len(), 1);
+            let pic = bare.pictures().next().map(|p| (p.rect, p.dpi));
+            assert_eq!(
+                pic,
+                Some((winfiles_geom::Rect::new(0.0, 0.0, 210.0, 297.0), Some(PRINT_DPI)))
+            );
+            let q = with(vec![rect(80.0, 40.0)], 1.0);
+            let quoted = page(ctx, size, source, Some((&q, Unit::Mm)));
+            // La foto sotto, poi il rettangolo e le due misure.
+            assert!(quoted.items.len() > 3);
+            assert!(matches!(
+                quoted.items.first(),
+                Some(winfiles_scene::Item::Picture(_))
+            ));
+        });
+        out.textures_delta.clear();
     }
 }

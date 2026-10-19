@@ -26,6 +26,8 @@ use winfiles_scene::{Color, Item, Page, Picture, Source, Text, Weight};
 pub const IMAGE_DPI: f64 = 150.0;
 /// Lato massimo in pixel di una miniatura nel PDF (un A3 intero a 150 DPI ne chiede 2480).
 const MAX_IMAGE_SIDE: u32 = 2600;
+/// Lato massimo in pixel di una pagina intera stampata con più DPI.
+const MAX_PAGE_SIDE: u32 = 6000;
 /// Qualità dei JPEG delle miniature.
 const JPEG_QUALITY: u8 = 85;
 
@@ -267,7 +269,8 @@ impl Writer {
         let Some(clip) = rounded(p.rect, 0.0) else {
             return;
         };
-        let prepared = self.prepare(&p.source, full_w.max(full_h));
+        let dpi = p.dpi.filter(|d| d.is_finite() && *d > 0.0).unwrap_or(IMAGE_DPI);
+        let prepared = self.prepare(&p.source, full_w.max(full_h), dpi);
         s.push_clip_path(&clip, &FillRule::NonZero);
         s.push_transform(&Transform::from_translate(pt(left), pt(top)));
         let size = KSize::from_wh(pt(full_w), pt(full_h));
@@ -285,11 +288,19 @@ impl Writer {
         s.pop();
     }
 
-    /// La miniatura come JPEG per un lato lungo di `side_mm` sul foglio, a [`IMAGE_DPI`].
-    fn prepare(&mut self, source: &Source, side_mm: f64) -> Option<Image> {
-        let px = ((side_mm / 25.4 * IMAGE_DPI).ceil() as u32).clamp(64, MAX_IMAGE_SIDE);
+    /// La miniatura come JPEG per un lato lungo di `side_mm` sul foglio, a `dpi` (di solito
+    /// [`IMAGE_DPI`]).
+    fn prepare(&mut self, source: &Source, side_mm: f64, dpi: f64) -> Option<Image> {
+        // Una pagina stampata da sola (DPI chiesti più alti) può essere più grande di una
+        // miniatura: un A3 a 300 DPI ha il lato lungo di 4961 pixel.
+        let max = if dpi > IMAGE_DPI {
+            MAX_PAGE_SIDE
+        } else {
+            MAX_IMAGE_SIDE
+        };
+        let px = ((side_mm / 25.4 * dpi).ceil() as u32).clamp(64, max);
         // Le misure vicine (le pagine dello stesso file) condividono la stessa immagine.
-        let px = px.div_ceil(64).saturating_mul(64).min(MAX_IMAGE_SIDE);
+        let px = px.div_ceil(64).saturating_mul(64).min(max);
         let key = (source.clone(), px);
         if let Some(cached) = self.rasters.get(&key) {
             return cached.clone();

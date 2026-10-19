@@ -63,7 +63,7 @@ pub struct PdfModule {
     /// Ingrandimento (1 = 100%); `None` adatta la pagina alla finestra.
     zoom: Option<f32>,
     shown_zoom: f32,
-    status: String,
+    pub status: String,
     dialog: Option<Dialog>,
     drag: Option<Drag>,
     renderer: Renderer,
@@ -91,6 +91,10 @@ pub struct PdfModule {
     /// Il salvataggio fermo sulla domanda della copia di Illustrator: con "Salva con nome" o no,
     /// e cosa fare dopo.
     illustrator_ask: Option<(bool, Option<Then>)>,
+    /// L'unità dell'ultima anteprima, per le quote stampate.
+    unit: Unit,
+    /// La stampa o il PDF con le quote chiesti, che l'app prende e manda avanti.
+    pub output: Option<crate::quotes::Output>,
 }
 
 impl PdfModule {
@@ -122,6 +126,8 @@ impl PdfModule {
             renaming: None,
             illustrator: None,
             illustrator_ask: None,
+            unit: Unit::Mm,
+            output: None,
         }
     }
 
@@ -657,6 +663,8 @@ impl PdfModule {
             self.save(false);
         } else if pressed(Modifiers::COMMAND, Key::O) {
             self.guard(ctx, Then::Open(None));
+        } else if pressed(Modifiers::COMMAND, Key::P) {
+            self.print(ctx);
         } else if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)
             || pressed(Modifiers::COMMAND, Key::Y)
         {
@@ -755,6 +763,10 @@ impl PdfModule {
         if item(ui, "Salva con nome…", "Ctrl+Maiusc+S", open) {
             ui.close();
             self.save(true);
+        }
+        if item(ui, "Stampa…", "Ctrl+P", open) {
+            ui.close();
+            self.print(&ctx);
         }
         ui.separator();
         if item(ui, "Aggiungi pagine da un PDF…", "", open) {
@@ -978,6 +990,17 @@ impl PdfModule {
                         if ui.add_enabled(enabled, save).on_hover_text(tip).clicked() {
                             self.save(false);
                         }
+                        let tip = if self.quoting {
+                            "Stampa il PDF com'è adesso, con le quote (Ctrl+P)"
+                        } else {
+                            "Stampa il PDF com'è adesso, anche con le modifiche non salvate (Ctrl+P)"
+                        };
+                        if text_button(ui, "printer", "Stampa", enabled)
+                            .on_hover_text(tip)
+                            .clicked()
+                        {
+                            self.print(&ctx);
+                        }
                     });
                 });
             });
@@ -1195,6 +1218,7 @@ impl PdfModule {
     // --- Corpo -----------------------------------------------------------------------------
 
     pub fn body(&mut self, ui: &mut egui::Ui, unit: Unit) {
+        self.unit = unit;
         self.renderer.receive(ui.ctx());
         let full = ui.max_rect();
         if self.editor.is_none() {
@@ -1890,10 +1914,104 @@ impl PdfModule {
             });
         });
         ui.add_space(6.0);
-        egui::ScrollArea::vertical()
+        let action = egui::ScrollArea::vertical()
             .id_salt("pdf-quote")
             .auto_shrink([false, false])
-            .show(&mut ui, |ui| self.quotes.panel(ui, unit));
+            .show(&mut ui, |ui| self.quotes.panel(ui, unit))
+            .inner;
+        let ctx = ui.ctx().clone();
+        match action {
+            Some(crate::quotes::PanelAction::Print) => self.print(&ctx),
+            Some(crate::quotes::PanelAction::Save) => self.save_quoted(&ctx),
+            None => {}
+        }
+    }
+
+    /// Il PDF com'è adesso (anche con le modifiche non salvate) in un file temporaneo, e le sue
+    /// pagine `pages` pronte per la stampa, con le quote sulla pagina che le ha.
+    fn output_pages(
+        &mut self,
+        ctx: &egui::Context,
+        pages: impl Iterator<Item = usize>,
+    ) -> Option<Vec<winfiles_scene::Page>> {
+        let bytes = match self.editor.as_ref().map(Editor::to_bytes) {
+            Some(Ok(b)) => b,
+            Some(Err(e)) => {
+                self.status = format!("Non riesco a preparare la stampa: {e}");
+                return None;
+            }
+            None => return None,
+        };
+        let path = crate::quotes::temp_source("pdf");
+        if let Err(e) = std::fs::write(&path, bytes) {
+            self.status = format!("Non riesco a preparare la stampa: {e}");
+            return None;
+        }
+        let owner = if self.quoting { self.quotes.owner() } else { None };
+        Some(
+            pages
+                .filter_map(|i| {
+                    let size = self.infos.get(i)?.size;
+                    let source = winfiles_scene::Source {
+                        path: path.clone(),
+                        kind: winfiles_model::FileKind::Pdf,
+                        page: i,
+                    };
+                    let quoted = owner.is_some() && self.keys.get(i).copied() == owner;
+                    let quotes = quoted.then_some((&self.quotes, self.unit));
+                    Some(crate::quotes::page(ctx, size, source, quotes))
+                })
+                .collect(),
+        )
+    }
+
+    /// Stampa il PDF com'è adesso; le quote, se accese, escono sulla loro pagina.
+    pub fn print(&mut self, ctx: &egui::Context) {
+        if self.editor.is_none() || self.output.is_some() {
+            return;
+        }
+        let Some(pages) = self.output_pages(ctx, 0..self.infos.len()) else {
+            return;
+        };
+        let title = self
+            .editor
+            .as_ref()
+            .map_or_else(|| "PDF".into(), |e| file_name(e.path()));
+        self.output = Some(crate::quotes::Output::Print {
+            pages,
+            title,
+            current: self.current,
+        });
+    }
+
+    /// Salva in un PDF a parte la pagina con le quote disegnate sopra, alla misura vera.
+    fn save_quoted(&mut self, ctx: &egui::Context) {
+        let Some(e) = self.editor.as_ref() else {
+            return;
+        };
+        let source = e.path();
+        let dir = source.parent().map(Path::to_path_buf).unwrap_or_default();
+        let name = if self.infos.len() > 1 {
+            format!("{}_pagina{}_quote.pdf", file_stem(source), self.current + 1)
+        } else {
+            format!("{}_quote.pdf", file_stem(source))
+        };
+        let Some(path) = pdf_dialog()
+            .set_title("Salva la pagina con le quote")
+            .set_directory(dir)
+            .set_file_name(name)
+            .save_file()
+        else {
+            return;
+        };
+        let path = with_pdf_extension(path);
+        if self.editor.as_ref().is_some_and(|e| e.path() == path.as_path()) {
+            self.status = "Scegli un altro nome: il PDF aperto resta com'è".into();
+            return;
+        }
+        if let Some(pages) = self.output_pages(ctx, std::iter::once(self.current)) {
+            self.output = Some(crate::quotes::Output::Save { pages, path });
+        }
     }
 
     /// Il pannello a destra con le tinte piatte: colore, nome (si rinomina), pagine e sovrastampa.

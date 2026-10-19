@@ -82,6 +82,9 @@ pub struct WinFilesApp {
     want_print: bool,
     /// La finestra Stampa aperta.
     print_dialog: Option<crate::printing::PrintDialog>,
+    /// Le pagine da stampare chieste da Modifica PDF o Modifica immagini, con il nome del lavoro e
+    /// quella in anteprima: finché ci sono, la finestra Stampa stampa queste e non i fogli.
+    module_print: Option<(Vec<winfiles_scene::Page>, String, usize)>,
     /// Le scelte dell'ultima stampa, per la prossima.
     last_print: crate::printing::PrintDialog,
     /// Le stampanti del sistema, lette in un thread a parte.
@@ -207,6 +210,7 @@ impl WinFilesApp {
             want_export: false,
             want_print: false,
             print_dialog: None,
+            module_print: None,
             last_print,
             printer_scan: crate::printing::PrinterScan::default(),
             updater: crate::update::Updater::default(),
@@ -594,11 +598,64 @@ impl WinFilesApp {
         self.scan_printers();
     }
 
+    /// Prende la stampa o il PDF con le quote chiesti da Modifica PDF o Modifica immagini.
+    fn module_output(&mut self) {
+        let output = match self.module {
+            Module::Pdf => self.pdf.output.take(),
+            Module::Images => self.images.output.take(),
+            _ => None,
+        };
+        let Some(output) = output else {
+            return;
+        };
+        if self.export.is_some() || self.print_dialog.is_some() {
+            self.set_module_status("Aspetta che finisca la stampa in corso".into());
+            return;
+        }
+        match output {
+            crate::quotes::Output::Print {
+                pages,
+                title,
+                current,
+            } => {
+                if pages.is_empty() {
+                    return;
+                }
+                self.module_print = Some((pages, title, current));
+                let mut dialog = self.last_print.clone();
+                dialog.set_printers(self.printer_scan.list());
+                self.print_dialog = Some(dialog);
+                self.scan_printers();
+            }
+            crate::quotes::Output::Save { pages, path } => {
+                self.start_job(pages, crate::export::Target::File(path));
+                if self.export.is_none() {
+                    let status = self.status.clone();
+                    self.set_module_status(status);
+                }
+            }
+        }
+    }
+
+    /// Scrive nella barra di stato del modulo aperto (Modifica PDF o Modifica immagini).
+    fn set_module_status(&mut self, text: String) {
+        match self.module {
+            Module::Pdf => self.pdf.status = text,
+            Module::Images => self.images.status = text,
+            _ => {}
+        }
+    }
+
     /// La finestra Stampa aperta; alla conferma i fogli scelti vanno alla stampante.
     fn print_window(&mut self, ctx: &egui::Context, sheets: &Pages) {
-        let count = sheets.as_ref().map_or(0, Sheets::len);
-        let title = self.document_name();
-        let current = self.sheet;
+        let (count, title, current) = match &self.module_print {
+            Some((pages, title, current)) => (pages.len(), title.clone(), *current),
+            None => (
+                sheets.as_ref().map_or(0, Sheets::len),
+                self.document_name(),
+                self.sheet,
+            ),
+        };
         let Some(dialog) = self.print_dialog.as_mut() else {
             return;
         };
@@ -609,6 +666,7 @@ impl WinFilesApp {
         if let Some(d) = self.print_dialog.take() {
             self.last_print = d;
         }
+        let module_pages = self.module_print.take();
         let (job, range) = match answer {
             crate::printing::Answer::Print(job, range) => (job, range),
             crate::printing::Answer::Calibrate => {
@@ -617,6 +675,17 @@ impl WinFilesApp {
             }
             crate::printing::Answer::Cancel => return,
         };
+        if let Some((pages, _, _)) = module_pages {
+            let mut pages: Vec<_> = pages
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| range.contains(i))
+                .map(|(_, p)| p)
+                .collect();
+            crate::calibrate::apply(&mut pages, &job, &self.calibrations);
+            self.start_job(pages, crate::export::Target::Printer(job));
+            return;
+        }
         let Ok(sheets) = sheets else {
             return;
         };
@@ -2413,7 +2482,16 @@ impl eframe::App for WinFilesApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
+        let exporting = self.export.is_some();
         self.receive_export();
+        if exporting && self.export.is_none() {
+            let status = self.status.clone();
+            self.set_module_status(status);
+        }
+        if let Some(job) = &self.export {
+            let progress = job.progress_text();
+            self.set_module_status(progress);
+        }
         self.receive_printers();
         self.print_window(&ctx, sheets);
         self.calibrate_window(&ctx);
@@ -2438,6 +2516,7 @@ impl eframe::App for WinFilesApp {
                     bottom: 2,
                 }))
                 .show(ui, |ui| self.pdf.body(ui, unit));
+            self.module_output();
             self.pdf.windows(&ctx);
             self.notes_window(&ctx);
             self.unsaved_dialog(&ctx);
@@ -2456,6 +2535,7 @@ impl eframe::App for WinFilesApp {
                     bottom: 2,
                 }))
                 .show(ui, |ui| self.images.body(ui, unit));
+            self.module_output();
             self.images.windows(&ctx);
             self.unsaved_dialog(&ctx);
             return;

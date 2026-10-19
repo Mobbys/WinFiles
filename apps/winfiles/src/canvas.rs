@@ -194,6 +194,7 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
                     page: slot.page,
                 },
                 crop: trim_crop(page_info),
+                dpi: None,
             });
             // Un filo sottile attorno alla miniatura: le immagini chiare non si perdono nel foglio.
             sk.rect(grow(image, 0.12), 0.0, None, Some((FRAME, 0.12)));

@@ -70,7 +70,7 @@ pub struct ImagesModule {
     dialog: Option<Dialog>,
     asking: Option<Then>,
     renderer: render::Renderer,
-    status: String,
+    pub status: String,
     zoom: Option<f32>,
     shown_zoom: f32,
     /// L'unità scelta nell'app (mm o cm): la usano i campi e i dati.
@@ -79,6 +79,8 @@ pub struct ImagesModule {
     /// secondi): arrivano da qui, una alla volta.
     loading: Loading,
     pub quit_confirmed: bool,
+    /// La stampa o il PDF con le quote chiesti, che l'app prende e manda avanti.
+    pub output: Option<crate::quotes::Output>,
 }
 
 /// Le aperture in corso.
@@ -124,6 +126,7 @@ impl ImagesModule {
                 }
             },
             quit_confirmed: false,
+            output: None,
         }
     }
 
@@ -424,6 +427,8 @@ impl ImagesModule {
             self.save(true);
         } else if pressed(Modifiers::COMMAND, Key::S) {
             self.save(false);
+        } else if pressed(Modifiers::COMMAND, Key::P) {
+            self.print(ctx);
         } else if pressed(Modifiers::COMMAND, Key::O) {
             let paths = pick_images();
             if !paths.is_empty() {
@@ -495,6 +500,10 @@ impl ImagesModule {
         if item(ui, "Salva con nome…", "Ctrl+Maiusc+S", open) {
             ui.close();
             self.save(true);
+        }
+        if item(ui, "Stampa…", "Ctrl+P", open) {
+            ui.close();
+            self.print(ui.ctx());
         }
         ui.separator();
         if item(ui, "Ridimensiona…", "", open) {
@@ -661,6 +670,17 @@ impl ImagesModule {
                         };
                         if ui.add_enabled(open, save).on_hover_text(tip).clicked() {
                             self.save(false);
+                        }
+                        let tip = if self.quoting {
+                            "Stampa l'immagine alla sua misura, con le quote (Ctrl+P)"
+                        } else {
+                            "Stampa l'immagine alla sua misura di stampa (Ctrl+P)"
+                        };
+                        if text_button(ui, "printer", "Stampa", open)
+                            .on_hover_text(tip)
+                            .clicked()
+                        {
+                            self.print(ui.ctx());
                         }
                     });
                 });
@@ -1019,10 +1039,122 @@ impl ImagesModule {
         });
         ui.add_space(6.0);
         let unit = self.unit;
-        egui::ScrollArea::vertical()
+        let action = egui::ScrollArea::vertical()
             .id_salt("quote-immagine")
             .auto_shrink([false, false])
-            .show(&mut ui, |ui| self.quotes.panel(ui, unit));
+            .show(&mut ui, |ui| self.quotes.panel(ui, unit))
+            .inner;
+        let ctx = ui.ctx().clone();
+        match action {
+            Some(crate::quotes::PanelAction::Print) => self.print(&ctx),
+            Some(crate::quotes::PanelAction::Save) => self.save_quoted(&ctx),
+            None => {}
+        }
+    }
+
+    /// L'immagine com'è adesso in un file temporaneo, con i pixel che bastano alla stampa, e la
+    /// sua pagina alla misura di stampa, con le quote se sono accese.
+    fn output_page(&mut self) -> Option<(Size, winfiles_scene::Source)> {
+        let d = self.docs.get(self.current)?;
+        let p = d.editor.picture();
+        let size = p.size_mm();
+        let image = p.image();
+        let (w, h) = (image.width(), image.height());
+        // Più pixel di quelli che servono a 300 DPI (e oltre il tetto del PDF) non escono.
+        let need = (size.w.max(size.h) / 25.4 * crate::quotes::PRINT_DPI).ceil();
+        let long = f64::from(w.max(h));
+        let image = if need.is_finite() && need >= 64.0 && long > need.min(6000.0) {
+            let k = need.min(6000.0) / long;
+            let nw = ((f64::from(w) * k).round() as u32).max(1);
+            let nh = ((f64::from(h) * k).round() as u32).max(1);
+            image.resize_exact(nw, nh, image::imageops::FilterType::Triangle)
+        } else {
+            image.clone()
+        };
+        let path = crate::quotes::temp_source("png");
+        let written = std::fs::File::create(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|f| {
+                let encoder = image::codecs::png::PngEncoder::new_with_quality(
+                    std::io::BufWriter::new(f),
+                    image::codecs::png::CompressionType::Fast,
+                    image::codecs::png::FilterType::Adaptive,
+                );
+                image::DynamicImage::ImageRgba8(image.to_rgba8())
+                    .write_with_encoder(encoder)
+                    .map_err(|e| e.to_string())
+            });
+        if let Err(e) = written {
+            self.status = format!("Non riesco a preparare la stampa: {e}");
+            return None;
+        }
+        let source = winfiles_scene::Source {
+            path,
+            kind: winfiles_model::FileKind::Image,
+            page: 0,
+        };
+        Some((size, source))
+    }
+
+    /// La pagina dell'immagine corrente, con le sue quote se sono accese.
+    fn quoted_page(&mut self, ctx: &egui::Context) -> Option<winfiles_scene::Page> {
+        let (size, source) = self.output_page()?;
+        let owner = self
+            .docs
+            .get(self.current)
+            .map(|d| (self.current as u64).wrapping_shl(40) ^ d.generation);
+        let quoted = self.quoting && self.quotes.owner().is_some() && self.quotes.owner() == owner;
+        let quotes = quoted.then_some((&self.quotes, self.unit));
+        Some(crate::quotes::page(ctx, size, source, quotes))
+    }
+
+    /// Stampa l'immagine com'è adesso alla sua misura di stampa, con le quote se accese.
+    pub fn print(&mut self, ctx: &egui::Context) {
+        if self.output.is_some() {
+            return;
+        }
+        let Some(page) = self.quoted_page(ctx) else {
+            return;
+        };
+        let title = self
+            .docs
+            .get(self.current)
+            .map_or_else(|| "Immagine".into(), |d| file_name(d.editor.path()));
+        self.output = Some(crate::quotes::Output::Print {
+            pages: vec![page],
+            title,
+            current: 0,
+        });
+    }
+
+    /// Salva in un PDF l'immagine con le quote disegnate sopra, alla misura di stampa.
+    fn save_quoted(&mut self, ctx: &egui::Context) {
+        let Some(d) = self.docs.get(self.current) else {
+            return;
+        };
+        let source = d.editor.path();
+        let stem = source
+            .file_stem()
+            .map_or_else(|| "immagine".into(), |s| s.to_string_lossy().into_owned());
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Salva l'immagine con le quote")
+            .set_file_name(format!("{stem}_quote.pdf"))
+            .add_filter("PDF", &["pdf"]);
+        if let Some(dir) = source.parent() {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(mut path) = dialog.save_file() else {
+            return;
+        };
+        if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+            path.as_mut_os_string().push(".pdf");
+        }
+        if let Some(page) = self.quoted_page(ctx) {
+            self.output = Some(crate::quotes::Output::Save {
+                pages: vec![page],
+                path,
+            });
+        }
     }
 
     fn data_contents(&mut self, ui: &mut egui::Ui) {

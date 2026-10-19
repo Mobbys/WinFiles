@@ -65,6 +65,9 @@ pub struct Picture {
     pub rect: Rect,
     pub source: Source,
     pub crop: Rect,
+    /// La risoluzione con cui va nel PDF; `None` quella delle miniature (150 DPI). Le pagine
+    /// stampate da Modifica PDF e Modifica immagini la chiedono più alta.
+    pub dpi: Option<f64>,
 }
 
 /// Una cosa da disegnare.
@@ -141,6 +144,7 @@ mod tests {
                 page: 2,
             },
             crop: Rect::new(0.0, 0.0, 1.0, 1.0),
+            dpi: None,
         }));
         assert_eq!(page.pictures().count(), 1);
         assert_eq!(page.pictures().next().map(|p| p.source.page), Some(2));
