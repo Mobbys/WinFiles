@@ -13,7 +13,7 @@ use winfiles_model::{FileEntry, PrintSettings, PrintState, Project, Totals};
 use winfiles_scene::{Page, Weight};
 
 use crate::canvas::{FRAME, INK, INK_SOFT, draw_header, draw_title, paper, to_screen, totals_text};
-use crate::captions::{MM_PER_PT, NOTE_INK, area_text, header_height, line_mm, note_job, note_rows};
+use crate::captions::{MM_PER_PT, NOTE_INK, area_text, line_mm, note_job, note_rows};
 use crate::sketch::{self, PX_PER_MM, Sketch};
 
 /// Spazio sopra e sotto il testo di ogni riga di file, in mm.
@@ -203,6 +203,7 @@ pub fn layout(ctx: &egui::Context, project: &Project, title: f64) -> Result<Summ
         - print.margins.left
         - print.margins.right;
     let rows = rows(project);
+    let labels = project.folder_labels();
     let name_w = columns(print, width).first().map_or(width, |c| c.w) - 1.5 * INDENT;
     let lines = rows
         .iter()
@@ -215,8 +216,16 @@ pub fn layout(ctx: &egui::Context, project: &Project, title: f64) -> Result<Summ
                 } else {
                     0.0
                 };
+                let label = labels
+                    .get(path.as_path())
+                    .cloned()
+                    .unwrap_or_else(|| path.display().to_string());
+                // Anche ripetuta con "(continua)" deve starci.
+                let head = crate::canvas::header_block(ctx, project, path, &label, width, false).max(
+                    crate::canvas::header_block(ctx, project, path, &label, width, true),
+                );
                 Line {
-                    height: GROUP_SPACE + header_height(print.header_text) + note_h,
+                    height: GROUP_SPACE + head + note_h,
                     group: true,
                 }
             }
@@ -369,7 +378,12 @@ pub fn compose(ctx: &egui::Context, sheet: &SummarySheet, summary: &Summary, pro
         let r = placed.rect;
         match &row.kind {
             Kind::Folder(path) => {
-                let head = MmRect::new(r.x, r.y + GROUP_SPACE, r.w, header_height(print.header_text));
+                let label = labels
+                    .get(path.as_path())
+                    .cloned()
+                    .unwrap_or_else(|| path.display().to_string());
+                let block = crate::canvas::header_block(ctx, project, path, &label, r.w, placed.continued);
+                let head = MmRect::new(r.x, r.y + GROUP_SPACE, r.w, block);
                 let header = Header {
                     folder: labels
                         .get(path.as_path())

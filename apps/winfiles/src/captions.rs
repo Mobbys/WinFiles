@@ -279,7 +279,7 @@ pub fn items(ctx: &egui::Context, project: &Project, slots: &[Slot]) -> Vec<Item
         - print.margins.left
         - print.margins.right;
     // I file sono in ordine di cartella: etichetta e nota si calcolano una volta per cartella.
-    let mut current: Option<(&std::path::Path, String, f64)> = None;
+    let mut current: Option<(&std::path::Path, String, f64, f64, f64)> = None;
     let mut out = Vec::with_capacity(slots.len());
     for (id, slot) in slots.iter().enumerate() {
         let Some(f) = project.files.get(slot.file) else {
@@ -288,20 +288,19 @@ pub fn items(ctx: &egui::Context, project: &Project, slots: &[Slot]) -> Vec<Item
         let folder = f.folder();
         if current
             .as_ref()
-            .is_none_or(|(p, _, _)| p.as_os_str() != folder.as_os_str())
+            .is_none_or(|(p, ..)| p.as_os_str() != folder.as_os_str())
         {
             let label = labels
                 .get(folder)
                 .cloned()
                 .unwrap_or_else(|| folder.display().to_string());
             let note = project.printed_folder_note(folder);
-            current = Some((
-                folder,
-                label,
-                folder_note_height(ctx, note, print.note_text, sheet_width),
-            ));
+            let note = folder_note_height(ctx, note, print.note_text, sheet_width);
+            let header = crate::canvas::header_block(ctx, project, folder, &label, sheet_width, false);
+            let again = crate::canvas::header_block(ctx, project, folder, &label, sheet_width, true);
+            current = Some((folder, label, note, header, again));
         }
-        let Some((_, label, folder_note)) = &current else {
+        let Some((_, label, folder_note, header, header_continued)) = &current else {
             continue;
         };
         let page = f.pages.get(slot.page);
@@ -325,6 +324,8 @@ pub fn items(ctx: &egui::Context, project: &Project, slots: &[Slot]) -> Vec<Item
                 width,
             ),
             folder_note: *folder_note,
+            header: *header,
+            header_continued: *header_continued,
         });
     }
     out

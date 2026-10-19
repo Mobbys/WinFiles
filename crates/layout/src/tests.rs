@@ -10,6 +10,8 @@ fn item(id: usize, w: f64, h: f64, folder: &str) -> Item {
         folder: folder.into(),
         caption: 12.0,
         folder_note: 0.0,
+        header: 0.0,
+        header_continued: 0.0,
     }
 }
 
@@ -66,6 +68,30 @@ fn la_riga_e_alta_quanto_la_didascalia_piu_alta() {
     assert!(s.items[..4].iter().all(|p| (p.caption.h - 30.0).abs() < 1e-9));
     assert!((s.items[4].caption.h - 12.0).abs() < 1e-9);
     assert!((s.items[4].cell.y - (s.items[0].cell.bottom() + settings.row_gap)).abs() < 1e-9);
+}
+
+#[test]
+fn un_intestazione_che_va_a_capo_e_piu_alta() {
+    let settings = PrintSettings::default();
+    let mut items: Vec<Item> = (0..40).map(|i| item(i, 100.0, 100.0, "a")).collect();
+    // Il chiamante dà a tutti gli elementi della cartella le misure della sua intestazione.
+    for i in &mut items {
+        i.header = 3.0 * settings.header;
+        i.header_continued = 2.0 * settings.header;
+    }
+    let sheets = grid(&settings, &items).unwrap();
+    assert!(sheets.len() > 1);
+    let first = &sheets[0].headers[0];
+    assert!((first.rect.h - 3.0 * settings.header).abs() < 1e-9);
+    assert!(sheets[0].items[0].cell.y >= first.rect.bottom() + settings.row_gap - 1e-9);
+    let next = &sheets[1].headers[0];
+    assert!(next.continued && (next.rect.h - 2.0 * settings.header).abs() < 1e-9);
+    // Più bassa del minimo non si fa: vale quella delle impostazioni.
+    for i in &mut items {
+        i.header = 1.0;
+    }
+    let sheets = grid(&settings, &items).unwrap();
+    assert!((sheets[0].headers[0].rect.h - settings.header).abs() < 1e-9);
 }
 
 #[test]
@@ -317,6 +343,9 @@ fn items_strategy() -> impl Strategy<Value = Vec<Item>> {
             .map(|(i, (w, h, f, caption, note))| Item {
                 caption,
                 folder_note: note,
+                // Intestazioni che vanno a capo, anche assurde: il foglio non deve traboccare.
+                header: caption,
+                header_continued: note,
                 ..item(i, w, h, &format!("c{f}"))
             })
             .collect();

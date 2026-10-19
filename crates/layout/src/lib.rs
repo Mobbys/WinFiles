@@ -44,6 +44,12 @@ pub struct Item {
     /// Altezza della nota della cartella sotto l'intestazione, in mm; conta quella del primo
     /// elemento della cartella.
     pub folder_note: f64,
+    /// Altezza dell'intestazione della cartella, in mm, quando le cartelle o il titolo vanno a
+    /// capo; 0 (o meno di `PrintSettings::header`) vale `header`. Uguale per tutti gli elementi
+    /// della cartella.
+    pub header: f64,
+    /// Come `header`, per l'intestazione ripetuta sui fogli dopo, con "(continua)".
+    pub header_continued: f64,
 }
 
 /// Una miniatura posizionata.
@@ -446,9 +452,16 @@ pub fn grid_with_title(
     if cell_w <= EPS || settings.header + settings.row_gap + cell_w > area.h + EPS {
         return Err(LayoutError::NothingFits);
     }
+    // Un'intestazione che va a capo è più alta, ma mai tanto da non lasciar posto a una riga.
+    let header_cap = area.h - settings.row_gap - cell_w;
+    let head = |h: f64| height(h, header_cap).max(settings.header);
+    let tallest = items
+        .iter()
+        .map(|i| head(i.header).max(head(i.header_continued)))
+        .fold(settings.header, f64::max);
     // Lo spazio massimo per i testi sotto le immagini e sotto l'intestazione: oltre, il testo
     // viene tagliato, ma la riga sta sempre in un foglio.
-    let max_text = area.h - settings.header - settings.row_gap - cell_w;
+    let max_text = area.h - tallest - settings.row_gap - cell_w;
     let rows = match settings.view {
         View::Grid => grid_rows(settings, items, area, max_text),
         View::List => list_rows(settings, items, area, max_text),
@@ -479,20 +492,18 @@ pub fn grid_with_title(
             } else if after_row {
                 y += settings.row_gap;
             }
+            let header = head(item.header);
             // La nota della cartella non può spingere la sua prima riga fuori dal foglio.
-            let note = height(
-                item.folder_note,
-                area.h - settings.header - settings.row_gap - row.height,
-            );
-            let block = settings.header + note + settings.row_gap;
+            let note = height(item.folder_note, area.h - header - settings.row_gap - row.height);
+            let block = header + note + settings.row_gap;
             if y + block + row.height > area.bottom() + EPS {
                 sheets.push(std::mem::replace(&mut sheet, new_sheet()));
                 y = area.y;
             }
             sheet.headers.push(Header {
                 folder: item.folder.clone(),
-                rect: Rect::new(area.x, y, area.w, settings.header + note),
-                note: (note > EPS).then(|| Rect::new(area.x, y + settings.header, area.w, note)),
+                rect: Rect::new(area.x, y, area.w, header + note),
+                note: (note > EPS).then(|| Rect::new(area.x, y + header, area.w, note)),
                 continued: false,
             });
             y += block;
@@ -503,13 +514,14 @@ pub fn grid_with_title(
 
         if y + row.height > area.bottom() + EPS {
             sheets.push(std::mem::replace(&mut sheet, new_sheet()));
+            let header = head(item.header_continued);
             sheet.headers.push(Header {
                 folder: item.folder.clone(),
-                rect: Rect::new(area.x, area.y, area.w, settings.header),
+                rect: Rect::new(area.x, area.y, area.w, header),
                 note: None,
                 continued: true,
             });
-            y = area.y + settings.header + settings.row_gap;
+            y = area.y + header + settings.row_gap;
         }
 
         for cell in &row.cells {

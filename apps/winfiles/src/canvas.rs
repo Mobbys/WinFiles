@@ -450,7 +450,9 @@ pub(crate) fn totals_text(t: &Totals, print: &PrintSettings) -> String {
 }
 
 /// L'intestazione di una cartella: le cartelle come etichette colorate, una linea sottile e i
-/// totali a destra. Nessun riquadro grigio. `size` è il corpo del testo in mm.
+/// totali a destra. Nessun riquadro grigio. `size` è il corpo del testo in mm. Quando non sta in
+/// una riga va a capo (una cartella o un titolo più lungo della riga va a capo anche dentro la
+/// sua etichetta): niente esce dal foglio e niente si perde.
 pub(crate) fn draw_header(
     sk: &mut Sketch<'_>,
     title: MmRect,
@@ -459,92 +461,321 @@ pub(crate) fn draw_header(
     totals: Option<&str>,
     size: f64,
 ) {
-    let cy = title.y + title.h / 2.0;
-    let (pad_x, pad_y) = (size * 0.5, size * 0.22);
-    let right = title.right();
-    let mut x = title.x;
-    // Un'intestazione scelta dall'utente è un'unica etichetta; altrimenti una per cartella.
-    let crumbs: Vec<&str> = match custom {
+    let flow = header_flow(
+        sk,
+        title.w,
+        &crumbs(header, custom),
+        header.continued,
+        totals,
+        size,
+    );
+    let at = |(x, y): (f64, f64)| (title.x + x, title.y + y);
+    for part in &flow.parts {
+        match part {
+            Part::Pill { rect, galley, color } => {
+                let r = MmRect::new(title.x + rect.x, title.y + rect.y, rect.w, rect.h);
+                sk.rect(r, 1.2, Some(*color), None);
+                let pad_x = size * 0.5;
+                let pad_y = size * 0.22;
+                sk.text(
+                    (r.x + pad_x, r.y + pad_y),
+                    galley,
+                    size,
+                    Weight::SemiBold,
+                    Color32::WHITE,
+                    None,
+                );
+            }
+            Part::Text {
+                at: pos,
+                galley,
+                size,
+                weight,
+            } => sk.text(at(*pos), galley, *size, *weight, INK_SOFT, None),
+        }
+    }
+    if let Some((from, to)) = flow.line {
+        sk.line(at(from), at(to), FRAME, 0.25);
+    }
+}
+
+/// Le cartelle da mostrare: il titolo scelto dall'utente, se c'è, è un'unica etichetta.
+fn crumbs<'a>(header: &'a Header, custom: Option<&'a str>) -> Vec<&'a str> {
+    match custom {
         Some(text) => vec![text],
         None => header.folder.split(" › ").collect(),
-    };
+    }
+}
+
+/// Un pezzo di intestazione già al suo posto, rispetto all'angolo in alto a sinistra.
+enum Part {
+    Pill {
+        rect: MmRect,
+        galley: std::sync::Arc<egui::Galley>,
+        color: Color32,
+    },
+    Text {
+        at: (f64, f64),
+        galley: std::sync::Arc<egui::Galley>,
+        size: f64,
+        weight: Weight,
+    },
+}
+
+/// Un'intestazione sistemata in righe larghe al massimo `width` mm.
+struct Flow {
+    parts: Vec<Part>,
+    /// La linea sottile dopo le cartelle, se c'è posto.
+    line: Option<((f64, f64), (f64, f64))>,
+    height: f64,
+}
+
+/// Un elemento da mettere in riga: un'etichetta (con il "›" che la segue) o un testo.
+struct Piece {
+    galley: std::sync::Arc<egui::Galley>,
+    /// Larghezza e altezza della parte colorata (o del testo), in mm.
+    w: f64,
+    h: f64,
+    pill: Option<Color32>,
+    /// Il "›" dopo l'etichetta, con la sua larghezza.
+    sep: Option<(std::sync::Arc<egui::Galley>, f64, f64)>,
+    size: f64,
+    weight: Weight,
+}
+
+fn header_flow(
+    sk: &Sketch<'_>,
+    width: f64,
+    crumbs: &[&str],
+    continued: bool,
+    totals: Option<&str>,
+    size: f64,
+) -> Flow {
+    let width = width.max(1.0);
+    let (pad_x, pad_y) = (size * 0.5, size * 0.22);
+    // Una riga com'era prima: l'intestazione di una riga resta identica.
+    let row_h = crate::captions::header_height(size / MM_PER_PT);
+    let single = Sketch::size_mm(&sk.layout_line("Ag", size, Weight::SemiBold)).1 + 2.0 * pad_y;
+    let extra = (row_h - single).max(0.0);
+
+    let mut pieces = Vec::with_capacity(crumbs.len() + 1);
     for (i, crumb) in crumbs.iter().enumerate() {
         let color = CRUMB_COLORS
             .get(i % CRUMB_COLORS.len())
             .copied()
             .unwrap_or(INK_SOFT);
-        let galley = sk.layout_line(crumb, size, Weight::SemiBold);
+        let mut galley = sk.layout_line(crumb, size, Weight::SemiBold);
+        if Sketch::size_mm(&galley).0 + 2.0 * pad_x > width {
+            // Più lunga della riga intera: va a capo dentro l'etichetta.
+            galley = sk.layout(LayoutJob::simple(
+                (*crumb).to_string(),
+                sketch::font(size, Weight::SemiBold),
+                Color32::BLACK,
+                ((width - 2.0 * pad_x).max(1.0) as f32) * PX_PER_MM,
+            ));
+        }
         let (w, h) = Sketch::size_mm(&galley);
-        let (pw, ph) = (w + 2.0 * pad_x, h + 2.0 * pad_y);
-        // Le cartelle che non stanno si fermano prima dei totali.
-        if x + pw > right - 30.0 && i > 0 {
-            break;
-        }
-        let pill = MmRect::new(x, cy - ph / 2.0, pw, ph);
-        sk.rect(pill, 1.2, Some(color), None);
-        sk.text(
-            (x + pad_x, pill.y + pad_y),
-            &galley,
+        let sep = (i + 1 < crumbs.len()).then(|| {
+            let g = sk.layout_line("›", size, Weight::SemiBold);
+            let (sw, sh) = Sketch::size_mm(&g);
+            (g, sw, sh)
+        });
+        pieces.push(Piece {
+            galley,
+            w: w + 2.0 * pad_x,
+            h: h + 2.0 * pad_y,
+            pill: Some(color),
+            sep,
             size,
-            Weight::SemiBold,
-            Color32::WHITE,
-            None,
-        );
-        x = pill.right();
-        if i + 1 < crumbs.len() {
-            let sep = sk.layout_line("›", size, Weight::SemiBold);
-            let (w, h) = Sketch::size_mm(&sep);
-            sk.text(
-                (x + 1.0, cy - h / 2.0),
-                &sep,
-                size,
-                Weight::SemiBold,
-                INK_SOFT,
-                None,
-            );
-            x += w + 2.0;
+            weight: Weight::SemiBold,
+        });
+    }
+    if continued {
+        let small = size * 0.85;
+        let galley = sk.layout_line("(continua)", small, Weight::Regular);
+        let (w, h) = Sketch::size_mm(&galley);
+        pieces.push(Piece {
+            galley,
+            w: w + 2.0,
+            h,
+            pill: None,
+            sep: None,
+            size: small,
+            weight: Weight::Regular,
+        });
+    }
+
+    // In righe: un pezzo che non sta va a capo (il primo di una riga ci va comunque).
+    let mut rows: Vec<Vec<(f64, Piece)>> = vec![Vec::new()];
+    let mut x = 0.0;
+    for piece in pieces {
+        let sep_w = piece.sep.as_ref().map_or(0.0, |s| s.1 + 3.0);
+        if x > 0.0 && x + piece.w > width {
+            rows.push(Vec::new());
+            x = 0.0;
+        }
+        let at = x;
+        x += piece.w + sep_w;
+        if let Some(row) = rows.last_mut() {
+            row.push((at, piece));
         }
     }
-    if header.continued {
-        let small = size * 0.85;
-        let more = sk.layout_line("(continua)", small, Weight::Regular);
-        let (w, h) = Sketch::size_mm(&more);
-        sk.text(
-            (x + 2.0, cy - h / 2.0),
-            &more,
-            small,
-            Weight::Regular,
-            INK_SOFT,
-            None,
-        );
-        x += w + 2.0;
+    let end_x = rows.last().and_then(|r| r.last()).map_or(0.0, |(at, p)| at + p.w);
+
+    let mut parts = Vec::new();
+    let mut y = 0.0;
+    let mut last_cy = row_h / 2.0;
+    for row in &rows {
+        let tallest = row.iter().map(|(_, p)| p.h).fold(single, f64::max);
+        let h = (tallest + extra).max(row_h);
+        let cy = y + h / 2.0;
+        for (at, p) in row {
+            let top = cy - p.h / 2.0;
+            match p.pill {
+                Some(color) => parts.push(Part::Pill {
+                    rect: MmRect::new(*at, top, p.w, p.h),
+                    galley: p.galley.clone(),
+                    color,
+                }),
+                None => parts.push(Part::Text {
+                    at: (at + 2.0, top),
+                    galley: p.galley.clone(),
+                    size: p.size,
+                    weight: p.weight,
+                }),
+            }
+            if let Some((g, _, sh)) = &p.sep {
+                parts.push(Part::Text {
+                    at: (at + p.w + 1.0, cy - sh / 2.0),
+                    galley: g.clone(),
+                    size: p.size,
+                    weight: p.weight,
+                });
+            }
+        }
+        last_cy = cy;
+        y += h;
     }
-    let mut line_end = right;
+
+    // I totali a destra dell'ultima riga, o in una riga tutta loro se lì non c'è posto.
+    let mut line_end = width;
     if let Some(text) = totals {
         let small = size * 0.82;
         let galley = sk.layout_line(text, small, Weight::Regular);
         let (w, h) = Sketch::size_mm(&galley);
-        let tx = right - w;
-        if tx > x + 6.0 {
+        let tx = (width - w).max(0.0);
+        if tx > end_x + 6.0 {
             line_end = tx - 2.5;
-            sk.text(
-                (tx, cy - h / 2.0),
-                &galley,
-                small,
-                Weight::Regular,
-                INK_SOFT,
-                None,
-            );
+            parts.push(Part::Text {
+                at: (tx, last_cy - h / 2.0),
+                galley,
+                size: small,
+                weight: Weight::Regular,
+            });
+        } else {
+            parts.push(Part::Text {
+                at: (tx, y + (row_h - h) / 2.0),
+                galley,
+                size: small,
+                weight: Weight::Regular,
+            });
+            y += row_h;
         }
     }
-    if line_end > x + 4.0 {
-        sk.line((x + 2.5, cy), (line_end, cy), FRAME, 0.25);
+    let line = (line_end > end_x + 4.0).then_some(((end_x + 2.5, last_cy), (line_end, last_cy)));
+    Flow {
+        parts,
+        line,
+        height: y,
     }
+}
+
+/// Quanto è alta, in mm, l'intestazione della cartella `folder` (con l'etichetta `label`) su una
+/// riga larga `width` mm: più di una riga quando le cartelle vanno a capo.
+pub(crate) fn header_block(
+    ctx: &egui::Context,
+    project: &Project,
+    folder: &Path,
+    label: &str,
+    width: f64,
+    continued: bool,
+) -> f64 {
+    let print = &project.print;
+    let sk = Sketch::new(ctx, winfiles_geom::Size::new(width.max(1.0), 1.0));
+    let custom = project
+        .folder_titles
+        .get(folder)
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty());
+    let header = Header {
+        folder: label.to_string(),
+        rect: MmRect::new(0.0, 0.0, width, 0.0),
+        note: None,
+        continued,
+    };
+    let totals = project.folder_totals().get(folder).map(|t| totals_text(t, print));
+    header_flow(
+        &sk,
+        width,
+        &crumbs(&header, custom),
+        continued,
+        totals.as_deref(),
+        print.header_text * MM_PER_PT,
+    )
+    .height
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// La segnalazione di Michel: con il testo dell'intestazione grande le cartelle uscivano dal
+    /// foglio. Vanno a capo, restano tutte e nessuna esce dalla riga.
+    #[test]
+    fn l_intestazione_grande_va_a_capo_e_non_esce() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let sk = Sketch::new(ui.ctx(), winfiles_geom::Size::new(190.0, 277.0));
+            let size = 24.0 * MM_PER_PT;
+            let crumbs = [
+                "Ordini 2026",
+                "Cliente Rossi Arredamenti Srl",
+                "Campagna Primavera Estate",
+            ];
+            let flow = header_flow(
+                &sk,
+                190.0,
+                &crumbs,
+                true,
+                Some("2 file · 2 pagine · 0,090 m²"),
+                size,
+            );
+            let one = crate::captions::header_height(24.0);
+            assert!(flow.height > 2.0 * one, "deve andare a capo: {}", flow.height);
+            let pills = flow
+                .parts
+                .iter()
+                .filter_map(|p| match p {
+                    Part::Pill { rect, .. } => Some(*rect),
+                    Part::Text { .. } => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(pills.len(), crumbs.len());
+            for r in &pills {
+                assert!(r.x >= 0.0 && r.right() <= 190.0 + 1e-6 && r.bottom() <= flow.height + 1e-6);
+            }
+            // Un titolo più lungo della riga va a capo dentro la sua etichetta.
+            let long = ["un titolo scelto a mano ".repeat(6)];
+            let long: Vec<&str> = long.iter().map(String::as_str).collect();
+            let flow = header_flow(&sk, 190.0, &long, false, None, size);
+            assert!(flow.height > one);
+            // Corto: una riga, alta come sempre.
+            let short = header_flow(&sk, 190.0, &["Foto"], false, Some("1 file"), size);
+            assert!((short.height - one).abs() < 1e-9);
+        });
+        out.textures_delta.clear();
+    }
 
     /// Il blocco segnalato da Michel: dopo un cambio di foglio con la rotella verso l'alto lo
     /// scorrimento andava a un valore enorme e il foglio spariva dalla vista. L'altezza dello
