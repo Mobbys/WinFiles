@@ -407,6 +407,12 @@ mod tests {
                 "accent_text (scuro: {})",
                 t.dark
             );
+            // Il testo selezionato nei campi (fluent::field_scope).
+            assert!(
+                contrast(t.text_strong, t.selection) >= 4.5,
+                "testo selezionato (scuro: {})",
+                t.dark
+            );
             for bg in [t.quote, t.quote_master] {
                 assert!(contrast(t.on_quote, bg) >= 4.5, "on_quote su {bg:?}");
             }

@@ -73,6 +73,10 @@ pub struct ImagesModule {
     pub status: String,
     zoom: Option<f32>,
     shown_zoom: f32,
+    /// Di quanto il centro dell'immagine è spostato dal centro dell'anteprima (Ctrl+rotella verso
+    /// il puntatore, barra spaziatrice per trascinare).
+    pan: Vec2,
+    zoom_anchor: crate::pan::Anchor,
     /// L'unità scelta nell'app (mm o cm): la usano i campi e i dati.
     unit: Unit,
     /// Le immagini si aprono in un thread a parte (sviluppare un RAW richiede un paio di
@@ -112,6 +116,8 @@ impl ImagesModule {
             status: String::new(),
             zoom: None,
             shown_zoom: 1.0,
+            pan: Vec2::ZERO,
+            zoom_anchor: crate::pan::Anchor::default(),
             unit: Unit::Mm,
             loading: {
                 let (tx, rx) = mpsc::channel();
@@ -1419,12 +1425,29 @@ impl ImagesModule {
         let fit = room.clamp(0.01, 1.0);
         if let Some(z) = crate::app::wheel_zoom(ui, board) {
             let base = self.zoom.unwrap_or(fit);
-            self.zoom = Some((base * z).clamp(0.02, 8.0));
+            let new = (base * z).clamp(0.02, 8.0);
+            if let Some(p) = ui.input(|i| i.pointer.hover_pos()) {
+                let now = ui.input(|i| i.time);
+                let pan = self.pan;
+                let on_image = self
+                    .zoom_anchor
+                    .point(p, now, || (p - board.center() - pan) / base);
+                self.pan = p - board.center() - on_image * new;
+            }
+            self.zoom = Some(new);
         }
         let scale = self.zoom.unwrap_or(fit);
         self.shown_zoom = scale;
         let shown = natural * scale;
-        let paper = Rect::from_center_size(board.center(), shown);
+        let hand = crate::pan::hand(ui, board);
+        if let Some(d) = hand {
+            self.pan += d;
+        }
+        self.pan = crate::pan::clamp(self.pan, shown, board.size(), 40.0);
+        let paper = Rect::from_center_size(board.center() + self.pan, shown);
+        // L'immagine ingrandita non esce dall'anteprima.
+        let clip = ui.clip_rect();
+        ui.set_clip_rect(clip.intersect(board));
         // L'immagine si chiede al lato che serve davvero, per scatti, così non si rifà a ogni
         // movimento del cursore.
         let ppp = ui.ctx().pixels_per_point();
@@ -1456,21 +1479,27 @@ impl ImagesModule {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(80));
         }
+        // Con la mano attiva trascinare sposta la vista: quote e ritaglio stanno fermi.
         let lens = if self.quoting {
             // Le quote in pixel: un pixel vale 25,4 / DPI millimetri.
             let owner = (self.current as u64).wrapping_shl(40) ^ generation;
             self.quotes.prepare(owner, 25.4 / p.dpi());
-            self.quotes
-                .interact(ui, ui.id().with("quote"), paper, iw as f32, ih as f32);
+            if hand.is_none() {
+                self.quotes
+                    .interact(ui, ui.id().with("quote"), paper, iw as f32, ih as f32);
+            }
             self.quotes.paint(ui, paper, iw as f32, unit);
             self.quotes.lens
         } else {
-            self.cutter
-                .interact(ui, ui.id().with("ritaglio"), paper, iw as f32, ih as f32);
+            if hand.is_none() {
+                self.cutter
+                    .interact(ui, ui.id().with("ritaglio"), paper, iw as f32, ih as f32);
+            }
             self.cutter.paint(ui, paper, iw as f32);
             self.cutter.lens
         };
         self.paint_lens(ui, board, paper, iw, ih, lens);
+        ui.set_clip_rect(clip);
     }
 
     /// La lente: mentre si tira un lato mostra i pixel veri attorno al cursore, come la 4.9.

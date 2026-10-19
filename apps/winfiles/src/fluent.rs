@@ -29,7 +29,10 @@ pub fn field_scope<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         let cr = CornerRadius::same(RADIUS);
         v.text_edit_bg_color = Some(t.field);
         v.extreme_bg_color = t.field;
-        v.selection.stroke = Stroke::new(1.0, t.field_border);
+        // Il colore di `selection.stroke` è anche quello del testo selezionato: deve leggersi sul
+        // fondo della selezione. Lo spessore 0 toglie il bordo che egui disegna al campo attivo;
+        // il bordo sottile lo ridisegna `field_edge`, uguale a quello del campo a riposo.
+        v.selection.stroke = Stroke::new(0.0, t.text_strong);
         for (w, fill) in [
             (&mut v.widgets.inactive, t.field),
             (&mut v.widgets.hovered, t.field_hover),
@@ -55,6 +58,14 @@ pub fn field_edge(ui: &Ui, rect: Rect, focused: bool) {
     } else {
         (1.0, t.field_bottom)
     };
+    if focused {
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(RADIUS),
+            Stroke::new(1.0, t.field_border),
+            egui::StrokeKind::Inside,
+        );
+    }
     let strip = Rect::from_min_max(pos2(rect.left(), rect.bottom() - h), rect.max);
     ui.painter()
         .with_clip_rect(strip.intersect(ui.clip_rect()))

@@ -63,6 +63,11 @@ pub struct PdfModule {
     /// Ingrandimento (1 = 100%); `None` adatta la pagina alla finestra.
     zoom: Option<f32>,
     shown_zoom: f32,
+    /// Lo scorrimento dell'anteprima all'ultimo disegno, e quello da imporre al prossimo (Ctrl+rotella
+    /// verso il puntatore, barra spaziatrice per trascinare la vista).
+    scroll: Vec2,
+    scroll_to: Option<Vec2>,
+    zoom_anchor: crate::pan::Anchor,
     pub status: String,
     dialog: Option<Dialog>,
     drag: Option<Drag>,
@@ -111,6 +116,9 @@ impl PdfModule {
             current: 0,
             zoom: None,
             shown_zoom: 1.0,
+            scroll: Vec2::ZERO,
+            scroll_to: None,
+            zoom_anchor: crate::pan::Anchor::default(),
             status: String::new(),
             dialog: None,
             drag: None,
@@ -1681,13 +1689,39 @@ impl PdfModule {
             .min((board.height() - 48.0 - reserve) / natural.y)
             .max(0.01);
         // Ctrl+rotella ingrandisce, come nell'anteprima delle miniature.
+        // Dove sta l'angolo della pagina nel contenuto che scorre, a una scala (la pagina è al
+        // centro di uno spazio largo almeno quanto l'anteprima).
+        let paper_min = |scale: f32| {
+            let shown = natural * scale;
+            let area = vec2(shown.x + 48.0, shown.y + 48.0 + reserve).max(board.size());
+            vec2((area.x - shown.x) / 2.0, (area.y - reserve - shown.y) / 2.0)
+        };
         if let Some(z) = crate::app::wheel_zoom(ui, board) {
             let base = self.zoom.unwrap_or(fit);
-            self.zoom = Some((base * z).clamp(0.1, 8.0));
+            let new = (base * z).clamp(0.1, 8.0);
+            // Il punto della pagina sotto il puntatore resta sotto il puntatore.
+            if let Some(p) = ui.input(|i| i.pointer.hover_pos()) {
+                let at = p - board.min;
+                let now = ui.input(|i| i.time);
+                let scroll = self.scroll;
+                let on_page = self
+                    .zoom_anchor
+                    .point(p, now, || (scroll + at - paper_min(base)) / base);
+                let to = paper_min(new) + on_page * new - at;
+                self.scroll_to = Some(to.max(Vec2::ZERO));
+            }
+            self.zoom = Some(new);
         }
         let scale = self.zoom.unwrap_or(fit);
         self.shown_zoom = scale;
         let shown = natural * scale;
+        let hand = crate::pan::hand(ui, board);
+        if let Some(d) = hand
+            && d != Vec2::ZERO
+        {
+            let from = self.scroll_to.unwrap_or(self.scroll);
+            self.scroll_to = Some((from - d).max(Vec2::ZERO));
+        }
         let ppp = ui.ctx().pixels_per_point();
         let needed = (shown.x.max(shown.y) * ppp).ceil() as u32;
         let side = [768_u32, 1536, 3072, 4096]
@@ -1699,7 +1733,12 @@ impl PdfModule {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(board));
         child.set_clip_rect(board);
         let mut lens = None;
-        egui::ScrollArea::both()
+        let mut area = egui::ScrollArea::both();
+        let wanted = self.scroll_to.take();
+        if let Some(to) = wanted {
+            area = area.scroll_offset(to);
+        }
+        let out = area
             .id_salt("pdf-anteprima")
             .auto_shrink([false, false])
             // Trascinare sulla pagina disegna la taglierina, non sposta la vista.
@@ -1746,13 +1785,18 @@ impl PdfModule {
                         .request_repaint_after(std::time::Duration::from_millis(100));
                 }
                 let (w, h) = (size.w as f32, size.h as f32);
+                // Con la mano attiva trascinare sposta la vista: quote e taglierina stanno ferme.
                 let at = if self.quoting {
                     self.quotes.prepare(key.unwrap_or(0), 1.0);
-                    self.quotes.interact(ui, ui.id().with("quote"), paper, w, h);
+                    if hand.is_none() {
+                        self.quotes.interact(ui, ui.id().with("quote"), paper, w, h);
+                    }
                     self.quotes.paint(ui, paper, w, unit);
                     self.quotes.lens
                 } else {
-                    self.cutter.interact(ui, ui.id().with("taglierina"), paper, w, h);
+                    if hand.is_none() {
+                        self.cutter.interact(ui, ui.id().with("taglierina"), paper, w, h);
+                    }
                     self.cutter.paint(ui, paper, w);
                     self.cutter.lens
                 };
@@ -1760,6 +1804,18 @@ impl PdfModule {
                     lens = Some((at, paper, tex.id()));
                 }
             });
+        self.scroll = out.state.offset;
+        // Appena ingrandito, lo scorrimento può essere tagliato sulla misura vecchia del
+        // contenuto: si richiede al giro dopo, finché non arriva (o non può arrivare oltre).
+        if let Some(to) = wanted {
+            let max = (out.content_size - out.inner_rect.size()).max(Vec2::ZERO);
+            let reachable = to.min(max);
+            if (out.state.offset - reachable).length() > 0.5 {
+                self.scroll = to;
+                self.scroll_to = Some(to);
+                ui.ctx().request_repaint();
+            }
+        }
         if let Some((at, paper, tex)) = lens {
             paint_lens(ui, board, paper, at, tex);
         }

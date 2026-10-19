@@ -20,6 +20,7 @@ mod images;
 mod legacy;
 mod measure;
 mod paint;
+mod pan;
 mod panels;
 mod pdf;
 mod prefs;
