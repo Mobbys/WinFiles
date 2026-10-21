@@ -1610,9 +1610,13 @@ impl WinFilesApp {
                 .layout(egui::Layout::left_to_right(Align::Center)),
         );
         let print = &self.project.print;
-        let orientation = match print.orientation {
-            Orientation::Portrait => "verticale",
-            Orientation::Landscape => "orizzontale",
+        // Un file solo a tutta pagina gira il foglio come il file: lo si dice.
+        let single = single_page(&self.project, &self.slots);
+        let orientation = match (single, print.orientation) {
+            (Some(s), _) if s.w > s.h => "orizzontale, un file a tutta pagina",
+            (Some(_), _) => "verticale, un file a tutta pagina",
+            (None, Orientation::Portrait) => "verticale",
+            (None, Orientation::Landscape) => "orizzontale",
         };
         bar.label(
             egui::RichText::new("Anteprima di stampa")
@@ -2188,19 +2192,33 @@ impl WinFilesApp {
             return pages.clone();
         }
         self.slots = captions::slots(&self.project);
+        // Una sola miniatura riempie il foglio, girato come il file: si impagina come con una
+        // colonna sola (così anche la didascalia è larga quanto il foglio).
+        let single = single_page(&self.project, &self.slots);
+        let mut project = std::borrow::Cow::Borrowed(&self.project);
+        if let Some(content) = single {
+            let p = project.to_mut();
+            p.print.columns = 1;
+            p.print.orientation = if content.w > content.h {
+                winfiles_geom::Orientation::Landscape
+            } else {
+                winfiles_geom::Orientation::Portrait
+            };
+        }
+        let project = project.as_ref();
         // L'altezza delle intestazioni segue il corpo del loro testo.
-        let mut print = self.project.print.clone();
+        let mut print = project.print.clone();
         print.header = captions::header_height(print.header_text);
         let width = winfiles_geom::sheet_size(print.paper, print.orientation).w
             - print.margins.left
             - print.margins.right;
         let title = captions::title_height(ctx, &print.title, print.title_text, width);
-        let items = captions::items(ctx, &self.project, &self.slots);
+        let items = captions::items(ctx, project, &self.slots);
         self.nesting_scale = (print.view == View::Nesting && !items.is_empty())
             .then(|| winfiles_layout::nesting_denominator(&print, &items));
         let pages = grid_with_title(&print, &items, title).and_then(|grid| {
-            let summary = if print.show_summary && !self.project.files.is_empty() {
-                Some(crate::summary::layout(ctx, &self.project, title)?)
+            let summary = if print.show_summary && !project.files.is_empty() {
+                Some(crate::summary::layout(ctx, project, title)?)
             } else {
                 None
             };
@@ -2210,6 +2228,19 @@ impl WinFilesApp {
         self.layout_cache = Some((self.project.clone(), pages.clone()));
         pages
     }
+}
+
+/// Il formato dell'unica miniatura del lavoro, quando la griglia la deve far riempire il foglio.
+fn single_page(project: &Project, slots: &[Slot]) -> Option<winfiles_geom::Size> {
+    let print = &project.print;
+    let [only] = slots else {
+        return None;
+    };
+    if !print.fill_single || print.view != View::Grid {
+        return None;
+    }
+    let size = project.files.get(only.file)?.pages.get(only.page)?.finished();
+    (size.w.is_finite() && size.h.is_finite() && size.w > 0.0 && size.h > 0.0).then_some(size)
 }
 
 /// Il foglio (contando il riepilogo) dove sta la miniatura della pagina `page` del file `file`.

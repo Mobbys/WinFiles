@@ -510,3 +510,34 @@ mod riepilogo {
         assert_eq!(summary(&s, SummaryBlocks::default(), &[]).unwrap().len(), 1);
     }
 }
+
+#[test]
+fn un_file_solo_riempie_il_foglio() {
+    let settings = PrintSettings::default();
+    let area = Rect::new(0.0, 0.0, 210.0, 297.0).inset(settings.margins);
+    // Verticale: è l'altezza a fermarlo, e sta tutto nel primo foglio.
+    let sheets = grid(&settings, &[item(0, 210.0, 297.0, "a")]).unwrap();
+    assert_eq!(sheets.len(), 1);
+    let only = &sheets[0].items[0];
+    assert!(only.image.h > 0.8 * area.h, "troppo piccola: {:?}", only.image);
+    assert!(only.cell.bottom() <= area.bottom() + 1e-9);
+    assert!((only.image.w / only.image.h - 210.0 / 297.0).abs() < 1e-6);
+    // Orizzontale: larga tutta l'area.
+    let sheets = grid(&settings, &[item(0, 400.0, 100.0, "a")]).unwrap();
+    assert!((sheets[0].items[0].image.w - area.w).abs() < 1e-9);
+    // Con una colonna sola e il foglio orizzontale (come lo gira l'app) ci sta comunque.
+    let wide = PrintSettings {
+        columns: 1,
+        orientation: Orientation::Landscape,
+        ..PrintSettings::default()
+    };
+    let sheets = grid(&wide, &[item(0, 1200.0, 800.0, "a")]).unwrap();
+    assert!(sheets[0].items[0].image.h > 150.0);
+    // Spento, resta in una colonna come le altre.
+    let off = PrintSettings {
+        fill_single: false,
+        ..PrintSettings::default()
+    };
+    let sheets = grid(&off, &[item(0, 210.0, 297.0, "a")]).unwrap();
+    assert!(sheets[0].items[0].image.w < area.w / 3.0);
+}

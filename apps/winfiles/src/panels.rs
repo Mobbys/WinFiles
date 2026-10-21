@@ -1654,6 +1654,14 @@ impl WinFilesApp {
             ));
             ui.add(fluent::checkbox(&mut print.show_notes, "Stampa le note"))
                 .on_hover_text("Spento: le note restano nel lavoro ma non vanno sul foglio");
+            ui.add(fluent::checkbox(
+                &mut print.fill_single,
+                "Un file solo a tutta pagina",
+            ))
+            .on_hover_text(
+                "Quando c'è una sola miniatura, la griglia la fa grande quanto il foglio e gira il \
+                     foglio come il file",
+            );
             ui.add_space(8.0);
             let sheet = winfiles_geom::sheet_size(print.paper, print.orientation);
             let area = Size::new(

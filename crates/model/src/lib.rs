@@ -370,6 +370,9 @@ pub struct PrintSettings {
     pub show_summary: bool,
     /// Stampa le note di file, pagine e cartelle (spento: restano nel lavoro ma non sul foglio).
     pub show_notes: bool,
+    /// Nella griglia, una sola miniatura in tutto il lavoro riempie il foglio (girato come il
+    /// file) invece di stare in una colonna.
+    pub fill_single: bool,
 }
 
 impl Default for PrintSettings {
@@ -395,6 +398,7 @@ impl Default for PrintSettings {
             show_trim: true,
             show_summary: false,
             show_notes: true,
+            fill_single: true,
         }
     }
 }

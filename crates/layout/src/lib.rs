@@ -237,6 +237,30 @@ struct Row {
     cells: Vec<Placed>,
 }
 
+/// L'unica miniatura del lavoro, grande quanto il foglio lascia: larga tutta l'area e alta
+/// quanto resta tolte intestazione (alta `header`), nota della cartella e didascalia.
+fn single_row(settings: &PrintSettings, item: &Item, area: Rect, header: f64, max_text: f64) -> Row {
+    let caption_h = height(item.caption, max_text);
+    let note = height(item.folder_note, area.h - header - settings.row_gap);
+    // Un filo di margine contro gli arrotondamenti: la riga deve stare nel primo foglio.
+    let room = (area.h - header - note - settings.row_gap - caption_h - 1e-6).max(area.h * 0.05);
+    let fitted = item
+        .content
+        .fit_within(Size::new(area.w, room))
+        .unwrap_or(Size::new(area.w, room));
+    let x = area.x;
+    Row {
+        first: 0,
+        height: fitted.h + caption_h,
+        cells: vec![Placed {
+            id: item.id,
+            cell: Rect::new(x, 0.0, area.w, fitted.h + caption_h),
+            image: Rect::new(x + (area.w - fitted.w) / 2.0, 0.0, fitted.w, fitted.h),
+            caption: Rect::new(x, fitted.h, area.w, caption_h),
+        }],
+    }
+}
+
 /// Le righe della griglia: fino a `columns` celle della stessa cartella. Ogni riga è alta quanto
 /// la sua immagine più alta più la sua didascalia più alta, e le immagini poggiano sulla
 /// didascalia, così una riga di soli formati orizzontali non lascia un vuoto.
@@ -443,7 +467,10 @@ pub fn grid_with_title(
     } else {
         (printable, None)
     };
+    let single = settings.view == View::Grid && settings.fill_single && items.len() == 1;
     let cell_w = match settings.view {
+        // Il file solo si adatta allo spazio che resta: qui conta solo quanto lasciare ai testi.
+        View::Grid if single => cell_width(settings).min((area.h - settings.header - settings.row_gap) / 2.0),
         View::Grid => cell_width(settings),
         View::List => list_thumb(settings),
         View::Nesting => nesting_max(settings),
@@ -462,10 +489,13 @@ pub fn grid_with_title(
     // Lo spazio massimo per i testi sotto le immagini e sotto l'intestazione: oltre, il testo
     // viene tagliato, ma la riga sta sempre in un foglio.
     let max_text = area.h - tallest - settings.row_gap - cell_w;
-    let rows = match settings.view {
-        View::Grid => grid_rows(settings, items, area, max_text),
-        View::List => list_rows(settings, items, area, max_text),
-        View::Nesting => nesting_rows(settings, items, area, max_text),
+    let rows = match (settings.view, items) {
+        (View::Grid, [only]) if settings.fill_single => {
+            vec![single_row(settings, only, area, head(only.header), max_text)]
+        }
+        (View::Grid, _) => grid_rows(settings, items, area, max_text),
+        (View::List, _) => list_rows(settings, items, area, max_text),
+        (View::Nesting, _) => nesting_rows(settings, items, area, max_text),
     };
 
     let new_sheet = || Sheet {
