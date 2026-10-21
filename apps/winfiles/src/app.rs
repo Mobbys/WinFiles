@@ -1610,11 +1610,9 @@ impl WinFilesApp {
                 .layout(egui::Layout::left_to_right(Align::Center)),
         );
         let print = &self.project.print;
-        // Un file solo a tutta pagina gira il foglio come il file: lo si dice.
-        let single = single_page(&self.project, &self.slots);
-        let orientation = match (single, print.orientation) {
-            (Some(s), _) if s.w > s.h => "orizzontale, un file a tutta pagina",
-            (Some(_), _) => "verticale, un file a tutta pagina",
+        // A tutta pagina il foglio si gira come il file: lo si dice.
+        let orientation = match (full_pages(&self.project, &self.slots), print.orientation) {
+            (Some(what), _) => what,
             (None, Orientation::Portrait) => "verticale",
             (None, Orientation::Landscape) => "orizzontale",
         };
@@ -2192,18 +2190,13 @@ impl WinFilesApp {
             return pages.clone();
         }
         self.slots = captions::slots(&self.project);
-        // Una sola miniatura riempie il foglio, girato come il file: si impagina come con una
-        // colonna sola (così anche la didascalia è larga quanto il foglio).
-        let single = single_page(&self.project, &self.slots);
+        // Una miniatura per foglio (o l'unica del lavoro) riempie il foglio, girato come il file:
+        // i testi si misurano come con una colonna sola, sul foglio verticale (il più stretto).
         let mut project = std::borrow::Cow::Borrowed(&self.project);
-        if let Some(content) = single {
+        if full_pages(&self.project, &self.slots).is_some() {
             let p = project.to_mut();
             p.print.columns = 1;
-            p.print.orientation = if content.w > content.h {
-                winfiles_geom::Orientation::Landscape
-            } else {
-                winfiles_geom::Orientation::Portrait
-            };
+            p.print.orientation = winfiles_geom::Orientation::Portrait;
         }
         let project = project.as_ref();
         // L'altezza delle intestazioni segue il corpo del loro testo.
@@ -2230,17 +2223,20 @@ impl WinFilesApp {
     }
 }
 
-/// Il formato dell'unica miniatura del lavoro, quando la griglia la deve far riempire il foglio.
-fn single_page(project: &Project, slots: &[Slot]) -> Option<winfiles_geom::Size> {
+/// Se la griglia mette le miniature a tutta pagina (una per foglio, o l'unica del lavoro), come
+/// dirlo sopra l'anteprima.
+fn full_pages(project: &Project, slots: &[Slot]) -> Option<&'static str> {
     let print = &project.print;
-    let [only] = slots else {
-        return None;
-    };
-    if !print.fill_single || print.view != View::Grid {
+    if print.view != View::Grid {
         return None;
     }
-    let size = project.files.get(only.file)?.pages.get(only.page)?.finished();
-    (size.w.is_finite() && size.h.is_finite() && size.w > 0.0 && size.h > 0.0).then_some(size)
+    if print.one_per_sheet {
+        Some("una per foglio, girato come il file")
+    } else if print.fill_single && slots.len() == 1 {
+        Some("un file a tutta pagina, girato come il file")
+    } else {
+        None
+    }
 }
 
 /// Il foglio (contando il riepilogo) dove sta la miniatura della pagina `page` del file `file`.

@@ -373,6 +373,8 @@ pub struct PrintSettings {
     /// Nella griglia, una sola miniatura in tutto il lavoro riempie il foglio (girato come il
     /// file) invece di stare in una colonna.
     pub fill_single: bool,
+    /// Nella griglia, una miniatura per foglio, grande quanto il foglio e girata come il file.
+    pub one_per_sheet: bool,
 }
 
 impl Default for PrintSettings {
@@ -399,6 +401,7 @@ impl Default for PrintSettings {
             show_summary: false,
             show_notes: true,
             fill_single: true,
+            one_per_sheet: false,
         }
     }
 }

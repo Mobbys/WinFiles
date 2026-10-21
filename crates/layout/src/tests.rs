@@ -302,11 +302,20 @@ fn settings_strategy() -> impl Strategy<Value = PrintSettings> {
         1u32..=MAX_COLUMNS,
         (0.0f64..10.0, 0.0f64..10.0),
         0.0f64..15.0,
-        (any::<bool>(), 0u8..3),
+        (any::<bool>(), 0u8..3, any::<bool>()),
     )
         .prop_map(
-            |(paper, orientation, margin, columns, (gap, row_gap), header, (page_break_per_folder, view))| {
+            |(
+                paper,
+                orientation,
+                margin,
+                columns,
+                (gap, row_gap),
+                header,
+                (page_break_per_folder, view, one),
+            )| {
                 PrintSettings {
+                    one_per_sheet: one,
                     paper,
                     orientation,
                     list_thumb: f64::from(columns) * 9.0,
@@ -522,16 +531,12 @@ fn un_file_solo_riempie_il_foglio() {
     assert!(only.image.h > 0.8 * area.h, "troppo piccola: {:?}", only.image);
     assert!(only.cell.bottom() <= area.bottom() + 1e-9);
     assert!((only.image.w / only.image.h - 210.0 / 297.0).abs() < 1e-6);
-    // Orizzontale: larga tutta l'area.
+    // Molto orizzontale: larga tutta l'area (del foglio girato).
     let sheets = grid(&settings, &[item(0, 400.0, 100.0, "a")]).unwrap();
-    assert!((sheets[0].items[0].image.w - area.w).abs() < 1e-9);
-    // Con una colonna sola e il foglio orizzontale (come lo gira l'app) ci sta comunque.
-    let wide = PrintSettings {
-        columns: 1,
-        orientation: Orientation::Landscape,
-        ..PrintSettings::default()
-    };
-    let sheets = grid(&wide, &[item(0, 1200.0, 800.0, "a")]).unwrap();
+    assert!((sheets[0].items[0].image.w - (297.0 - 20.0)).abs() < 1e-9);
+    // Orizzontale: il foglio si gira e il file è largo tutta l'area.
+    let sheets = grid(&settings, &[item(0, 1200.0, 800.0, "a")]).unwrap();
+    assert!(sheets[0].size.w > sheets[0].size.h);
     assert!(sheets[0].items[0].image.h > 150.0);
     // Spento, resta in una colonna come le altre.
     let off = PrintSettings {
@@ -540,4 +545,37 @@ fn un_file_solo_riempie_il_foglio() {
     };
     let sheets = grid(&off, &[item(0, 210.0, 297.0, "a")]).unwrap();
     assert!(sheets[0].items[0].image.w < area.w / 3.0);
+}
+
+#[test]
+fn una_per_foglio() {
+    let settings = PrintSettings {
+        one_per_sheet: true,
+        ..PrintSettings::default()
+    };
+    let mut items = vec![
+        item(0, 210.0, 297.0, "a"),
+        item(1, 400.0, 200.0, "a"),
+        item(2, 100.0, 100.0, "b"),
+    ];
+    items[0].folder_note = 8.0;
+    items[1].folder_note = 8.0;
+    let sheets = grid(&settings, &items).unwrap();
+    assert_eq!(sheets.len(), 3);
+    for (sheet, item) in sheets.iter().zip(&items) {
+        assert_eq!(sheet.items.len(), 1);
+        assert_eq!(sheet.headers.len(), 1);
+        let placed = &sheet.items[0];
+        assert_eq!(placed.id, item.id);
+        // Dentro il foglio, sotto l'intestazione, e grande.
+        assert!(placed.cell.bottom() <= sheet.area.bottom() + 1e-9);
+        assert!(placed.cell.y >= sheet.headers[0].rect.bottom() + settings.row_gap - 1e-9);
+        assert!(placed.image.w > 0.9 * sheet.area.w || placed.image.h > 0.7 * sheet.area.h);
+    }
+    // Il foglio si gira come il file.
+    assert!(sheets[0].size.h > sheets[0].size.w && sheets[1].size.w > sheets[1].size.h);
+    // La cartella che continua lo dice, e la nota sta solo sul primo foglio.
+    assert!(!sheets[0].headers[0].continued && sheets[0].headers[0].note.is_some());
+    assert!(sheets[1].headers[0].continued && sheets[1].headers[0].note.is_none());
+    assert!(!sheets[2].headers[0].continued);
 }

@@ -10,7 +10,7 @@
 //! Le altezze dei testi (didascalia e note) le misura chi chiama, perché dipendono dai caratteri:
 //! qui arrivano già in millimetri.
 
-use winfiles_geom::{Rect, Size, sheet_size};
+use winfiles_geom::{Orientation, Rect, Size, sheet_size};
 use winfiles_model::{PrintSettings, View};
 
 pub mod calibration;
@@ -237,28 +237,94 @@ struct Row {
     cells: Vec<Placed>,
 }
 
-/// L'unica miniatura del lavoro, grande quanto il foglio lascia: larga tutta l'area e alta
-/// quanto resta tolte intestazione (alta `header`), nota della cartella e didascalia.
-fn single_row(settings: &PrintSettings, item: &Item, area: Rect, header: f64, max_text: f64) -> Row {
-    let caption_h = height(item.caption, max_text);
-    let note = height(item.folder_note, area.h - header - settings.row_gap);
-    // Un filo di margine contro gli arrotondamenti: la riga deve stare nel primo foglio.
-    let room = (area.h - header - note - settings.row_gap - caption_h - 1e-6).max(area.h * 0.05);
-    let fitted = item
-        .content
-        .fit_within(Size::new(area.w, room))
-        .unwrap_or(Size::new(area.w, room));
-    let x = area.x;
-    Row {
-        first: 0,
-        height: fitted.h + caption_h,
-        cells: vec![Placed {
-            id: item.id,
-            cell: Rect::new(x, 0.0, area.w, fitted.h + caption_h),
-            image: Rect::new(x + (area.w - fitted.w) / 2.0, 0.0, fitted.w, fitted.h),
-            caption: Rect::new(x, fitted.h, area.w, caption_h),
-        }],
+/// Una miniatura per foglio, grande quanto il foglio lascia (anche l'unica miniatura di un
+/// lavoro, con `fill_single`). Ogni foglio è girato come il suo file; sopra c'è l'intestazione
+/// della cartella (con la nota solo sul primo foglio della cartella), sotto la didascalia.
+fn full_pages(settings: &PrintSettings, items: &[Item], title: f64) -> Result<Vec<Sheet>, LayoutError> {
+    let mut sheets = Vec::with_capacity(items.len());
+    let mut previous: Option<&str> = None;
+    for item in items {
+        let landscape = item.content.w > item.content.h;
+        let orientation = if landscape {
+            Orientation::Landscape
+        } else {
+            Orientation::Portrait
+        };
+        let size = sheet_size(settings.paper, orientation);
+        let printable = Rect::new(0.0, 0.0, size.w, size.h).inset(settings.margins);
+        let title_h = height(title, printable.h / 3.0);
+        let (area, title_rect) = if title_h > EPS {
+            let top = title_h + settings.row_gap;
+            (
+                Rect::new(
+                    printable.x,
+                    printable.y + top,
+                    printable.w,
+                    (printable.h - top).max(0.0),
+                ),
+                Some(Rect::new(printable.x, printable.y, printable.w, title_h)),
+            )
+        } else {
+            (printable, None)
+        };
+        let continued = previous == Some(item.folder.as_str());
+        // Intestazione e testi prendono al massimo metà del foglio: il file resta il protagonista.
+        let half = (area.h - settings.row_gap) / 2.0;
+        if area.w <= EPS || half <= settings.header {
+            return Err(LayoutError::NothingFits);
+        }
+        let header = height(
+            if continued {
+                item.header_continued
+            } else {
+                item.header
+            },
+            half,
+        )
+        .max(settings.header);
+        let note = if continued {
+            0.0
+        } else {
+            height(item.folder_note, half - header)
+        };
+        let top = area.y + header + note + settings.row_gap;
+        // Il file ha sempre almeno un ventesimo del foglio; la didascalia prende il resto, se serve.
+        let least = area.h * 0.05;
+        let caption_h = height(item.caption, (area.bottom() - top - least).min(half));
+        // Un filo di margine contro gli arrotondamenti.
+        let room = (area.bottom() - top - caption_h - 1e-6).max(0.0);
+        let fitted = item
+            .content
+            .fit_within(Size::new(area.w, room))
+            .unwrap_or(Size::new(area.w, room));
+        sheets.push(Sheet {
+            size,
+            area: printable,
+            title: title_rect,
+            headers: vec![Header {
+                folder: item.folder.clone(),
+                rect: Rect::new(area.x, area.y, area.w, header + note),
+                note: (note > EPS).then(|| Rect::new(area.x, area.y + header, area.w, note)),
+                continued,
+            }],
+            items: vec![Placed {
+                id: item.id,
+                cell: Rect::new(area.x, top, area.w, fitted.h + caption_h),
+                image: Rect::new(area.x + (area.w - fitted.w) / 2.0, top, fitted.w, fitted.h),
+                caption: Rect::new(area.x, top + fitted.h, area.w, caption_h),
+            }],
+        });
+        previous = Some(item.folder.as_str());
     }
+    if sheets.is_empty() {
+        let size = sheet_size(settings.paper, settings.orientation);
+        sheets.push(Sheet {
+            size,
+            area: Rect::new(0.0, 0.0, size.w, size.h).inset(settings.margins),
+            ..Sheet::default()
+        });
+    }
+    Ok(sheets)
 }
 
 /// Le righe della griglia: fino a `columns` celle della stessa cartella. Ogni riga è alta quanto
@@ -449,6 +515,9 @@ pub fn grid_with_title(
     title: f64,
 ) -> Result<Vec<Sheet>, LayoutError> {
     check(settings)?;
+    if settings.view == View::Grid && (settings.one_per_sheet || (settings.fill_single && items.len() == 1)) {
+        return full_pages(settings, items, title);
+    }
     let size = sheet_size(settings.paper, settings.orientation);
     let printable = Rect::new(0.0, 0.0, size.w, size.h).inset(settings.margins);
     let title = height(title, printable.h);
@@ -467,10 +536,7 @@ pub fn grid_with_title(
     } else {
         (printable, None)
     };
-    let single = settings.view == View::Grid && settings.fill_single && items.len() == 1;
     let cell_w = match settings.view {
-        // Il file solo si adatta allo spazio che resta: qui conta solo quanto lasciare ai testi.
-        View::Grid if single => cell_width(settings).min((area.h - settings.header - settings.row_gap) / 2.0),
         View::Grid => cell_width(settings),
         View::List => list_thumb(settings),
         View::Nesting => nesting_max(settings),
@@ -489,13 +555,10 @@ pub fn grid_with_title(
     // Lo spazio massimo per i testi sotto le immagini e sotto l'intestazione: oltre, il testo
     // viene tagliato, ma la riga sta sempre in un foglio.
     let max_text = area.h - tallest - settings.row_gap - cell_w;
-    let rows = match (settings.view, items) {
-        (View::Grid, [only]) if settings.fill_single => {
-            vec![single_row(settings, only, area, head(only.header), max_text)]
-        }
-        (View::Grid, _) => grid_rows(settings, items, area, max_text),
-        (View::List, _) => list_rows(settings, items, area, max_text),
-        (View::Nesting, _) => nesting_rows(settings, items, area, max_text),
+    let rows = match settings.view {
+        View::Grid => grid_rows(settings, items, area, max_text),
+        View::List => list_rows(settings, items, area, max_text),
+        View::Nesting => nesting_rows(settings, items, area, max_text),
     };
 
     let new_sheet = || Sheet {
