@@ -46,6 +46,12 @@ pub struct WinFilesApp {
     legacy_search: Option<std::sync::mpsc::Receiver<Option<crate::legacy::Legacy>>>,
     legacy: Option<crate::legacy::Legacy>,
     keep_legacy: bool,
+    /// "Apri in WinFiles" nel menu corto di Windows 11: il controllo in corso, poi la barra da
+    /// mostrare; `menu11_later` se si è scelto "Non ora".
+    menu11_check: Option<std::sync::mpsc::Receiver<crate::menu11::Status>>,
+    menu11: Option<crate::menu11::Status>,
+    menu11_busy: bool,
+    menu11_later: bool,
     /// I file non supportati tolti con la casella, da rimettere se la si riaccende.
     pub(crate) parked: Vec<winfiles_model::FileEntry>,
     pub(crate) theme: ThemeChoice,
@@ -192,6 +198,12 @@ impl WinFilesApp {
             legacy_search: (!prefs.keep_legacy).then(crate::legacy::find),
             legacy: None,
             keep_legacy: prefs.keep_legacy,
+            // Anche con "Non ora" si controlla: una versione nuova registra il suo pacchetto da sola
+            // se il certificato c'è già.
+            menu11_check: Some(crate::menu11::check()),
+            menu11: None,
+            menu11_busy: false,
+            menu11_later: prefs.menu11_later,
             parked: Vec::new(),
             theme: prefs.theme,
             applied: None,
@@ -429,8 +441,107 @@ impl WinFilesApp {
             });
     }
 
+    /// La barra che propone il certificato Winsport per il menu corto di Windows 11.
+    fn menu11_bar(&mut self, ui: &mut egui::Ui) {
+        use crate::menu11::Status;
+        if let Some(rx) = &self.menu11_check
+            && let Ok(found) = rx.try_recv()
+        {
+            self.menu11_check = None;
+            let asked = self.menu11_busy;
+            self.menu11_busy = false;
+            match found {
+                Status::Ready if asked => {
+                    self.status = "«Apri in WinFiles» è nel menu di Windows 11. Se non la vedi, \
+                                   riavvia il PC."
+                        .into();
+                    self.menu11 = None;
+                }
+                Status::Ready | Status::Unavailable => self.menu11 = None,
+                other if self.menu11_later && !asked => drop(other),
+                other => self.menu11 = Some(other),
+            }
+        }
+        let Some(state) = self.menu11.clone() else {
+            return;
+        };
+        let t = Tokens::get(ui.ctx());
+        let (title, detail) = match &state {
+            Status::Failed(e) => (
+                "La voce «Apri in WinFiles» non è entrata nel menu di Windows 11.".to_string(),
+                e.clone(),
+            ),
+            Status::Cancelled => (
+                "Il certificato Winsport non è stato installato.".to_string(),
+                "Serve la conferma dell'amministratore del PC.".to_string(),
+            ),
+            _ => (
+                "Per avere «Apri in WinFiles» nel menu corto di Windows 11 serve il certificato \
+                 Winsport su questo PC."
+                    .to_string(),
+                "Si installa una volta sola e chiede la conferma dell'amministratore.".to_string(),
+            ),
+        };
+        let frame = egui::Frame::NONE
+            .fill(t.panel)
+            .stroke(egui::Stroke::new(1.0, t.border))
+            .corner_radius(t.card_radius)
+            .inner_margin(egui::Margin::symmetric(12, 4))
+            .outer_margin(egui::Margin {
+                left: 10,
+                right: 10,
+                top: 0,
+                bottom: 6,
+            });
+        egui::Panel::top("barra-menu-windows-11")
+            .frame(egui::Frame::NONE.fill(t.app_bar))
+            .show(ui, |ui| {
+                frame.show(ui, |ui| {
+                    ui.set_min_height(30.0);
+                    ui.horizontal_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new(title)
+                                .font(semibold(13.0))
+                                .color(t.text_strong),
+                        );
+                        ui.label(egui::RichText::new(detail).size(12.5).color(t.text_dim));
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if self.menu11_busy {
+                                ui.label(
+                                    egui::RichText::new("Installo il certificato…")
+                                        .size(12.5)
+                                        .color(t.text_dim),
+                                );
+                                return;
+                            }
+                            let failed = matches!(state, Status::Failed(_));
+                            if ui.button(if failed { "Chiudi" } else { "Non ora" }).clicked() {
+                                self.menu11 = None;
+                                self.menu11_later = true;
+                            }
+                            if failed {
+                                return;
+                            }
+                            let install = egui::Button::new(
+                                egui::RichText::new("Installa il certificato")
+                                    .font(semibold(13.0))
+                                    .color(t.on_primary),
+                            )
+                            .fill(t.primary)
+                            .min_size(vec2(96.0, 26.0));
+                            if ui.add(install).clicked() {
+                                self.menu11_busy = true;
+                                self.menu11_check = Some(crate::menu11::install_certificate());
+                            }
+                        });
+                    });
+                });
+            });
+    }
+
     fn update_bar(&mut self, ui: &mut egui::Ui) {
         self.legacy_bar(ui);
+        self.menu11_bar(ui);
         use crate::update::State;
         self.updater.poll();
         let installed = crate::update::installed();
@@ -1410,6 +1521,14 @@ impl WinFilesApp {
                             if ui.button("Controlla aggiornamenti").clicked() {
                                 ui.close();
                                 self.check_updates(true);
+                            }
+                            if ui.button("«Apri in WinFiles» nel menu di Windows 11").clicked() {
+                                ui.close();
+                                self.menu11_later = false;
+                                self.menu11_busy = false;
+                                self.menu11 = None;
+                                self.menu11_check = Some(crate::menu11::check());
+                                self.status = "Controllo il menu di Windows 11…".into();
                             }
                             dim_label(ui, "Trascina file o cartelle nella finestra per aggiungerli.");
                         });
@@ -2394,6 +2513,7 @@ impl WinFilesApp {
             maximized,
             hide_unsupported: self.hide_unsupported,
             keep_legacy: self.keep_legacy,
+            menu11_later: self.menu11_later,
         }
     }
 

@@ -98,6 +98,8 @@ pub struct Prefs {
     pub hide_unsupported: bool,
     /// Si è scelto di tenere la vecchia WinFile 4.9: non lo si chiede più.
     pub keep_legacy: bool,
+    /// "Non ora" sul certificato del menu di Windows 11: la barra non si ripropone da sola.
+    pub menu11_later: bool,
 }
 
 impl Prefs {
@@ -221,6 +223,7 @@ mod tests {
             maximized: true,
             hide_unsupported: true,
             keep_legacy: true,
+            menu11_later: true,
         };
         save_to(&file, &prefs).unwrap();
         assert_eq!(load_from(&file), prefs);

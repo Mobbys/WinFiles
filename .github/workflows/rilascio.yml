@@ -57,12 +57,26 @@ jobs:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
-      - run: cargo build --release -p winfiles
+      - run: cargo build --release -p winfiles -p winfiles-menu11
+      # Il pacchetto firmato del menu di Windows 11 (ADR 0022); senza i segreti del certificato
+      # Winsport non si crea e l'MSI esce senza.
+      - name: Menu di Windows 11
+        shell: powershell
+        env:
+          WINSPORT_PFX: ${{ secrets.WINSPORT_PFX }}
+          WINSPORT_PFX_PASSWORD: ${{ secrets.WINSPORT_PFX_PASSWORD }}
+          VERSION: ${{ needs.versione.outputs.version }}
+        run: installer/crea-pacchetto-menu.ps1 -Versione $env:VERSION -Dll target/release/winfiles_menu11.dll -Exe target/release/winfiles.exe -Uscita menu
       - uses: actions/upload-artifact@v4
         with:
           name: winfiles-rilascio
           path: target/release/winfiles.exe
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winfiles-menu
+          path: menu/
+          if-no-files-found: ignore
 
   pubblica:
     name: Installer e rilascio
@@ -76,12 +90,18 @@ jobs:
         with:
           name: winfiles-rilascio
           path: windows
+      - uses: actions/download-artifact@v4
+        # Manca quando non ci sono i segreti del certificato.
+        continue-on-error: true
+        with:
+          name: winfiles-menu
+          path: menu
       - run: sudo apt-get update -q && sudo apt-get install -y -q wixl
       - name: Installer e copia portatile
         env:
           VERSION: ${{ needs.versione.outputs.version }}
         run: |
-          installer/crea-msi.sh windows/winfiles.exe "WinFiles-${VERSION}.msi"
+          installer/crea-msi.sh windows/winfiles.exe "WinFiles-${VERSION}.msi" menu
           cp windows/winfiles.exe "WinFiles-${VERSION}-portatile.exe"
       - name: Rilascio su GitHub
         shell: bash

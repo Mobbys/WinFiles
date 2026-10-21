@@ -6514,6 +6514,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "winfiles-menu11"
+version = "0.2.13"
+dependencies = [
+ "windows",
+ "windows-core",
+ "windows-registry",
+]
+
+[[package]]
 name = "winfiles-model"
 version = "0.2.13"
 dependencies = [

@@ -23,6 +23,12 @@
           <Directory Id="INSTALLDIR" Name="WinFiles">
             <Component Id="Programma" Guid="0E3C1F6A-8B2D-4C57-A1E9-5D7F3B2C6A10">
               <File Id="WinFilesExe" Name="WinFiles.exe" Source="$(var.Exe)" />
+<?ifdef var.Menu ?>
+              <!-- La voce del menu corto di Windows 11 (ADR 0022): la DLL e il pacchetto firmato
+                   che WinFiles registra al primo avvio. Senza certificato in CI non ci sono. -->
+              <File Id="MenuDll" Name="winfiles_menu11.dll" Source="$(var.MenuDll)" />
+              <File Id="MenuMsix" Name="WinFilesMenu.msix" Source="$(var.Menu)" />
+<?endif ?>
               <RegistryValue Root="HKCU" Key="Software\WinFiles" Name="Cartella" Type="string" Value="[INSTALLDIR]" KeyPath="yes" />
               <RemoveFolder Id="RimuoviCartella" On="uninstall" />
             </Component>
@@ -71,6 +77,13 @@
         </Component>
       </Directory>
     </Directory>
+
+    <!-- Alla disinstallazione (non all'aggiornamento) WinFiles toglie il pacchetto del menu di
+         Windows 11, finché il programma c'è ancora. -->
+    <CustomAction Id="TogliMenuWindows11" FileKey="WinFilesExe" ExeCommand="--togli-menu" Execute="immediate" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="TogliMenuWindows11" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+    </InstallExecuteSequence>
 
     <Feature Id="Completa" Title="WinFiles" Level="1">
       <ComponentRef Id="Programma" />

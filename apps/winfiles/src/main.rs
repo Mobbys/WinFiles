@@ -20,6 +20,7 @@ mod images;
 mod instance;
 mod legacy;
 mod measure;
+mod menu11;
 mod paint;
 mod pan;
 mod panels;
@@ -71,6 +72,11 @@ fn main() -> eframe::Result {
     // `--aggiungi a.pdf …` (il tasto destro "Apri in WinFiles") manda i file alla finestra già
     // aperta, se c'è, invece di aprirne un'altra.
     let mut add = false;
+    // `--togli-menu`: la disinstallazione toglie la voce del menu di Windows 11, poi si chiude.
+    if std::env::args_os().nth(1).is_some_and(|a| a == "--togli-menu") {
+        menu11::unregister();
+        return Ok(());
+    }
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--pdf" {
