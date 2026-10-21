@@ -1476,6 +1476,21 @@ impl WinFilesApp {
                         View::Grid => {
                             dim_label(ui, "Colonne");
                             stepper(ui, &mut print.columns, 1, MAX_COLUMNS);
+                            ui.add_space(10.0);
+                            ui.add(crate::fluent::checkbox(
+                                &mut print.fill_single,
+                                "1 file a tutta pagina",
+                            ))
+                            .on_hover_text(
+                                "Quando c'è una sola miniatura, la fa grande quanto il foglio e gira il \
+                                 foglio come il file",
+                            );
+                            ui.add_space(8.0);
+                            ui.add(crate::fluent::checkbox(&mut print.one_per_sheet, "1 per foglio"))
+                                .on_hover_text(
+                                    "Ogni miniatura su un foglio suo, grande quanto il foglio e girato \
+                                     come il file",
+                                );
                         }
                         View::List => {
                             dim_label(ui, "Miniatura");
