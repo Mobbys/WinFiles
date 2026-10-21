@@ -140,6 +140,8 @@ pub struct WinFilesApp {
     pub(crate) pdf: crate::pdf::PdfModule,
     /// Il modulo immagini (Fase 8), con le immagini aperte.
     pub(crate) images: crate::images::ImagesModule,
+    /// I file mandati da "Apri in WinFiles" mentre la finestra è aperta.
+    inbox: Option<crate::instance::Inbox>,
 }
 
 /// I moduli di WinFiles, come le schede della 4.9.
@@ -235,6 +237,7 @@ impl WinFilesApp {
             module: Module::Thumbnails,
             pdf: crate::pdf::PdfModule::new(ctx),
             images: crate::images::ImagesModule::new(ctx),
+            inbox: None,
         };
         // Le stampanti si cercano subito, così Stampa le trova già pronte.
         if app.batch_pdf.is_none() && app.batch_calibration.is_none() {
@@ -263,6 +266,15 @@ impl WinFilesApp {
             app.add_paths(files);
         }
         app
+    }
+
+    /// Riceve i file di "Apri in WinFiles" mandati da altre copie di WinFiles.
+    pub fn with_inbox(mut self, ctx: &egui::Context, inbox: Option<crate::instance::Inbox>) -> Self {
+        if let Some(inbox) = &inbox {
+            inbox.attach(ctx);
+        }
+        self.inbox = inbox;
+        self
     }
 
     /// Chiede dove salvare e scrive tutti i fogli in un PDF, in un thread a parte; la fine arriva
@@ -2407,13 +2419,23 @@ impl WinFilesApp {
 impl eframe::App for WinFilesApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        let dropped: Vec<PathBuf> = ui.ctx().input(|i| {
+        let mut dropped: Vec<PathBuf> = ui.ctx().input(|i| {
             i.raw
                 .dropped_files
                 .iter()
                 .map(|f| f.path().to_path_buf())
                 .collect()
         });
+        // I file di "Apri in WinFiles" vanno sempre in Miniature, come se li avessi trascinati lì.
+        let sent = self
+            .inbox
+            .as_ref()
+            .map(crate::instance::Inbox::take)
+            .unwrap_or_default();
+        if !sent.is_empty() {
+            self.module = Module::Thumbnails;
+            dropped.extend(sent);
+        }
         let pdf_mode = self.module == Module::Pdf;
         let images_mode = self.module == Module::Images;
         if pdf_mode {

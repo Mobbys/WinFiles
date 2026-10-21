@@ -17,6 +17,7 @@ mod filter;
 mod fluent;
 mod icons;
 mod images;
+mod instance;
 mod legacy;
 mod measure;
 mod paint;
@@ -67,12 +68,17 @@ fn main() -> eframe::Result {
     let mut calibration = None;
     let mut edit_pdf = None;
     let mut edit_images: Vec<std::path::PathBuf> = Vec::new();
+    // `--aggiungi a.pdf …` (il tasto destro "Apri in WinFiles") manda i file alla finestra già
+    // aperta, se c'è, invece di aprirne un'altra.
+    let mut add = false;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--pdf" {
             pdf = args.next().map(Into::into);
         } else if arg == "--modifica-pdf" {
             edit_pdf = args.next().map(Into::into);
+        } else if arg == "--aggiungi" {
+            add = true;
         } else if arg == "--modifica-immagini" {
             edit_images.extend(args.by_ref().map(Into::into));
         } else if arg == "--calibrazione" {
@@ -82,24 +88,36 @@ fn main() -> eframe::Result {
             };
             calibration = args.next().map(|path| (paper, path.into()));
         } else {
-            paths.push(arg.into());
+            paths.push(instance::arg_path(arg));
         }
     }
+    // Le esportazioni da riga di comando non aprono finestre: niente da ricevere.
+    let inbox = if pdf.is_none() && calibration.is_none() {
+        match instance::start(&paths, add) {
+            instance::Start::Forwarded => return Ok(()),
+            instance::Start::Window(inbox) => inbox,
+        }
+    } else {
+        None
+    };
     eframe::run_native(
         "WinFiles",
         options,
         Box::new(|cc| {
             theme::install_fonts(&cc.egui_ctx);
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            Ok(Box::new(app::WinFilesApp::new(
-                &cc.egui_ctx,
-                paths,
-                pdf,
-                calibration,
-                edit_pdf,
-                edit_images,
-                prefs,
-            )))
+            Ok(Box::new(
+                app::WinFilesApp::new(
+                    &cc.egui_ctx,
+                    paths,
+                    pdf,
+                    calibration,
+                    edit_pdf,
+                    edit_images,
+                    prefs,
+                )
+                .with_inbox(&cc.egui_ctx, inbox),
+            ))
         }),
     )
 }
