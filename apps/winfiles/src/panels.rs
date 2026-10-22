@@ -1654,6 +1654,8 @@ impl WinFilesApp {
             ));
             ui.add(fluent::checkbox(&mut print.show_notes, "Stampa le note"))
                 .on_hover_text("Spento: le note restano nel lavoro ma non vanno sul foglio");
+            ui.add(fluent::checkbox(&mut print.show_path, "Percorso della cartella"))
+                .on_hover_text("Il percorso completo della cartella, sotto la sua intestazione");
             ui.add_space(8.0);
             let sheet = winfiles_geom::sheet_size(print.paper, print.orientation);
             let area = Size::new(

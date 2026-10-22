@@ -84,6 +84,12 @@ pub struct WinFilesApp {
     export: Option<crate::export::Export>,
     /// Esportare al prossimo fotogramma, quando i fogli sono pronti.
     want_export: bool,
+    /// Larghezza dei gruppi della barra dei controlli all'ultimo disegno, per mandarli a capo
+    /// quando la finestra è stretta; e quella dei pulsanti a destra.
+    bar_widths: [f32; BAR_GROUPS],
+    bar_right: f32,
+    /// Larghezza di marchio e menu e di unità e tema nella barra in alto.
+    app_bar_widths: (f32, f32),
     /// Aprire la finestra Stampa al prossimo fotogramma.
     want_print: bool,
     /// La finestra Stampa aperta.
@@ -222,6 +228,9 @@ impl WinFilesApp {
             scans: Vec::new(),
             export: None,
             want_export: false,
+            bar_widths: [0.0; BAR_GROUPS],
+            bar_right: 260.0,
+            app_bar_widths: (0.0, 0.0),
             want_print: false,
             print_dialog: None,
             module_print: None,
@@ -1318,11 +1327,38 @@ impl WinFilesApp {
             top: 8,
             bottom: 2,
         });
+        // Se marchio, moduli e menu non stanno accanto a unità e tema, questi vanno sulla riga
+        // sotto, a destra (larghezze misurate al disegno precedente).
+        let two_rows = self.app_bar_widths.0 + self.app_bar_widths.1 + 24.0 > ui.available_width() - 28.0;
         egui::Panel::top("barra-menu")
-            .exact_size(48.0)
+            .exact_size(if two_rows { 88.0 } else { 48.0 })
             .frame(frame)
             .show(ui, |ui| {
-                ui.horizontal_centered(|ui| {
+                let area = ui.available_rect_before_wrap();
+                let (top, bottom) = if two_rows {
+                    let mid = area.min.y + 38.0;
+                    (area.with_max_y(mid), area.with_min_y(mid))
+                } else {
+                    (area, area)
+                };
+                let mut right = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(bottom)
+                        .layout(egui::Layout::right_to_left(Align::Center)),
+                );
+                self.appearance(&mut right);
+                let right_w = right.min_rect().width();
+                let left_rect = if two_rows {
+                    top
+                } else {
+                    top.with_max_x((top.max.x - right_w - 24.0).max(top.min.x))
+                };
+                let mut left = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(left_rect)
+                        .layout(egui::Layout::left_to_right(Align::Center)),
+                );
+                left.horizontal_centered(|ui| {
                     brand(ui);
                     ui.add_space(12.0);
                     // I moduli, come le schede della 4.9: miniature da stampare e modifica dei PDF.
@@ -1533,29 +1569,38 @@ impl WinFilesApp {
                             dim_label(ui, "Trascina file o cartelle nella finestra per aggiungerli.");
                         });
                     });
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        segmented(
-                            ui,
-                            "tema",
-                            &mut self.theme,
-                            &[
-                                (ThemeChoice::Light, "Chiaro"),
-                                (ThemeChoice::Dark, "Scuro"),
-                                (ThemeChoice::System, "Auto"),
-                            ],
-                        );
-                        dim_label(ui, "Tema");
-                        ui.add_space(12.0);
-                        segmented(
-                            ui,
-                            "unita",
-                            &mut self.project.unit,
-                            &[(Unit::Cm, "cm"), (Unit::Mm, "mm")],
-                        );
-                        dim_label(ui, "Misure");
-                    });
                 });
+                let widths = (left.min_rect().width(), right_w);
+                if (widths.0 - self.app_bar_widths.0).abs() > 0.5
+                    || (widths.1 - self.app_bar_widths.1).abs() > 0.5
+                {
+                    self.app_bar_widths = widths;
+                    ui.ctx().request_repaint();
+                }
             });
+    }
+
+    /// Unità di misura e tema, a destra nella barra in alto.
+    fn appearance(&mut self, ui: &mut egui::Ui) {
+        segmented(
+            ui,
+            "tema",
+            &mut self.theme,
+            &[
+                (ThemeChoice::Light, "Chiaro"),
+                (ThemeChoice::Dark, "Scuro"),
+                (ThemeChoice::System, "Auto"),
+            ],
+        );
+        dim_label(ui, "Tema");
+        ui.add_space(12.0);
+        segmented(
+            ui,
+            "unita",
+            &mut self.project.unit,
+            &[(Unit::Cm, "cm"), (Unit::Mm, "mm")],
+        );
+        dim_label(ui, "Misure");
     }
 
     /// La barra delle scelte di stampa che si cambiano più spesso.
@@ -1567,109 +1612,231 @@ impl WinFilesApp {
             top: 2,
             bottom: 6,
         });
+        // I gruppi di comandi vanno a capo quando non stanno accanto a Esporta PDF e Stampa,
+        // con le larghezze misurate al disegno precedente.
+        let room = ui.available_width() - 28.0 - self.bar_right - 16.0;
+        let rows = bar_rows(&self.bar_widths, room, BAR_GAP);
         egui::Panel::top("barra-controllo")
-            .exact_size(46.0)
+            .exact_size(8.0 + BAR_ROW * rows.len().max(1) as f32)
             .frame(frame)
             .show(ui, |ui| {
-                ui.horizontal_centered(|ui| {
-                    let print = &mut self.project.print;
-                    dim_label(ui, "Foglio");
-                    segmented(
-                        ui,
-                        "carta",
-                        &mut print.paper,
-                        &[(Paper::A4, "A4"), (Paper::A3, "A3")],
+                let area = ui.available_rect_before_wrap();
+                let mut right = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(area)
+                        .layout(egui::Layout::right_to_left(Align::Center)),
+                );
+                self.output_buttons(&mut right, &t);
+                let right_w = right.min_rect().width();
+                if (right_w - self.bar_right).abs() > 0.5 {
+                    self.bar_right = right_w;
+                    ui.ctx().request_repaint();
+                }
+                let left_rect = Rect::from_min_max(
+                    area.min,
+                    egui::pos2((area.max.x - right_w - 16.0).max(area.min.x), area.max.y),
+                );
+                let mut left = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(left_rect)
+                        .layout(egui::Layout::top_down(Align::Min)),
+                );
+                left.spacing_mut().item_spacing.y = 0.0;
+                let mut measured = self.bar_widths;
+                for row in &rows {
+                    left.allocate_ui_with_layout(
+                        vec2(left_rect.width(), BAR_ROW),
+                        egui::Layout::left_to_right(Align::Center),
+                        |ui| {
+                            ui.set_min_height(BAR_ROW);
+                            for (n, &i) in row.iter().enumerate() {
+                                if n > 0 {
+                                    ui.add_space(BAR_GAP);
+                                }
+                                let r = ui.horizontal(|ui| self.bar_group(ui, i));
+                                if let Some(w) = measured.get_mut(i) {
+                                    *w = r.response.rect.width();
+                                }
+                            }
+                        },
                     );
-                    segmented(
-                        ui,
-                        "orientamento",
-                        &mut print.orientation,
-                        &[
-                            (Orientation::Portrait, "Verticale"),
-                            (Orientation::Landscape, "Orizzontale"),
-                        ],
-                    );
-                    ui.add_space(12.0);
-                    dim_label(ui, "Vista");
-                    segmented(
-                        ui,
-                        "vista",
-                        &mut print.view,
-                        &[
-                            (View::Grid, "Griglia"),
-                            (View::List, "Elenco"),
-                            (View::Nesting, "Nesting"),
-                        ],
-                    );
-                    ui.add_space(12.0);
-                    // Il controllo che conta nella vista scelta: colonne, miniatura o scala.
-                    match print.view {
-                        View::Grid => {
-                            dim_label(ui, "Colonne");
-                            stepper(ui, &mut print.columns, 1, MAX_COLUMNS);
-                            ui.add_space(10.0);
-                            ui.add(crate::fluent::checkbox(
-                                &mut print.fill_single,
-                                "1 file a tutta pagina",
-                            ))
-                            .on_hover_text(
-                                "Quando c'è una sola miniatura, la fa grande quanto il foglio e gira il \
-                                 foglio come il file",
-                            );
-                            ui.add_space(8.0);
-                            ui.add(crate::fluent::checkbox(&mut print.one_per_sheet, "1 per foglio"))
-                                .on_hover_text(
-                                    "Ogni miniatura su un foglio suo, grande quanto il foglio e girato \
-                                     come il file",
-                                );
-                        }
-                        View::List => {
-                            dim_label(ui, "Miniatura");
-                            thumb_stepper(ui, &mut print.list_thumb);
-                        }
-                        View::Nesting => {
-                            dim_label(ui, "Scala");
-                            scale_stepper(ui, &mut print.nesting_scale, self.nesting_scale);
-                        }
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        let enabled = !self.project.files.is_empty() && self.export.is_none();
-                        // Stampa: il pulsante principale dell'app, grande e blu.
-                        let (fill, ink) = if enabled {
-                            (t.primary, t.on_primary)
-                        } else {
-                            (t.button, t.text_disabled)
-                        };
-                        let print = egui::Button::image_and_text(
-                            icons::image("printer", 18.0, ink),
-                            egui::RichText::new("Stampa").font(semibold(14.0)).color(ink),
-                        )
-                        .fill(fill)
-                        .min_size(vec2(118.0, 34.0));
-                        if ui
-                            .add_enabled(enabled, print)
-                            .on_hover_text("Stampa i fogli alla misura vera (Ctrl+P)")
-                            .clicked()
-                        {
-                            self.want_print = true;
-                        }
-                        ui.add_space(4.0);
-                        let tint = if enabled { t.text_strong } else { t.text_disabled };
-                        let button = egui::Button::image_and_text(
-                            icons::image("file-down", 17.0, tint),
-                            egui::RichText::new("Esporta PDF").color(tint),
-                        )
-                        .min_size(vec2(0.0, 32.0));
-                        if ui
-                            .add_enabled(enabled, button)
-                            .on_hover_text("Salva tutti i fogli in un PDF, alla misura vera (Ctrl+E)")
-                            .clicked()
-                        {
-                            self.want_export = true;
-                        }
-                    });
-                });
+                }
+                if measured
+                    .iter()
+                    .zip(self.bar_widths)
+                    .any(|(a, b)| (a - b).abs() > 0.5)
+                {
+                    self.bar_widths = measured;
+                    ui.ctx().request_repaint();
+                }
             });
+    }
+
+    /// Un gruppo della barra dei controlli; un gruppo che la vista non usa resta vuoto.
+    fn bar_group(&mut self, ui: &mut egui::Ui, group: usize) {
+        let print = &mut self.project.print;
+        match group {
+            0 => {
+                dim_label(ui, "Foglio");
+                segmented(
+                    ui,
+                    "carta",
+                    &mut print.paper,
+                    &[(Paper::A4, "A4"), (Paper::A3, "A3")],
+                );
+                segmented(
+                    ui,
+                    "orientamento",
+                    &mut print.orientation,
+                    &[
+                        (Orientation::Portrait, "Verticale"),
+                        (Orientation::Landscape, "Orizzontale"),
+                    ],
+                );
+            }
+            1 => {
+                dim_label(ui, "Vista");
+                segmented(
+                    ui,
+                    "vista",
+                    &mut print.view,
+                    &[
+                        (View::Grid, "Griglia"),
+                        (View::List, "Elenco"),
+                        (View::Nesting, "Nesting"),
+                    ],
+                );
+            }
+            // Il controllo che conta nella vista scelta: colonne, miniatura o scala.
+            2 => match print.view {
+                View::Grid => {
+                    dim_label(ui, "Colonne");
+                    stepper(ui, &mut print.columns, 1, MAX_COLUMNS);
+                }
+                View::List => {
+                    dim_label(ui, "Miniatura");
+                    thumb_stepper(ui, &mut print.list_thumb);
+                }
+                View::Nesting => {
+                    dim_label(ui, "Scala");
+                    scale_stepper(ui, &mut print.nesting_scale, self.nesting_scale);
+                }
+            },
+            3 if print.view == View::Grid => {
+                ui.add(crate::fluent::checkbox(
+                    &mut print.fill_single,
+                    "1 file a tutta pagina",
+                ))
+                .on_hover_text(
+                    "Quando c'è una sola miniatura, la fa grande quanto il foglio e gira il \
+                     foglio come il file",
+                );
+            }
+            4 if print.view == View::Grid => {
+                ui.add(crate::fluent::checkbox(&mut print.one_per_sheet, "1 per foglio"))
+                    .on_hover_text(
+                        "Ogni miniatura su un foglio suo, grande quanto il foglio e girato come il \
+                         file",
+                    );
+            }
+            _ => {}
+        }
+    }
+
+    /// Esporta PDF e Stampa, a destra nella barra dei controlli.
+    fn output_buttons(&mut self, ui: &mut egui::Ui, t: &Tokens) {
+        let enabled = !self.project.files.is_empty() && self.export.is_none();
+        // Stampa: il pulsante principale dell'app, grande e blu.
+        let (fill, ink) = if enabled {
+            (t.primary, t.on_primary)
+        } else {
+            (t.button, t.text_disabled)
+        };
+        let print = egui::Button::image_and_text(
+            icons::image("printer", 18.0, ink),
+            egui::RichText::new("Stampa").font(semibold(14.0)).color(ink),
+        )
+        .fill(fill)
+        .min_size(vec2(118.0, 34.0));
+        if ui
+            .add_enabled(enabled, print)
+            .on_hover_text("Stampa i fogli alla misura vera (Ctrl+P)")
+            .clicked()
+        {
+            self.want_print = true;
+        }
+        ui.add_space(4.0);
+        let tint = if enabled { t.text_strong } else { t.text_disabled };
+        let button = egui::Button::image_and_text(
+            icons::image("file-down", 17.0, tint),
+            egui::RichText::new("Esporta PDF").color(tint),
+        )
+        .min_size(vec2(0.0, 32.0));
+        if ui
+            .add_enabled(enabled, button)
+            .on_hover_text("Salva tutti i fogli in un PDF, alla misura vera (Ctrl+E)")
+            .clicked()
+        {
+            self.want_export = true;
+        }
+    }
+
+    /// Zoom e scelta del foglio, a destra sopra l'anteprima.
+    fn sheet_controls(&mut self, ui: &mut egui::Ui, count: usize, t: &Tokens) {
+        let percent = self.shown_zoom / POINTS_PER_MM * 100.0;
+        egui::ComboBox::from_id_salt("zoom")
+            .icon(crate::fluent::combo_icon)
+            .selected_text(if self.zoom.is_none() {
+                format!("Adatta ({percent:.0}%)")
+            } else {
+                format!("{percent:.0}%")
+            })
+            .width(118.0)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(self.zoom.is_none(), "Adatta alla finestra")
+                    .clicked()
+                {
+                    self.zoom = None;
+                }
+                for z in ZOOM_STOPS {
+                    if ui.selectable_label(false, format!("{z:.0}%")).clicked() {
+                        self.zoom = Some(z / 100.0 * POINTS_PER_MM);
+                    }
+                }
+            });
+        ui.add_space(8.0);
+        let last = count.saturating_sub(1);
+        if icons::button(
+            ui,
+            "chevron-right",
+            "Foglio successivo",
+            false,
+            self.sheet < last,
+            28.0,
+        )
+        .clicked()
+        {
+            self.sheet = (self.sheet + 1).min(last);
+        }
+        let text = if count == 0 {
+            "–".to_string()
+        } else {
+            format!("Foglio {} di {count}", self.sheet + 1)
+        };
+        ui.label(egui::RichText::new(text).color(t.text));
+        if icons::button(
+            ui,
+            "chevron-left",
+            "Foglio precedente",
+            false,
+            self.sheet > 0,
+            28.0,
+        )
+        .clicked()
+        {
+            self.sheet = self.sheet.saturating_sub(1);
+        }
     }
 
     /// La barra in basso: totali del lavoro e messaggi.
@@ -1750,11 +1917,20 @@ impl WinFilesApp {
 
         // Intestazione della scheda.
         let header = Rect::from_min_size(full.min, vec2(full.width(), 48.0)).shrink2(vec2(14.0, 0.0));
-        let mut bar = ui.new_child(
+        let mut controls = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(header)
+                .layout(egui::Layout::right_to_left(Align::Center)),
+        );
+        self.sheet_controls(&mut controls, count, &t);
+        // Il titolo nello spazio che resta: in una finestra stretta si accorcia con "…".
+        let room = header.with_max_x((header.max.x - controls.min_rect().width() - 12.0).max(header.min.x));
+        let mut bar = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(room)
                 .layout(egui::Layout::left_to_right(Align::Center)),
         );
+        bar.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
         let print = &self.project.print;
         // A tutta pagina il foglio si gira come il file: lo si dice.
         let orientation = match (full_pages(&self.project, &self.slots), print.orientation) {
@@ -1762,75 +1938,29 @@ impl WinFilesApp {
             (None, Orientation::Portrait) => "verticale",
             (None, Orientation::Landscape) => "orizzontale",
         };
-        bar.label(
-            egui::RichText::new("Anteprima di stampa")
-                .font(semibold(14.0))
-                .color(t.text_strong),
-        );
         // Nel nesting la scala comune, come si scrive in tipografia: 1:20.
         let scale = self
             .nesting_scale
             .map(|n| format!(" · scala 1:{n}"))
             .unwrap_or_default();
-        bar.label(
-            egui::RichText::new(format!("{} {orientation}{scale}", print.paper.name())).color(t.text_dim),
-        );
-        bar.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            let percent = self.shown_zoom / POINTS_PER_MM * 100.0;
-            egui::ComboBox::from_id_salt("zoom")
-                .icon(crate::fluent::combo_icon)
-                .selected_text(if self.zoom.is_none() {
-                    format!("Adatta ({percent:.0}%)")
-                } else {
-                    format!("{percent:.0}%")
-                })
-                .width(118.0)
-                .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_label(self.zoom.is_none(), "Adatta alla finestra")
-                        .clicked()
-                    {
-                        self.zoom = None;
-                    }
-                    for z in ZOOM_STOPS {
-                        if ui.selectable_label(false, format!("{z:.0}%")).clicked() {
-                            self.zoom = Some(z / 100.0 * POINTS_PER_MM);
-                        }
-                    }
-                });
-            ui.add_space(8.0);
-            let last = count.saturating_sub(1);
-            if icons::button(
-                ui,
-                "chevron-right",
-                "Foglio successivo",
-                false,
-                self.sheet < last,
-                28.0,
-            )
-            .clicked()
-            {
-                self.sheet = (self.sheet + 1).min(last);
-            }
-            let text = if count == 0 {
-                "–".to_string()
-            } else {
-                format!("Foglio {} di {count}", self.sheet + 1)
-            };
-            ui.label(egui::RichText::new(text).color(t.text));
-            if icons::button(
-                ui,
-                "chevron-left",
-                "Foglio precedente",
-                false,
-                self.sheet > 0,
-                28.0,
-            )
-            .clicked()
-            {
-                self.sheet = self.sheet.saturating_sub(1);
-            }
-        });
+        let detail = format!("{} {orientation}{scale}", print.paper.name());
+        // Prima si lascia il formato, poi si accorcia il titolo; troppo stretto, niente titolo.
+        let width = |text: &str, font: egui::FontId| {
+            bar.fonts_mut(|f| f.layout_no_wrap(text.to_string(), font, Color32::WHITE).size().x)
+        };
+        let title_w = width("Anteprima di stampa", semibold(14.0));
+        let detail_w = width(&detail, egui::FontId::proportional(14.0));
+        let gap = bar.spacing().item_spacing.x;
+        if room.width() >= 60.0 {
+            bar.label(
+                egui::RichText::new("Anteprima di stampa")
+                    .font(semibold(14.0))
+                    .color(t.text_strong),
+            );
+        }
+        if room.width() >= title_w + gap + detail_w {
+            bar.label(egui::RichText::new(detail).color(t.text_dim));
+        }
 
         // Il fondo su cui sta il foglio.
         let board = Rect::from_min_max(
@@ -2783,8 +2913,53 @@ impl WinFilesApp {
     }
 }
 
+/// I gruppi della barra dei controlli: foglio, vista, controllo della vista e le due caselle.
+const BAR_GROUPS: usize = 5;
+/// Altezza di una riga della barra dei controlli e spazio fra i gruppi, in punti.
+const BAR_ROW: f32 = 38.0;
+const BAR_GAP: f32 = 12.0;
+
+/// Mette i gruppi in righe larghe al più `room`: un gruppo che non sta va sulla riga sotto (il
+/// primo di una riga ci va comunque). Un gruppo vuoto o non ancora misurato resta sulla riga.
+fn bar_rows(widths: &[f32], room: f32, gap: f32) -> Vec<Vec<usize>> {
+    let mut rows: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut x = 0.0;
+    for (i, &w) in widths.iter().enumerate() {
+        let start = rows.last().is_none_or(Vec::is_empty);
+        if !start && w > 0.0 && x + gap + w > room {
+            rows.push(Vec::new());
+            x = w;
+        } else {
+            x += if start { w } else { gap + w };
+        }
+        if let Some(row) = rows.last_mut() {
+            row.push(i);
+        }
+    }
+    rows
+}
+
 #[cfg(test)]
 mod tests {
+    use super::bar_rows;
+
+    /// Michel: sugli schermi stretti la barra dei controlli finiva sotto Esporta PDF e Stampa.
+    /// I gruppi che non stanno vanno sulla riga sotto, nell'ordine.
+    #[test]
+    fn la_barra_stretta_va_a_capo() {
+        let widths = [330.0, 250.0, 170.0, 160.0, 110.0];
+        assert_eq!(bar_rows(&widths, 2000.0, 12.0), vec![vec![0, 1, 2, 3, 4]]);
+        assert_eq!(bar_rows(&widths, 800.0, 12.0), vec![vec![0, 1, 2], vec![3, 4]]);
+        assert_eq!(
+            bar_rows(&widths, 400.0, 12.0),
+            vec![vec![0], vec![1], vec![2, 3], vec![4]]
+        );
+        // Più largo dello spazio: sta comunque da solo sulla sua riga.
+        assert_eq!(bar_rows(&[500.0, 10.0], 300.0, 12.0), vec![vec![0], vec![1]]);
+        // I gruppi vuoti o non misurati non spostano niente.
+        assert_eq!(bar_rows(&[330.0, 0.0, 0.0], 340.0, 12.0), vec![vec![0, 1, 2]]);
+    }
+
     use super::wheel_zoom;
 
     /// Un fotogramma con Ctrl + rotella (per egui un evento di zoom) e il puntatore in `at`.

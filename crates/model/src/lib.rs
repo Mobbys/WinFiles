@@ -375,6 +375,8 @@ pub struct PrintSettings {
     pub fill_single: bool,
     /// Nella griglia, una miniatura per foglio, grande quanto il foglio e girata come il file.
     pub one_per_sheet: bool,
+    /// Il percorso completo della cartella sotto la sua intestazione.
+    pub show_path: bool,
 }
 
 impl Default for PrintSettings {
@@ -402,6 +404,7 @@ impl Default for PrintSettings {
             show_notes: true,
             fill_single: true,
             one_per_sheet: false,
+            show_path: true,
         }
     }
 }

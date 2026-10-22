@@ -25,4 +25,10 @@ def disegna(lato: int) -> Image.Image:
 
 grande = disegna(256)
 grande.save(QUI / "icona-256.png")
-grande.save(QUI / "icona.ico", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+# Immagini BMP, non PNG: con le icone piccole in PNG la barra delle applicazioni e i collegamenti
+# di Windows mostravano un rettangolo bianco.
+grande.save(
+    QUI / "icona.ico",
+    sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+    bitmap_format="bmp",
+)

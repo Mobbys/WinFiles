@@ -134,6 +134,7 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
             header,
             custom,
             folder.map(|f| totals_text(&f.1, print)).as_deref(),
+            folder.and_then(|f| folder_path(project, f.0)).as_deref(),
             em(print.header_text),
         );
         if let Some(note) = header.note
@@ -459,6 +460,7 @@ pub(crate) fn draw_header(
     header: &Header,
     custom: Option<&str>,
     totals: Option<&str>,
+    path: Option<&str>,
     size: f64,
 ) {
     let flow = header_flow(
@@ -467,6 +469,7 @@ pub(crate) fn draw_header(
         &crumbs(header, custom),
         header.continued,
         totals,
+        path,
         size,
     );
     let at = |(x, y): (f64, f64)| (title.x + x, title.y + y);
@@ -549,6 +552,7 @@ fn header_flow(
     crumbs: &[&str],
     continued: bool,
     totals: Option<&str>,
+    path: Option<&str>,
     size: f64,
 ) -> Flow {
     let width = width.max(1.0);
@@ -683,6 +687,24 @@ fn header_flow(
         }
     }
     let line = (line_end > end_x + 4.0).then_some(((end_x + 2.5, last_cy), (line_end, last_cy)));
+    // Il percorso della cartella sotto le etichette, piccolo; un percorso lungo va a capo.
+    if let Some(text) = path.filter(|p| !p.is_empty()) {
+        let small = size * 0.78;
+        let galley = sk.layout(LayoutJob::simple(
+            text.to_string(),
+            sketch::font(small, Weight::Regular),
+            Color32::BLACK,
+            ((width - 2.0).max(1.0) as f32) * PX_PER_MM,
+        ));
+        let h = Sketch::size_mm(&galley).1;
+        parts.push(Part::Text {
+            at: (2.0, y + 0.3),
+            galley,
+            size: small,
+            weight: Weight::Regular,
+        });
+        y += h + 1.2;
+    }
     Flow {
         parts,
         line,
@@ -714,15 +736,26 @@ pub(crate) fn header_block(
         continued,
     };
     let totals = project.folder_totals().get(folder).map(|t| totals_text(t, print));
+    let path = folder_path(project, folder);
     header_flow(
         &sk,
         width,
         &crumbs(&header, custom),
         continued,
         totals.as_deref(),
+        path.as_deref(),
         print.header_text * MM_PER_PT,
     )
     .height
+}
+
+/// Il percorso da scrivere sotto l'intestazione, se la casella è accesa.
+pub(crate) fn folder_path(project: &Project, folder: &Path) -> Option<String> {
+    project
+        .print
+        .show_path
+        .then(|| folder.display().to_string())
+        .filter(|p| !p.is_empty())
 }
 
 #[cfg(test)]
@@ -749,6 +782,7 @@ mod tests {
                 &crumbs,
                 true,
                 Some("2 file · 2 pagine · 0,090 m²"),
+                None,
                 size,
             );
             let one = crate::captions::header_height(24.0);
@@ -768,11 +802,38 @@ mod tests {
             // Un titolo più lungo della riga va a capo dentro la sua etichetta.
             let long = ["un titolo scelto a mano ".repeat(6)];
             let long: Vec<&str> = long.iter().map(String::as_str).collect();
-            let flow = header_flow(&sk, 190.0, &long, false, None, size);
+            let flow = header_flow(&sk, 190.0, &long, false, None, None, size);
             assert!(flow.height > one);
             // Corto: una riga, alta come sempre.
-            let short = header_flow(&sk, 190.0, &["Foto"], false, Some("1 file"), size);
+            let short = header_flow(&sk, 190.0, &["Foto"], false, Some("1 file"), None, size);
             assert!((short.height - one).abs() < 1e-9);
+        });
+        out.textures_delta.clear();
+    }
+
+    /// Richiesta di Michel: il percorso della cartella sotto l'intestazione. Aggiunge altezza,
+    /// sta sotto le etichette e un percorso lunghissimo va a capo senza uscire dalla riga.
+    #[test]
+    fn il_percorso_sta_sotto_l_intestazione_e_va_a_capo() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let sk = Sketch::new(ui.ctx(), winfiles_geom::Size::new(190.0, 277.0));
+            let size = 9.0 * MM_PER_PT;
+            let crumbs = ["Lavori", "Cliente Rossi"];
+            let plain = header_flow(&sk, 190.0, &crumbs, false, Some("1 file"), None, size);
+            let short = "C:\\Lavori\\Cliente Rossi";
+            let with = header_flow(&sk, 190.0, &crumbs, false, Some("1 file"), Some(short), size);
+            assert!(with.height > plain.height);
+            let long = format!("\\\\server\\{}", "CartellaConUnNomeMoltoLungo\\".repeat(12));
+            let wrapped = header_flow(&sk, 190.0, &crumbs, false, None, Some(&long), size);
+            assert!(wrapped.height > with.height, "il percorso lungo va a capo");
+            for p in &wrapped.parts {
+                if let Part::Text { at, galley, .. } = p {
+                    let (w, _) = Sketch::size_mm(galley);
+                    assert!(at.0 + w <= 190.0 + 1e-6, "esce dalla riga: {} + {w}", at.0);
+                }
+            }
         });
         out.textures_delta.clear();
     }

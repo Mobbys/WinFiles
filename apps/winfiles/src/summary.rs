@@ -405,6 +405,7 @@ pub fn compose(ctx: &egui::Context, sheet: &SummarySheet, summary: &Summary, pro
                     &header,
                     custom,
                     tot.as_deref(),
+                    crate::canvas::folder_path(project, path).as_deref(),
                     em(print.header_text),
                 );
                 if !placed.continued
