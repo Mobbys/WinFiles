@@ -45,6 +45,11 @@ pub struct Tokens {
     pub dark: bool,
     /// Fondo della finestra, dietro le schede dei pannelli.
     pub app_bar: Color32,
+    /// La striscia delle schede dei moduli, sopra la barra dei menu: più scura, così la scheda
+    /// attiva (del colore di `app_bar`) si stacca e si unisce alla barra sotto.
+    pub tab_strip: Color32,
+    /// Una scheda non attiva sotto il puntatore.
+    pub tab_hover: Color32,
     /// Fondo delle schede (pannelli).
     pub panel: Color32,
     /// Righe di gruppo e superfici secondarie dentro le schede.
@@ -104,6 +109,8 @@ const fn hex(v: u32) -> Color32 {
 pub const DARK: Tokens = Tokens {
     dark: true,
     app_bar: hex(0x18181b),
+    tab_strip: hex(0x0e0e10),
+    tab_hover: hex(0x222226),
     panel: hex(0x232326),
     panel_darker: hex(0x2c2c30),
     input: hex(0x1b1b1e),
@@ -143,6 +150,8 @@ pub const DARK: Tokens = Tokens {
 pub const LIGHT: Tokens = Tokens {
     dark: false,
     app_bar: hex(0xeceef2),
+    tab_strip: hex(0xdcdfe5),
+    tab_hover: hex(0xe5e7ec),
     panel: hex(0xffffff),
     panel_darker: hex(0xf3f4f7),
     input: hex(0xffffff),
@@ -353,6 +362,8 @@ mod tests {
         for t in [DARK, LIGHT] {
             let all = [
                 t.app_bar,
+                t.tab_strip,
+                t.tab_hover,
                 t.panel,
                 t.panel_darker,
                 t.input,
@@ -371,6 +382,14 @@ mod tests {
                         t.dark
                     );
                 }
+            }
+            // Sulle schede dei moduli compaiono solo i nomi delle schede non attive.
+            for bg in [t.tab_strip, t.tab_hover] {
+                assert!(
+                    contrast(t.text_dim, bg) >= 4.5,
+                    "text_dim su {bg:?} (scuro: {})",
+                    t.dark
+                );
             }
             let main = [
                 t.app_bar,

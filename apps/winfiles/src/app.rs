@@ -1321,17 +1321,18 @@ impl WinFilesApp {
     /// La barra in alto: marchio, menu e scelte di aspetto (tema e unità).
     fn app_bar(&mut self, ui: &mut egui::Ui) {
         let t = Tokens::get(ui.ctx());
+        self.module_tabs(ui);
         let frame = egui::Frame::NONE.fill(t.app_bar).inner_margin(egui::Margin {
             left: 14,
             right: 14,
-            top: 8,
+            top: 4,
             bottom: 2,
         });
-        // Se marchio, moduli e menu non stanno accanto a unità e tema, questi vanno sulla riga
-        // sotto, a destra (larghezze misurate al disegno precedente).
+        // Se i menu non stanno accanto a unità e tema, questi vanno sulla riga sotto, a destra
+        // (larghezze misurate al disegno precedente).
         let two_rows = self.app_bar_widths.0 + self.app_bar_widths.1 + 24.0 > ui.available_width() - 28.0;
         egui::Panel::top("barra-menu")
-            .exact_size(if two_rows { 88.0 } else { 48.0 })
+            .exact_size(if two_rows { 80.0 } else { 42.0 })
             .frame(frame)
             .show(ui, |ui| {
                 let area = ui.available_rect_before_wrap();
@@ -1359,20 +1360,6 @@ impl WinFilesApp {
                         .layout(egui::Layout::left_to_right(Align::Center)),
                 );
                 left.horizontal_centered(|ui| {
-                    brand(ui);
-                    ui.add_space(12.0);
-                    // I moduli, come le schede della 4.9: miniature da stampare e modifica dei PDF.
-                    segmented(
-                        ui,
-                        "modulo",
-                        &mut self.module,
-                        &[
-                            (Module::Thumbnails, "Miniature"),
-                            (Module::Pdf, "Modifica PDF"),
-                            (Module::Images, "Modifica immagini"),
-                        ],
-                    );
-                    ui.add_space(12.0);
                     egui::MenuBar::new().ui(ui, |ui| {
                         ui.menu_button("File", |ui| {
                             if self.module == Module::Pdf {
@@ -1570,13 +1557,83 @@ impl WinFilesApp {
                         });
                     });
                 });
-                let widths = (left.min_rect().width(), right_w);
+                // La barra dei menu si allarga a tutta la riga: la sua larghezza vera è quella
+                // delle voci.
+                let menus: &[&str] = if self.module == Module::Thumbnails {
+                    &["File", "Visualizza", "Finestra", "Aiuto"]
+                } else {
+                    &["File", "Visualizza", "Aiuto"]
+                };
+                let spacing = &ui.style().spacing;
+                let pad = spacing.button_padding.x * 2.0 + spacing.item_spacing.x;
+                let font = egui::TextStyle::Button.resolve(ui.style());
+                let menus_w: f32 = menus
+                    .iter()
+                    .map(|m| {
+                        let g = ui
+                            .painter()
+                            .layout_no_wrap((*m).to_string(), font.clone(), t.text);
+                        g.size().x + pad
+                    })
+                    .sum();
+                let widths = (menus_w, right_w);
                 if (widths.0 - self.app_bar_widths.0).abs() > 0.5
                     || (widths.1 - self.app_bar_widths.1).abs() > 0.5
                 {
                     self.app_bar_widths = widths;
                     ui.ctx().request_repaint();
                 }
+            });
+    }
+
+    /// La striscia in cima alla finestra: il marchio e le schede dei moduli, come le schede di un
+    /// browser. La scheda attiva ha il colore della barra dei menu e si unisce a lei.
+    /// Ctrl+Tab e Ctrl+Maiusc+Tab passano alla scheda dopo e a quella prima.
+    fn module_tabs(&mut self, ui: &mut egui::Ui) {
+        const TABS: [(Module, &str); 3] = [
+            (Module::Thumbnails, "Miniature"),
+            (Module::Pdf, "Modifica PDF"),
+            (Module::Images, "Modifica immagini"),
+        ];
+        let t = Tokens::get(ui.ctx());
+        let (next, previous) = ui.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::CTRL, egui::Key::Tab),
+                i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::Tab),
+            )
+        });
+        if next || previous {
+            let at = TABS.iter().position(|(m, _)| *m == self.module).unwrap_or(0);
+            let step = if next { 1 } else { TABS.len() - 1 };
+            if let Some((m, _)) = TABS.get((at + step) % TABS.len()) {
+                self.module = *m;
+            }
+        }
+        let frame = egui::Frame::NONE.fill(t.tab_strip).inner_margin(egui::Margin {
+            left: 14,
+            right: 14,
+            top: 6,
+            bottom: 0,
+        });
+        egui::Panel::top("schede-moduli")
+            .exact_size(TAB_HEIGHT + 6.0)
+            .show_separator_line(false)
+            .frame(frame)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(0.0, TAB_HEIGHT),
+                        egui::Layout::left_to_right(Align::Center),
+                        brand,
+                    );
+                    ui.add_space(18.0);
+                    for (module, label) in TABS {
+                        if module_tab(ui, label, self.module == module).clicked() {
+                            self.module = module;
+                        }
+                    }
+                });
             });
     }
 
@@ -2157,6 +2214,51 @@ fn scroll_area(offset: Option<f32>) -> egui::ScrollArea {
         Some(y) => area.vertical_scroll_offset(y),
         None => area,
     }
+}
+
+/// L'altezza delle schede dei moduli.
+const TAB_HEIGHT: f32 = 34.0;
+
+/// Una scheda dei moduli. La attiva ha gli angoli alti arrotondati, il fondo della barra sotto e
+/// due raccordi in basso che la legano alla barra, come le schede di Edge.
+fn module_tab(ui: &mut egui::Ui, label: &str, active: bool) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let font = if active {
+        semibold(13.5)
+    } else {
+        egui::FontId::proportional(13.5)
+    };
+    let color = if active { t.text_strong } else { t.text_dim };
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font, color);
+    let size = Vec2::new(galley.size().x + 36.0, TAB_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let radius = 8.0;
+    let painter = ui.painter();
+    if active {
+        let r = radius as u8;
+        painter.rect_filled(
+            rect,
+            egui::CornerRadius {
+                nw: r,
+                ne: r,
+                sw: 0,
+                se: 0,
+            },
+            t.app_bar,
+        );
+        // I raccordi: un quadratino del colore della barra, scavato da un cerchio della striscia.
+        for (corner, sign) in [(rect.left_bottom(), -1.0), (rect.right_bottom(), 1.0)] {
+            let square = Rect::from_two_pos(corner, corner + Vec2::new(sign * radius, -radius));
+            painter.rect_filled(square, 0.0, t.app_bar);
+            painter.circle_filled(corner + Vec2::new(sign * radius, -radius), radius, t.tab_strip);
+        }
+    } else if response.hovered() {
+        painter.rect_filled(rect.shrink2(Vec2::new(2.0, 3.0)), t.radius, t.tab_hover);
+    }
+    let pos = rect.center() - galley.size() / 2.0;
+    painter.galley(pos, galley, color);
+    response
 }
 
 /// Il marchio in alto a sinistra: un quadratino blu con la W e il nome.

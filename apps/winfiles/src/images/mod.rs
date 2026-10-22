@@ -64,6 +64,9 @@ pub struct ImagesModule {
     /// Le quote sono accese: trascinare sull'immagine traccia quote invece del ritaglio, e a
     /// destra c'è il loro pannello al posto dei dati.
     quoting: bool,
+    /// L'altezza della barra dei comandi, che va a capo quando la finestra è stretta (misurata al
+    /// disegno precedente).
+    bar_height: f32,
     /// Le quote dell'immagine corrente, in pixel.
     quotes: Quotes,
     fields: Fields,
@@ -108,6 +111,7 @@ impl ImagesModule {
             current: 0,
             cutter: Cutter::default(),
             quoting: false,
+            bar_height: 46.0,
             quotes: Quotes::default(),
             fields: Fields::default(),
             dialog: None,
@@ -560,11 +564,59 @@ impl ImagesModule {
             bottom: 6,
         });
         egui::Panel::top("barra-immagini")
-            .exact_size(46.0)
+            .exact_size(self.bar_height)
             .frame(frame)
             .show(ui, |ui| {
-                ui.horizontal_centered(|ui| {
-                    let open = !self.docs.is_empty();
+                // Salva e Stampa a destra; i comandi a sinistra vanno a capo se la finestra è stretta.
+                let area = ui.available_rect_before_wrap();
+                let area = area.with_max_y(area.min.y + BAR_ROW);
+                let open = !self.docs.is_empty();
+                let mut right = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(area)
+                        .layout(egui::Layout::right_to_left(Align::Center)),
+                );
+                {
+                    let ui = &mut right;
+                    let (fill, ink) = if open {
+                        (t.primary, t.on_primary)
+                    } else {
+                        (t.button, t.text_disabled)
+                    };
+                    let save = egui::Button::image_and_text(
+                        icons::image("save", 18.0, ink),
+                        egui::RichText::new("Salva").font(semibold(14.0)).color(ink),
+                    )
+                    .fill(fill)
+                    .min_size(vec2(108.0, 34.0));
+                    let tip = match self.docs.get(self.current).and_then(|d| d.target.as_ref()) {
+                        Some(p) => format!("Salva in {} (Ctrl+S)", file_name(p)),
+                        None => "Salva l'immagine con un nome nuovo (Ctrl+S)".into(),
+                    };
+                    if ui.add_enabled(open, save).on_hover_text(tip).clicked() {
+                        self.save(false);
+                    }
+                    let tip = if self.quoting {
+                        "Stampa l'immagine alla sua misura, con le quote (Ctrl+P)"
+                    } else {
+                        "Stampa l'immagine alla sua misura di stampa (Ctrl+P)"
+                    };
+                    if text_button(ui, "printer", "Stampa", open)
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        self.print(ui.ctx());
+                    }
+                }
+                let right_w = right.min_rect().width();
+                let mut left = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(area.with_max_x((area.max.x - right_w - 16.0).max(area.min.x)))
+                        .layout(egui::Layout::left_to_right(Align::Center).with_main_wrap(true)),
+                );
+                {
+                    let ui = &mut left;
+                    ui.spacing_mut().interact_size.y = 34.0;
                     if text_button(ui, "folder-open", "Apri", true)
                         .on_hover_text("Apri una o più immagini (Ctrl+O)")
                         .clicked()
@@ -658,38 +710,12 @@ impl ImagesModule {
                             self.cutter.crop = None;
                         }
                     }
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        let (fill, ink) = if open {
-                            (t.primary, t.on_primary)
-                        } else {
-                            (t.button, t.text_disabled)
-                        };
-                        let save = egui::Button::image_and_text(
-                            icons::image("save", 18.0, ink),
-                            egui::RichText::new("Salva").font(semibold(14.0)).color(ink),
-                        )
-                        .fill(fill)
-                        .min_size(vec2(108.0, 34.0));
-                        let tip = match self.docs.get(self.current).and_then(|d| d.target.as_ref()) {
-                            Some(p) => format!("Salva in {} (Ctrl+S)", file_name(p)),
-                            None => "Salva l'immagine con un nome nuovo (Ctrl+S)".into(),
-                        };
-                        if ui.add_enabled(open, save).on_hover_text(tip).clicked() {
-                            self.save(false);
-                        }
-                        let tip = if self.quoting {
-                            "Stampa l'immagine alla sua misura, con le quote (Ctrl+P)"
-                        } else {
-                            "Stampa l'immagine alla sua misura di stampa (Ctrl+P)"
-                        };
-                        if text_button(ui, "printer", "Stampa", open)
-                            .on_hover_text(tip)
-                            .clicked()
-                        {
-                            self.print(ui.ctx());
-                        }
-                    });
-                });
+                }
+                let height = left.min_rect().height().max(BAR_ROW) + 8.0;
+                if (height - self.bar_height).abs() > 0.5 {
+                    self.bar_height = height;
+                    ui.ctx().request_repaint();
+                }
             });
     }
 
@@ -1581,6 +1607,9 @@ fn fit_rect(bounds: Rect, size: Size) -> Rect {
     let s = (bounds.width() / w).min(bounds.height() / h);
     Rect::from_center_size(bounds.center(), vec2(w * s, h * s))
 }
+
+/// L'altezza di una riga della barra dei comandi.
+const BAR_ROW: f32 = 38.0;
 
 fn separator(ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
