@@ -321,6 +321,8 @@ pub(crate) enum FileAction {
     PrintSet(std::collections::BTreeSet<usize>, bool),
     /// Mette in stampa (o ne toglie) una pagina.
     PrintPage(usize, usize, bool),
+    /// Mette in stampa (o ne toglie) tutti i file del lavoro.
+    PrintAll(bool),
     /// Apre o chiude le pagine di un file nell'elenco.
     Expand(std::path::PathBuf),
     /// Copia negli appunti la tabella dei file scelti.
@@ -392,6 +394,19 @@ pub(crate) fn file_menu(
     {
         action = Some(FileAction::PrintMarked(on));
         ui.close();
+    }
+    for (on, label) in [
+        (true, "Metti in stampa tutti i file"),
+        (false, "Togli dalla stampa tutti i file"),
+    ] {
+        if ui
+            .button(label)
+            .on_hover_text("Tutti i file del lavoro; restano nell'elenco con le loro note.")
+            .clicked()
+        {
+            action = Some(FileAction::PrintAll(on));
+            ui.close();
+        }
     }
     let label = match count {
         1 => "Togli dall'elenco".to_string(),
@@ -1125,6 +1140,10 @@ impl WinFilesApp {
                 self.set_printed(&set, on);
             }
             FileAction::PrintSet(set, on) => self.set_printed(&set, on),
+            FileAction::PrintAll(on) => {
+                let all = (0..self.project.files.len()).collect();
+                self.set_printed(&all, on);
+            }
             FileAction::PrintPage(i, p, on) => {
                 if let Some(f) = self.project.files.get_mut(i) {
                     f.set_printed(p, on);
