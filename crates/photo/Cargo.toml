@@ -1,0 +1,21 @@
+[package]
+name = "winfiles-photo"
+description = "Foto RAW delle fotocamere e file di Photoshop (PSD/PSB) in immagini da mostrare e modificare."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+thiserror.workspace = true
+image.workspace = true
+photocraft-raw.workspace = true
+photocraft-psd.workspace = true
+photocraft-cms.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+photocraft-raw = { workspace = true, features = ["testgen"] }

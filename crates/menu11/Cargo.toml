@@ -1,0 +1,37 @@
+[package]
+name = "winfiles-menu11"
+description = "La voce \"Apri in WinFiles\" nel menu corto di Esplora file di Windows 11 (ADR 0022)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+# La DLL che Esplora file carica dal pacchetto firmato: winfiles_menu11.dll.
+crate-type = ["cdylib", "rlib"]
+
+# Windows chiama la voce del menu attraverso COM: puntatori grezzi e funzioni esportate, quindi
+# `unsafe` è inevitabile. È l'unico crate dove è permesso (ADR 0022), confinato a poche righe
+# commentate; gli altri lint del workspace restano.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+
+# Già nel progetto come dipendenze di eframe, rfd e arboard (stesse versioni, MIT/Apache).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+] }
+windows-core = "0.62"
+windows-registry = "0.6"

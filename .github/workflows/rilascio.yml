@@ -1,0 +1,121 @@
+# Pubblica una versione di WinFiles (ADR 0014). Si pubblica alzando la versione del workspace in
+# Cargo.toml e scrivendo le novità in docs/novita/X.Y.Z.md: al primo push che porta una versione
+# senza rilascio, questo workflow compila, crea l'MSI e l'eseguibile portatile e pubblica il
+# rilascio "vX.Y.Z" (il tag lo crea GitHub sul commit). Le copie installate lo trovano da sole.
+# Funziona anche con un rilascio creato a mano su GitHub: gli si aggiungono i file e le novità.
+name: Rilascio
+
+on:
+  push:
+    branches: ["**"]
+    paths: ["Cargo.toml", "docs/novita/**", ".github/workflows/rilascio.yml"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: rilascio
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  versione:
+    name: Versione da pubblicare
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "Il tag ${GITHUB_REF_NAME} non corrisponde alla versione ${version} in Cargo.toml"; exit 1
+          fi
+          # Già pubblicata con i suoi file: niente da fare.
+          assets=$(gh release view "v${version}" --json assets --jq '.assets | length' 2>/dev/null || echo 0)
+          if [ "${assets}" -gt 0 ]; then
+            echo "WinFiles ${version} è già pubblicata"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          test -f "docs/novita/${version}.md" || {
+            echo "Mancano le novità: docs/novita/${version}.md"; exit 1; }
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: Eseguibile Windows
+    needs: versione
+    if: needs.versione.outputs.publish == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+      - run: cargo build --release -p winfiles -p winfiles-menu11
+      # Il pacchetto firmato del menu di Windows 11 (ADR 0022); senza i segreti del certificato
+      # Winsport non si crea e l'MSI esce senza.
+      - name: Menu di Windows 11
+        shell: powershell
+        env:
+          WINSPORT_PFX: ${{ secrets.WINSPORT_PFX }}
+          WINSPORT_PFX_PASSWORD: ${{ secrets.WINSPORT_PFX_PASSWORD }}
+          VERSION: ${{ needs.versione.outputs.version }}
+        run: installer/crea-pacchetto-menu.ps1 -Versione $env:VERSION -Dll target/release/winfiles_menu11.dll -Exe target/release/winfiles.exe -Uscita menu
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winfiles-rilascio
+          path: target/release/winfiles.exe
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winfiles-menu
+          path: menu/
+          if-no-files-found: ignore
+
+  pubblica:
+    name: Installer e rilascio
+    needs: [versione, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: winfiles-rilascio
+          path: windows
+      - uses: actions/download-artifact@v4
+        # Manca quando non ci sono i segreti del certificato.
+        continue-on-error: true
+        with:
+          name: winfiles-menu
+          path: menu
+      - run: sudo apt-get update -q && sudo apt-get install -y -q wixl
+      - name: Installer e copia portatile
+        env:
+          VERSION: ${{ needs.versione.outputs.version }}
+        run: |
+          installer/crea-msi.sh windows/winfiles.exe "WinFiles-${VERSION}.msi" menu
+          cp windows/winfiles.exe "WinFiles-${VERSION}-portatile.exe"
+      - name: Rilascio su GitHub
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.versione.outputs.version }}
+        run: |
+          tag="v${VERSION}"
+          files=("WinFiles-${VERSION}.msi" "WinFiles-${VERSION}-portatile.exe")
+          if gh release view "${tag}" > /dev/null 2>&1; then
+            gh release edit "${tag}" --title "WinFiles ${VERSION}" \
+              --notes-file "docs/novita/${VERSION}.md"
+            gh release upload "${tag}" "${files[@]}" --clobber
+          else
+            gh release create "${tag}" --target "${GITHUB_SHA}" --title "WinFiles ${VERSION}" \
+              --notes-file "docs/novita/${VERSION}.md" "${files[@]}"
+          fi
