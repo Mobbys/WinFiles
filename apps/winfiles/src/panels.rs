@@ -323,6 +323,8 @@ pub(crate) enum FileAction {
     PrintPage(usize, usize, bool),
     /// Mette in stampa (o ne toglie) tutti i file del lavoro.
     PrintAll(bool),
+    /// Mette in stampa solo i file scelti e toglie tutti gli altri.
+    PrintOnlyMarked,
     /// Apre o chiude le pagine di un file nell'elenco.
     Expand(std::path::PathBuf),
     /// Copia negli appunti la tabella dei file scelti.
@@ -393,6 +395,18 @@ pub(crate) fn file_menu(
         .clicked()
     {
         action = Some(FileAction::PrintMarked(on));
+        ui.close();
+    }
+    let label = match count {
+        1 => "Stampa solo questo file".to_string(),
+        n => format!("Stampa solo i {n} file scelti"),
+    };
+    if ui
+        .button(label)
+        .on_hover_text("Toglie dalla stampa tutti gli altri file; restano nell'elenco con le loro note.")
+        .clicked()
+    {
+        action = Some(FileAction::PrintOnlyMarked);
         ui.close();
     }
     for (on, label) in [
@@ -1140,6 +1154,12 @@ impl WinFilesApp {
                 self.set_printed(&set, on);
             }
             FileAction::PrintSet(set, on) => self.set_printed(&set, on),
+            FileAction::PrintOnlyMarked => {
+                let all = (0..self.project.files.len()).collect();
+                self.set_printed(&all, false);
+                let marked = self.marked.clone();
+                self.set_printed(&marked, true);
+            }
             FileAction::PrintAll(on) => {
                 let all = (0..self.project.files.len()).collect();
                 self.set_printed(&all, on);
@@ -1586,6 +1606,10 @@ impl WinFilesApp {
     pub(crate) fn layout_panel(&mut self, ui: &mut egui::Ui) {
         self.presets_section(ui);
         let shown_scale = self.nesting_scale;
+        let chosen = self
+            .fit_choice
+            .filter(|_| crate::app::fits(&self.project, &self.slots))
+            .map(|(c, _)| c);
         let print = &mut self.project.print;
         let mm =
             |ui: &mut egui::Ui, value: &mut f64, max: f64| fluent::number(ui, 96.0, mm_field(value, max));
@@ -1605,7 +1629,10 @@ impl WinFilesApp {
             match print.view {
                 View::Grid => {
                     dim_label(ui, "Colonne");
-                    ui.add(fluent::Slider::new(&mut print.columns, 1..=10));
+                    let mut shown = chosen;
+                    let columns = shown.as_mut().unwrap_or(&mut print.columns);
+                    ui.add_enabled(chosen.is_none(), fluent::Slider::new(columns, 1..=10))
+                        .on_disabled_hover_text("Le colonne le sceglie «Su N fogli»");
                 }
                 View::List => {
                     dim_label(ui, "Larghezza delle miniature");

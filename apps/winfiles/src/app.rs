@@ -60,7 +60,7 @@ pub struct WinFilesApp {
     pub(crate) measurer: Measurer,
     pub(crate) thumbs: Thumbnails,
     /// Le miniature sul foglio, una per pagina, ricalcolate a ogni fotogramma.
-    slots: Vec<Slot>,
+    pub(crate) slots: Vec<Slot>,
     /// Cartella di cui si sta rinominando l'intestazione nell'elenco, con il testo in modifica.
     pub(crate) renaming: Option<(PathBuf, String)>,
     /// Il file su cui si è aperto il menu del tasto destro nell'anteprima del foglio.
@@ -146,6 +146,8 @@ pub struct WinFilesApp {
     layout_cache: Option<(Project, std::rc::Rc<Pages>)>,
     /// Nel nesting: la scala 1:N in uso (scelta o automatica).
     pub(crate) nesting_scale: Option<u32>,
+    /// Con "Su N fogli", le colonne e il verso scelti all'ultima impaginazione.
+    pub(crate) fit_choice: Option<(u32, Orientation)>,
     /// Il modulo mostrato: miniature da stampare o modifica dei PDF.
     pub(crate) module: Module,
     /// Il modulo PDF (Fase 9), con il suo documento aperto.
@@ -254,6 +256,7 @@ impl WinFilesApp {
             prefs,
             prefs_checked: 0.0,
             nesting_scale: None,
+            fit_choice: None,
             layout_cache: None,
             module: Module::Thumbnails,
             pdf: crate::pdf::PdfModule::new(ctx),
@@ -1731,6 +1734,8 @@ impl WinFilesApp {
 
     /// Un gruppo della barra dei controlli; un gruppo che la vista non usa resta vuoto.
     fn bar_group(&mut self, ui: &mut egui::Ui, group: usize) {
+        // Con "Su N fogli" colonne e verso li sceglie WinFiles: si vedono quelli scelti, spenti.
+        let chosen = self.fit_choice.filter(|_| fits(&self.project, &self.slots));
         let print = &mut self.project.print;
         match group {
             0 => {
@@ -1741,15 +1746,21 @@ impl WinFilesApp {
                     &mut print.paper,
                     &[(Paper::A4, "A4"), (Paper::A3, "A3")],
                 );
-                segmented(
-                    ui,
-                    "orientamento",
-                    &mut print.orientation,
-                    &[
-                        (Orientation::Portrait, "Verticale"),
-                        (Orientation::Landscape, "Orizzontale"),
-                    ],
-                );
+                let mut shown = chosen.map(|(_, o)| o);
+                let orientation = shown.as_mut().unwrap_or(&mut print.orientation);
+                ui.add_enabled_ui(chosen.is_none(), |ui| {
+                    segmented(
+                        ui,
+                        "orientamento",
+                        orientation,
+                        &[
+                            (Orientation::Portrait, "Verticale"),
+                            (Orientation::Landscape, "Orizzontale"),
+                        ],
+                    );
+                })
+                .response
+                .on_disabled_hover_text("Il verso lo sceglie «Su N fogli»");
             }
             1 => {
                 dim_label(ui, "Vista");
@@ -1768,7 +1779,11 @@ impl WinFilesApp {
             2 => match print.view {
                 View::Grid => {
                     dim_label(ui, "Colonne");
-                    stepper(ui, &mut print.columns, 1, MAX_COLUMNS);
+                    let mut shown = chosen.map(|(c, _)| c);
+                    let columns = shown.as_mut().unwrap_or(&mut print.columns);
+                    ui.add_enabled_ui(chosen.is_none(), |ui| stepper(ui, columns, 1, MAX_COLUMNS))
+                        .response
+                        .on_disabled_hover_text("Le colonne le sceglie «Su N fogli»");
                 }
                 View::List => {
                     dim_label(ui, "Miniatura");
@@ -1790,11 +1805,31 @@ impl WinFilesApp {
                 );
             }
             4 if print.view == View::Grid => {
-                ui.add(crate::fluent::checkbox(&mut print.one_per_sheet, "1 per foglio"))
+                if ui
+                    .add(crate::fluent::checkbox(&mut print.one_per_sheet, "1 per foglio"))
                     .on_hover_text(
                         "Ogni miniatura su un foglio suo, grande quanto il foglio e girato come il \
                          file",
-                    );
+                    )
+                    .changed()
+                    && print.one_per_sheet
+                {
+                    print.fit = false;
+                }
+            }
+            5 if print.view == View::Grid => {
+                if ui
+                    .add(crate::fluent::checkbox(&mut print.fit, "Su"))
+                    .on_hover_text(
+                        "Tutte le miniature in stampa su questi fogli, più grandi possibile: \
+                         colonne e verso li sceglie WinFiles",
+                    )
+                    .changed()
+                    && print.fit
+                {
+                    print.one_per_sheet = false;
+                }
+                ui.add_enabled_ui(print.fit, |ui| sheets_stepper(ui, &mut print.fit_sheets));
             }
             _ => {}
         }
@@ -2000,6 +2035,20 @@ impl WinFilesApp {
             .nesting_scale
             .map(|n| format!(" · scala 1:{n}"))
             .unwrap_or_default();
+        // Su N fogli: il verso e le colonne scelti.
+        let (orientation, scale) = match self.fit_choice.filter(|_| fits(&self.project, &self.slots)) {
+            Some((columns, o)) => {
+                let o = match o {
+                    Orientation::Portrait => "verticale",
+                    Orientation::Landscape => "orizzontale",
+                };
+                (
+                    o,
+                    format!(" · {columns} colonne, su {}", sheets_text(print.fit_sheets)),
+                )
+            }
+            None => (orientation, scale),
+        };
         let detail = format!("{} {orientation}{scale}", print.paper.name());
         // Prima si lascia il formato, poi si accorcia il titolo; troppo stretto, niente titolo.
         let width = |text: &str, font: egui::FontId| {
@@ -2330,6 +2379,23 @@ pub(crate) fn stepper(ui: &mut egui::Ui, value: &mut u32, min: u32, max: u32) {
         .unwrap_or(min);
 }
 
+/// "1 foglio", "3 fogli".
+fn sheets_text(n: u32) -> String {
+    if n <= 1 {
+        "1 foglio".to_string()
+    } else {
+        format!("{n} fogli")
+    }
+}
+
+/// I fogli di "Su N fogli".
+fn sheets_stepper(ui: &mut egui::Ui, sheets: &mut u32) {
+    let max = winfiles_layout::MAX_FIT_SHEETS;
+    let n = (*sheets).clamp(1, max);
+    let delta = stepper_with(ui, "fogli", &sheets_text(n), n > 1, n < max);
+    *sheets = u32::try_from((i64::from(n) + i64::from(delta)).clamp(1, i64::from(max))).unwrap_or(1);
+}
+
 /// La larghezza delle miniature dell'elenco, a passi di 5 mm.
 pub(crate) fn thumb_stepper(ui: &mut egui::Ui, mm: &mut f64) {
     let (lo, hi) = (
@@ -2587,7 +2653,29 @@ impl WinFilesApp {
         let items = captions::items(ctx, project, &self.slots);
         self.nesting_scale = (print.view == View::Nesting && !items.is_empty())
             .then(|| winfiles_layout::nesting_denominator(&print, &items));
-        let pages = grid_with_title(&print, &items, title).and_then(|grid| {
+        self.fit_choice = None;
+        let grid = if fits(&self.project, &self.slots) {
+            // Su N fogli: per ogni prova di colonne e verso si rimisurano titolo e didascalie.
+            let mut trial_project = project.clone();
+            winfiles_layout::fit_to_sheets(&print, print.fit_sheets, |trial| {
+                trial_project.print.columns = trial.columns;
+                trial_project.print.orientation = trial.orientation;
+                let width = winfiles_geom::sheet_size(trial.paper, trial.orientation).w
+                    - trial.margins.left
+                    - trial.margins.right;
+                (
+                    captions::items(ctx, &trial_project, &self.slots),
+                    captions::title_height(ctx, &trial.title, trial.title_text, width),
+                )
+            })
+            .map(|fit| {
+                self.fit_choice = Some((fit.columns, fit.orientation));
+                fit.sheets
+            })
+        } else {
+            grid_with_title(&print, &items, title)
+        };
+        let pages = grid.and_then(|grid| {
             let summary = if print.show_summary && !project.files.is_empty() {
                 Some(crate::summary::layout(ctx, project, title)?)
             } else {
@@ -2599,6 +2687,13 @@ impl WinFilesApp {
         self.layout_cache = Some((self.project.clone(), pages.clone()));
         pages
     }
+}
+
+/// Se colonne e verso li sceglie "Su N fogli": nella griglia, quando nessuna miniatura va a
+/// tutta pagina.
+pub(crate) fn fits(project: &Project, slots: &[Slot]) -> bool {
+    let print = &project.print;
+    print.view == View::Grid && print.fit && full_pages(project, slots).is_none()
 }
 
 /// Se la griglia mette le miniature a tutta pagina (una per foglio, o l'unica del lavoro), come
@@ -3016,7 +3111,7 @@ impl WinFilesApp {
 }
 
 /// I gruppi della barra dei controlli: foglio, vista, controllo della vista e le due caselle.
-const BAR_GROUPS: usize = 5;
+const BAR_GROUPS: usize = 6;
 /// Altezza di una riga della barra dei controlli e spazio fra i gruppi, in punti.
 const BAR_ROW: f32 = 38.0;
 const BAR_GAP: f32 = 12.0;

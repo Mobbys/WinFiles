@@ -636,5 +636,78 @@ pub fn grid_with_title(
     Ok(sheets)
 }
 
+/// Fogli massimi per "Su N fogli".
+pub const MAX_FIT_SHEETS: u32 = 99;
+
+/// Il risultato di [`fit_to_sheets`]: colonne e verso scelti, e i fogli.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Fitted {
+    pub columns: u32,
+    pub orientation: Orientation,
+    pub sheets: Vec<Sheet>,
+}
+
+/// "Su N fogli": la griglia con le miniature più grandi che sta in `target` fogli, provando ogni
+/// numero di colonne sul foglio verticale e su quello orizzontale. A parità vince il verso di
+/// `settings`. Le didascalie vanno a capo secondo la larghezza delle colonne, quindi per ogni
+/// prova `measure` restituisce le miniature misurate per quelle impostazioni e l'altezza del
+/// titolo. Se in `target` fogli non ci sta (per esempio un foglio per cartella), si prende la
+/// prova con meno fogli.
+pub fn fit_to_sheets<F>(settings: &PrintSettings, target: u32, mut measure: F) -> Result<Fitted, LayoutError>
+where
+    F: FnMut(&PrintSettings) -> (Vec<Item>, f64),
+{
+    check(settings)?;
+    let target = target.clamp(1, MAX_FIT_SHEETS) as usize;
+    let other = match settings.orientation {
+        Orientation::Portrait => Orientation::Landscape,
+        Orientation::Landscape => Orientation::Portrait,
+    };
+    // (celle larghe, fogli, risultato): le migliori che stanno, e quelle con meno fogli.
+    let mut best: Option<(f64, Fitted)> = None;
+    let mut fewest: Option<(usize, f64, Fitted)> = None;
+    for orientation in [settings.orientation, other] {
+        for columns in 1..=MAX_COLUMNS {
+            let trial = PrintSettings {
+                orientation,
+                columns,
+                view: View::Grid,
+                one_per_sheet: false,
+                fill_single: false,
+                ..settings.clone()
+            };
+            let (items, title) = measure(&trial);
+            let sheets = match grid_with_title(&trial, &items, title) {
+                Ok(sheets) => sheets,
+                Err(LayoutError::NothingFits) => continue,
+                Err(e) => return Err(e),
+            };
+            let width = cell_width(&trial);
+            let count = sheets.len();
+            let fitted = Fitted {
+                columns,
+                orientation,
+                sheets,
+            };
+            if count <= target {
+                // Più colonne vuol dire miniature più piccole: in questo verso è la migliore.
+                if best.as_ref().is_none_or(|(w, _)| width > *w + EPS) {
+                    best = Some((width, fitted));
+                }
+                break;
+            }
+            if fewest
+                .as_ref()
+                .is_none_or(|(n, w, _)| count < *n || (count == *n && width > *w + EPS))
+            {
+                fewest = Some((count, width, fitted));
+            }
+        }
+    }
+    best.map(|(_, f)| f)
+        .or_else(|| fewest.map(|(_, _, f)| f))
+        .ok_or(LayoutError::NothingFits)
+}
+
 #[cfg(test)]
 mod tests;

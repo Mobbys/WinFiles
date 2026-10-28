@@ -579,3 +579,92 @@ fn una_per_foglio() {
     assert!(sheets[1].headers[0].continued && sheets[1].headers[0].note.is_none());
     assert!(!sheets[2].headers[0].continued);
 }
+
+/// Le miniature di `items` misurate per `fit_to_sheets`: didascalie fisse, nessun titolo.
+fn fixed(items: &[Item]) -> impl FnMut(&PrintSettings) -> (Vec<Item>, f64) + '_ {
+    move |_| (items.to_vec(), 0.0)
+}
+
+#[test]
+fn su_n_fogli_sceglie_le_miniature_piu_grandi_che_ci_stanno() {
+    let settings = PrintSettings::default();
+    let items: Vec<_> = (0..12).map(|i| item(i, 100.0, 100.0, "a")).collect();
+    for target in [1, 2, 3] {
+        let fit = fit_to_sheets(&settings, target, fixed(&items)).unwrap();
+        assert!(
+            fit.sheets.len() <= target as usize,
+            "{target} fogli: {}",
+            fit.sheets.len()
+        );
+        assert_eq!(fit.sheets.iter().map(|s| s.items.len()).sum::<usize>(), 12);
+        // Con una colonna in meno, nello stesso verso, non ci starebbe più.
+        if fit.columns > 1 {
+            let fewer = PrintSettings {
+                columns: fit.columns - 1,
+                orientation: fit.orientation,
+                ..settings.clone()
+            };
+            assert!(grid(&fewer, &items).map_or(true, |s| s.len() > target as usize));
+        }
+    }
+    // Più fogli, miniature più grandi.
+    let side = |n| {
+        let fit = fit_to_sheets(&settings, n, fixed(&items)).unwrap();
+        fit.sheets[0].items[0].image.w
+    };
+    assert!(side(3) > side(1));
+}
+
+#[test]
+fn su_n_fogli_prova_anche_l_altro_verso() {
+    // File molto orizzontali: sul foglio orizzontale vengono più grandi.
+    let settings = PrintSettings::default();
+    let items: Vec<_> = (0..6).map(|i| item(i, 400.0, 100.0, "a")).collect();
+    let fit = fit_to_sheets(&settings, 1, fixed(&items)).unwrap();
+    let portrait = (1..=MAX_COLUMNS)
+        .filter_map(|columns| {
+            let s = PrintSettings {
+                columns,
+                ..settings.clone()
+            };
+            grid(&s, &items).ok().filter(|sh| sh.len() == 1)
+        })
+        .map(|sh| sh[0].items[0].image.w)
+        .fold(0.0, f64::max);
+    assert!(fit.sheets[0].items[0].image.w >= portrait - 1e-9);
+    assert_eq!(fit.sheets.len(), 1);
+}
+
+#[test]
+fn su_n_fogli_rimisura_i_testi_per_ogni_prova() {
+    // Chi chiama misura le didascalie sulla larghezza delle colonne: la funzione gliela chiede.
+    let settings = PrintSettings::default();
+    let items: Vec<_> = (0..8).map(|i| item(i, 100.0, 100.0, "a")).collect();
+    let mut asked = Vec::new();
+    let fit = fit_to_sheets(&settings, 2, |s: &PrintSettings| {
+        asked.push((s.columns, s.orientation));
+        (items.clone(), 0.0)
+    })
+    .unwrap();
+    assert!(asked.contains(&(fit.columns, fit.orientation)));
+    assert!(asked.len() > 1);
+}
+
+#[test]
+fn su_n_fogli_quando_non_ci_sta_usa_meno_fogli_possibile() {
+    // Un foglio per cartella e tre cartelle: in un foglio non ci sta, ma non è un errore.
+    let settings = PrintSettings {
+        page_break_per_folder: true,
+        ..PrintSettings::default()
+    };
+    let items = vec![
+        item(0, 1.0, 1.0, "a"),
+        item(1, 1.0, 1.0, "b"),
+        item(2, 1.0, 1.0, "c"),
+    ];
+    let fit = fit_to_sheets(&settings, 1, fixed(&items)).unwrap();
+    assert_eq!(fit.sheets.len(), 3);
+    // Zero fogli vale uno; e un lavoro vuoto resta un foglio vuoto.
+    assert!(fit_to_sheets(&settings, 0, fixed(&items)).is_ok());
+    assert_eq!(fit_to_sheets(&settings, 2, fixed(&[])).unwrap().sheets.len(), 1);
+}

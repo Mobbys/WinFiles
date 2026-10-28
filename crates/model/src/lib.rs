@@ -377,6 +377,11 @@ pub struct PrintSettings {
     pub one_per_sheet: bool,
     /// Il percorso completo della cartella sotto la sua intestazione.
     pub show_path: bool,
+    /// Nella griglia, "Su N fogli": colonne e verso li sceglie WinFiles, perché tutte le miniature
+    /// in stampa stiano in `fit_sheets` fogli, più grandi possibile.
+    pub fit: bool,
+    /// I fogli di "Su N fogli".
+    pub fit_sheets: u32,
 }
 
 impl Default for PrintSettings {
@@ -405,6 +410,8 @@ impl Default for PrintSettings {
             fill_single: true,
             one_per_sheet: false,
             show_path: true,
+            fit: false,
+            fit_sheets: 1,
         }
     }
 }
