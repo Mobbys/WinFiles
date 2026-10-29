@@ -222,7 +222,21 @@ fn move_annotations(doc: &mut Document, page: ObjRef, m: &Matrix) -> Result<(), 
     Ok(())
 }
 
-fn reframe(doc: &mut Document, index: usize, plan: impl FnOnce(f64, f64) -> Plan) -> Result<(), EditError> {
+/// La pagina da ridisegnare: dove sta, le sue misure e come raddrizzarla.
+struct Source {
+    page: ObjRef,
+    number: usize,
+    /// MediaBox, CropBox, BleedBox, TrimBox, ArtBox.
+    boxes: [[f64; 4]; 5],
+    crop: [f64; 4],
+    /// Larghezza e altezza come si vede, in punti.
+    w: f64,
+    h: f64,
+    /// Dal CropBox alla pagina come si vede.
+    upright: Matrix,
+}
+
+fn source(doc: &Document, index: usize) -> Result<Source, EditError> {
     let number = index.saturating_add(1);
     let page = organize::pages(doc)?
         .get(index)
@@ -243,8 +257,89 @@ fn reframe(doc: &mut Document, index: usize, plan: impl FnOnce(f64, f64) -> Plan
     } else {
         (cw, ch)
     };
-    let upright = upright(rotation, crop);
-    let plan = plan(w, h);
+    Ok(Source {
+        page,
+        number,
+        boxes,
+        crop,
+        w,
+        h,
+        upright: upright(rotation, crop),
+    })
+}
+
+/// Il modulo: il contenuto `body` della pagina con le sue risorse, così com'è.
+fn page_form(doc: &mut Document, src: &Source, body: &[u8]) -> ObjRef {
+    let mut form = Dict::new();
+    form.set(b"Type".to_vec(), Object::name("XObject"));
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), rect_object(src.crop));
+    form.set(
+        b"Matrix".to_vec(),
+        Object::Array(src.upright.iter().map(|v| Object::Real(*v)).collect()),
+    );
+    form.set(
+        b"Resources".to_vec(),
+        inherited(doc, src.page, b"Resources").unwrap_or(Object::Dict(Dict::new())),
+    );
+    let group = doc.get(src.page).as_dict().and_then(|d| d.get(b"Group")).cloned();
+    if let Some(g) = group {
+        form.set(b"Group".to_vec(), g);
+    }
+    doc.add(Object::Stream(Stream::flate(form, body)))
+}
+
+/// La pagina nuova, larga `width` e alta `height`: disegna `ops` con i moduli `forms`.
+/// `total` porta dal CropBox di prima alla pagina nuova (per le annotazioni).
+struct NewPage<'a> {
+    forms: &'a [(&'a str, ObjRef)],
+    ops: String,
+    width: f64,
+    height: f64,
+    total: Matrix,
+    trim: Option<[f64; 4]>,
+    bleed: Option<[f64; 4]>,
+}
+
+fn finish(doc: &mut Document, src: &Source, new: NewPage<'_>) -> Result<(), EditError> {
+    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), new.ops.as_bytes())));
+    let media = [0.0, 0.0, new.width, new.height];
+    move_annotations(doc, src.page, &new.total)?;
+    doc.update_dict(src.page, |d| {
+        let mut xobjects = Dict::new();
+        for (name, r) in new.forms {
+            xobjects.set(name.as_bytes().to_vec(), Object::Ref(*r));
+        }
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+        d.set(b"Contents".to_vec(), Object::Ref(contents));
+        d.set(b"MediaBox".to_vec(), rect_object(media));
+        // Valori espliciti: quelli ereditati dai nodi sopra non devono tornare.
+        d.set(b"CropBox".to_vec(), rect_object(media));
+        d.set(b"Rotate".to_vec(), Object::Int(0));
+        d.remove(b"ArtBox");
+        d.remove(b"Group");
+        match new.bleed {
+            Some(b) => d.set(b"BleedBox".to_vec(), rect_object(b)),
+            None => {
+                d.remove(b"BleedBox");
+            }
+        }
+        match new.trim {
+            Some(t) => d.set(b"TrimBox".to_vec(), rect_object(t)),
+            None => {
+                d.remove(b"TrimBox");
+            }
+        }
+    })?;
+    Ok(())
+}
+
+fn reframe(doc: &mut Document, index: usize, plan: impl FnOnce(f64, f64) -> Plan) -> Result<(), EditError> {
+    let src = source(doc, index)?;
+    let number = src.number;
+    let plan = plan(src.w, src.h);
     // Con i margini negativi la pagina si accorcia: almeno 1 mm deve restare.
     let min = mm_to_pt(1.0);
     if !(plan.width.is_finite() && plan.height.is_finite() && plan.width >= min && plan.height >= min) {
@@ -252,26 +347,8 @@ fn reframe(doc: &mut Document, index: usize, plan: impl FnOnce(f64, f64) -> Plan
             "la pagina {number} diventerebbe troppo piccola"
         )));
     }
-
-    // Il modulo: il contenuto della pagina con le sue risorse, così com'è.
-    let mut form = Dict::new();
-    form.set(b"Type".to_vec(), Object::name("XObject"));
-    form.set(b"Subtype".to_vec(), Object::name("Form"));
-    form.set(b"BBox".to_vec(), rect_object(crop));
-    form.set(
-        b"Matrix".to_vec(),
-        Object::Array(upright.iter().map(|v| Object::Real(*v)).collect()),
-    );
-    form.set(
-        b"Resources".to_vec(),
-        inherited(doc, page, b"Resources").unwrap_or(Object::Dict(Dict::new())),
-    );
-    let group = doc.get(page).as_dict().and_then(|d| d.get(b"Group")).cloned();
-    if let Some(g) = group {
-        form.set(b"Group".to_vec(), g);
-    }
-    let body = content(doc, page, number)?;
-    let form = doc.add(Object::Stream(Stream::flate(form, &body)));
+    let body = content(doc, src.page, number)?;
+    let form = page_form(doc, &src, &body);
 
     // La pagina nuova: le fasce colorate, poi il modulo al suo posto.
     let mut ops = String::new();
@@ -295,11 +372,10 @@ fn reframe(doc: &mut Document, index: usize, plan: impl FnOnce(f64, f64) -> Plan
         num(p[4]),
         num(p[5])
     ));
-    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), ops.as_bytes())));
 
-    let total = compose(&plan.place, &upright);
-    let media = [0.0, 0.0, plan.width, plan.height];
-    let trim_differs = boxes[3].iter().zip(crop).any(|(t, c)| (t - c).abs() > 0.01);
+    let total = compose(&plan.place, &src.upright);
+    let boxes = src.boxes;
+    let trim_differs = boxes[3].iter().zip(src.crop).any(|(t, c)| (t - c).abs() > 0.01);
     let trim = (plan.keep_trim && trim_differs).then(|| {
         let t = map_rect(&total, boxes[3]);
         [
@@ -309,28 +385,157 @@ fn reframe(doc: &mut Document, index: usize, plan: impl FnOnce(f64, f64) -> Plan
             t[3].min(plan.height),
         ]
     });
+    finish(
+        doc,
+        &src,
+        NewPage {
+            forms: &[(FORM_NAME, form)],
+            ops,
+            width: plan.width,
+            height: plan.height,
+            total,
+            trim,
+            bleed: None,
+        },
+    )
+}
 
-    move_annotations(doc, page, &total)?;
-    doc.update_dict(page, |d| {
-        let mut xobjects = Dict::new();
-        xobjects.set(FORM_NAME.as_bytes().to_vec(), Object::Ref(form));
-        let mut resources = Dict::new();
-        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
-        d.set(b"Resources".to_vec(), Object::Dict(resources));
-        d.set(b"Contents".to_vec(), Object::Ref(contents));
-        d.set(b"MediaBox".to_vec(), rect_object(media));
-        // Valori espliciti: quelli ereditati dai nodi sopra non devono tornare.
-        d.set(b"CropBox".to_vec(), rect_object(media));
-        d.set(b"Rotate".to_vec(), Object::Int(0));
-        d.remove(b"BleedBox");
-        d.remove(b"ArtBox");
-        d.remove(b"Group");
-        match trim {
-            Some(t) => d.set(b"TrimBox".to_vec(), rect_object(t)),
-            None => {
-                d.remove(b"TrimBox");
+/// Come si crea l'abbondanza che manca.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BleedMode {
+    /// La grafica vicino al bordo si ribalta fuori dal formato finito.
+    Mirror,
+    /// L'ultimo mezzo millimetro di grafica si allunga fino al bordo nuovo.
+    Stretch,
+}
+
+/// L'abbondanza da creare attorno al formato finito.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BleedSpec {
+    /// Il formato finito in millimetri dall'angolo in alto a sinistra della pagina come si vede:
+    /// sinistra, sopra, destra, sotto.
+    pub finished: [f64; 4],
+    /// Quanta abbondanza, in millimetri.
+    pub amount: f64,
+    /// I lati dove si crea: sopra, destra, sotto, sinistra. Sugli altri resta la pagina com'è.
+    pub sides: [bool; 4],
+    pub mode: BleedMode,
+}
+
+/// Il modulo con la grafica senza fustella: quello ribaltato nell'abbondanza (l'altro, con la
+/// pagina intera, è `FORM_NAME`).
+const FORM_ART: &str = "WFGrafica";
+/// Quanto della pagina vera resta oltre il formato finito sui lati con l'abbondanza nuova: tiene
+/// intero lo spessore della fustella e toglie i segni di taglio, che stanno più in là.
+const KEEP_BEYOND_MM: f64 = 1.0;
+/// La striscia di grafica che "Allunga" stira fino al bordo nuovo.
+const STRETCH_MM: f64 = 0.5;
+
+/// Crea l'abbondanza: la pagina diventa formato finito più `amount` sui lati scelti; lì si
+/// disegna `art` (la grafica senza fustella) ribaltata o allungata, sotto la pagina vera.
+/// TrimBox e BleedBox si scrivono, così il RIP sa dove tagliare.
+pub(crate) fn bleed(doc: &mut Document, index: usize, spec: &BleedSpec, art: &[u8]) -> Result<(), EditError> {
+    let src = source(doc, index)?;
+    let number = src.number;
+    let (w, h) = (src.w, src.h);
+    let f = spec.finished;
+    // Dal formato finito in mm (alto a sinistra) ai punti della pagina come si vede (basso a sinistra).
+    let fx0 = mm_to_pt(f[0]).clamp(0.0, w);
+    let fx1 = mm_to_pt(f[2]).clamp(0.0, w);
+    let fy0 = (h - mm_to_pt(f[3])).clamp(0.0, h);
+    let fy1 = (h - mm_to_pt(f[1])).clamp(0.0, h);
+    let min = mm_to_pt(1.0);
+    if !(fx1 - fx0 >= min && fy1 - fy0 >= min) {
+        return Err(EditError::Invalid(format!(
+            "il formato finito della pagina {number} non è valido"
+        )));
+    }
+    let b = mm_to_pt(spec.amount);
+    let keep = mm_to_pt(KEEP_BEYOND_MM.min(spec.amount));
+    let [top, right, bottom, left] = spec.sides;
+    // La pagina nuova (come si vede): formato finito più l'abbondanza, o la pagina di prima.
+    let r = [
+        if left { fx0 - b } else { 0.0 },
+        if bottom { fy0 - b } else { 0.0 },
+        if right { fx1 + b } else { w },
+        if top { fy1 + b } else { h },
+    ];
+    // Fin dove arriva la pagina vera: sui lati nuovi poco oltre il formato finito.
+    let c = [
+        if left { fx0 - keep } else { r[0] },
+        if bottom { fy0 - keep } else { r[1] },
+        if right { fx1 + keep } else { r[2] },
+        if top { fy1 + keep } else { r[3] },
+    ];
+    // Il bordo da cui si ribalta o si allunga: il formato finito.
+    let edge = [fx0, fy0, fx1, fy1];
+    let all_body = content(doc, src.page, number)?;
+    let all = page_form(doc, &src, &all_body);
+    let art = page_form(doc, &src, art);
+    let mut ops = format!("q 1 0 0 1 {} {} cm\n", num(-r[0]), num(-r[1]));
+    // I pezzi attorno: sinistra/centro/destra per sotto/centro/sopra, tranne il centro.
+    let xs = [(r[0], edge[0], -1), (edge[0], edge[2], 0), (edge[2], r[2], 1)];
+    let ys = [(r[1], edge[1], -1), (edge[1], edge[3], 0), (edge[3], r[3], 1)];
+    let s = mm_to_pt(STRETCH_MM);
+    // Per un asse: x' = a·x + e.
+    let axis = |dir: i32, lo: f64, hi: f64| -> (f64, f64) {
+        match (dir, spec.mode) {
+            (0, _) => (1.0, 0.0),
+            (-1, BleedMode::Mirror) => (-1.0, 2.0 * hi),
+            (_, BleedMode::Mirror) => (-1.0, 2.0 * lo),
+            (-1, BleedMode::Stretch) => {
+                // Da [hi, hi+s] a [lo, hi+s]: il punto hi+s resta fermo.
+                let k = (hi - lo + s) / s;
+                (k, (hi + s) * (1.0 - k))
+            }
+            (_, BleedMode::Stretch) => {
+                let k = (hi - lo + s) / s;
+                (k, (lo - s) * (1.0 - k))
             }
         }
-    })?;
-    Ok(())
+    };
+    for &(x0, x1, dx) in &xs {
+        for &(y0, y1, dy) in &ys {
+            if (dx == 0 && dy == 0) || x1 - x0 < 0.01 || y1 - y0 < 0.01 {
+                continue;
+            }
+            let (ax, ex) = axis(dx, x0, x1);
+            let (ay, ey) = axis(dy, y0, y1);
+            ops.push_str(&format!(
+                "q {} {} {} {} re W n {} 0 0 {} {} {} cm /{FORM_ART} Do Q\n",
+                num(x0),
+                num(y0),
+                num(x1 - x0),
+                num(y1 - y0),
+                num(ax),
+                num(ay),
+                num(ex),
+                num(ey)
+            ));
+        }
+    }
+    ops.push_str(&format!(
+        "q {} {} {} {} re W n /{FORM_NAME} Do Q\nQ\n",
+        num(c[0]),
+        num(c[1]),
+        num(c[2] - c[0]),
+        num(c[3] - c[1])
+    ));
+    let (width, height) = (r[2] - r[0], r[3] - r[1]);
+    let place: Matrix = [1.0, 0.0, 0.0, 1.0, -r[0], -r[1]];
+    let total = compose(&place, &src.upright);
+    let trim = [fx0 - r[0], fy0 - r[1], fx1 - r[0], fy1 - r[1]];
+    finish(
+        doc,
+        &src,
+        NewPage {
+            forms: &[(FORM_NAME, all), (FORM_ART, art)],
+            ops,
+            width,
+            height,
+            total,
+            trim: Some(trim),
+            bleed: Some([0.0, 0.0, width, height]),
+        },
+    )
 }

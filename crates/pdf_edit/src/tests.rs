@@ -807,3 +807,113 @@ fn colore_in_quadricromia_sul_riempimento() {
     // Il nero in quadricromia a schermo è un grigio molto scuro (conversione CMYK).
     assert!(pixel(&img, 120, 50).iter().all(|v| *v < 60));
 }
+
+/// Striscia rossa larga 5 punti a sinistra, il resto verde, e una linea magenta (la fustella
+/// finta) 3 punti dentro il bordo sinistro, su una pagina 200 × 100 senza abbondanza.
+const NO_BLEED: &str = "0 1 0 rg 0 0 200 100 re f 1 0 0 rg 0 0 5 100 re f 0 1 0 0 K 1 w 3 20 m 3 80 l S";
+
+fn bleed_spec(mode: BleedMode, sides: [bool; 4]) -> BleedSpec {
+    BleedSpec {
+        finished: [0.0, 0.0, pt_to_mm(200.0), pt_to_mm(100.0)],
+        amount: pt_to_mm(10.0),
+        sides,
+        mode,
+    }
+}
+
+#[test]
+fn abbondanza_a_specchio_con_formato_finito() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, NO_BLEED)]);
+    let left = e
+        .add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[])
+        .unwrap();
+    assert_eq!(left, 0);
+    assert_eq!(e.undo_label(), Some("Crea abbondanza"));
+    let info = e.pages();
+    assert!(near(info[0].size.w, pt_to_mm(220.0)) && near(info[0].size.h, pt_to_mm(120.0)));
+    let trim = info[0].trim.unwrap();
+    assert!(near(trim.w, pt_to_mm(200.0)) && near(trim.h, pt_to_mm(100.0)));
+    let img = render(&reread(&e), 0);
+    // A sinistra del taglio (x = 10) la grafica ribaltata: 2 → 8 dentro (verde), 8 → 2 (rossa).
+    assert_eq!(pixel(&img, 2, 60), [0, 255, 0]);
+    assert_eq!(pixel(&img, 8, 60), [255, 0, 0]);
+    // Sopra e sotto la grafica continua; dentro la pagina è com'era.
+    assert_eq!(pixel(&img, 100, 3), [0, 255, 0]);
+    assert_eq!(pixel(&img, 12, 3), [255, 0, 0]);
+    assert_eq!(pixel(&img, 100, 60), [0, 255, 0]);
+    // La fustella finta è ribaltata anche lei (x = 7), perché non è stata tenuta fuori.
+    assert!(pixel(&img, 7, 60)[1] < 100);
+    // Il formato finito si legge come TrimBox nella pagina riletta.
+    let scan = e.scan_page(0).unwrap();
+    let t = scan.trim.unwrap();
+    assert!(near(t[0], pt_to_mm(10.0)) && near(t[2], pt_to_mm(210.0)));
+}
+
+#[test]
+fn la_fustella_non_si_ribalta_nell_abbondanza() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, NO_BLEED)]);
+    let die = e.scan_page(0).unwrap().paths[2].id;
+    let left = e
+        .add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[die])
+        .unwrap();
+    assert_eq!(left, 0);
+    let img = render(&reread(&e), 0);
+    // Nell'abbondanza al posto della linea c'è la grafica sotto (rossa); la linea vera resta.
+    assert_eq!(pixel(&img, 7, 60), [255, 0, 0]);
+    assert!(pixel(&img, 13, 60)[1] < 100);
+    let scan = e.scan_page(0).unwrap();
+    assert!(scan.paths.iter().filter(|p| p.line.is_some()).count() >= 1);
+}
+
+#[test]
+fn abbondanza_allungata_e_solo_su_un_lato() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, NO_BLEED)]);
+    e.add_bleed(
+        0,
+        &bleed_spec(BleedMode::Stretch, [false, false, false, true]),
+        &[],
+    )
+    .unwrap();
+    let info = e.pages();
+    assert!(near(info[0].size.w, pt_to_mm(210.0)) && near(info[0].size.h, pt_to_mm(100.0)));
+    let img = render(&reread(&e), 0);
+    // Il bordo rosso si allunga per tutta l'abbondanza.
+    assert_eq!(pixel(&img, 1, 50), [255, 0, 0]);
+    assert_eq!(pixel(&img, 8, 50), [255, 0, 0]);
+    assert_eq!(pixel(&img, 150, 50), [0, 255, 0]);
+}
+
+#[test]
+fn abbondanza_non_valida() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, NO_BLEED)]);
+    let mut spec = bleed_spec(BleedMode::Mirror, [false; 4]);
+    assert!(e.add_bleed(0, &spec, &[]).is_err());
+    spec.sides = [true; 4];
+    spec.amount = f64::NAN;
+    assert!(e.add_bleed(0, &spec, &[]).is_err());
+    spec.amount = 3.0;
+    spec.finished = [10.0, 10.0, 10.2, 10.2];
+    assert!(e.add_bleed(0, &spec, &[]).is_err());
+    assert_eq!(e.undo_label(), None);
+}
+
+#[test]
+fn abbondanza_su_una_pagina_ruotata() {
+    // 100 × 200 ruotata di 90°: si vede 200 × 100. Il quadrato rosso in basso a sinistra del
+    // file finisce in alto a sinistra come si vede.
+    let mut e = editor(&[page(
+        [0.0, 0.0, 100.0, 200.0],
+        90,
+        "0 1 0 rg 0 0 100 200 re f 1 0 0 rg 0 0 20 20 re f",
+    )]);
+    e.add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[])
+        .unwrap();
+    let info = e.pages();
+    assert!(near(info[0].size.w, pt_to_mm(220.0)) && near(info[0].size.h, pt_to_mm(120.0)));
+    assert_eq!(info[0].rotation, 0);
+    let img = render(&reread(&e), 0);
+    // Il rosso in alto a sinistra si ribalta anche nell'angolo dell'abbondanza.
+    assert_eq!(pixel(&img, 15, 15), [255, 0, 0]);
+    assert_eq!(pixel(&img, 5, 5), [255, 0, 0]);
+    assert_eq!(pixel(&img, 215, 115), [0, 255, 0]);
+}

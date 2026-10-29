@@ -19,6 +19,7 @@ mod illustrator;
 mod paths;
 mod spots;
 
+pub use frame::{BleedMode, BleedSpec};
 pub use paths::{Fill, Ink, Line, NewInk, PageScan, Part, PathId, PathInfo, Restyle, Restyled, SubPath};
 pub use spots::{Overprint, Spot};
 
@@ -476,6 +477,25 @@ impl Editor {
             _ => "Sovrastampa dei tracciati",
         };
         self.edit(label, |d| paths::restyle(d, page, ids, change))
+    }
+
+    /// Crea l'abbondanza che manca attorno al formato finito della pagina (vedi [`BleedSpec`]).
+    /// I tracciati `die` (la fustella) restano fuori dalla grafica ribaltata o allungata.
+    /// Restituisce quanti tracciati della fustella non si sono potuti tenere fuori (stanno dentro
+    /// un modulo del PDF).
+    pub fn add_bleed(&mut self, page: usize, spec: &BleedSpec, die: &[PathId]) -> Result<usize, EditError> {
+        let ok = spec.amount.is_finite()
+            && (0.1..=100.0).contains(&spec.amount)
+            && spec.finished.iter().all(|v| v.is_finite())
+            && spec.sides.iter().any(|s| *s);
+        if !ok {
+            return Err(EditError::Invalid("abbondanza non valida".into()));
+        }
+        self.edit("Crea abbondanza", |d| {
+            let (art, left) = paths::without(d, page, die)?;
+            frame::bleed(d, page, spec, &art)?;
+            Ok(left)
+        })
     }
 
     /// Il PDF porta la copia del file di Illustrator, quella che Illustrator apre al posto delle

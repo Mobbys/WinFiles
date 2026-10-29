@@ -1045,3 +1045,37 @@ pub(crate) fn restyle(
     }
     Ok(result)
 }
+
+/// Il contenuto della pagina con i tracciati `ids` che non si dipingono più (l'operatore che
+/// dipinge diventa `n`), per esempio la grafica senza fustella. Si toccano solo i tracciati del
+/// contenuto della pagina: quelli dentro i moduli restano, e si contano nel secondo valore.
+pub(crate) fn without(doc: &Document, page: usize, ids: &[PathId]) -> Result<(Vec<u8>, usize), EditError> {
+    let page_ref = organize::pages(doc)?
+        .get(page)
+        .map(|p| p.obj)
+        .ok_or(EditError::NoPage(page.saturating_add(1)))?;
+    let data = page_content(doc, page_ref)?;
+    let targets: HashSet<usize> = ids
+        .iter()
+        .filter(|id| id.owner == Owner::Page(page_ref))
+        .map(|id| id.op)
+        .collect();
+    let left = ids.len().saturating_sub(targets.len());
+    if targets.is_empty() {
+        return Ok((data, left));
+    }
+    let resources = page_resources(doc, page_ref);
+    let res = read_res(doc, &resources);
+    let ops = parse(&data).ops;
+    let spots = locate(&ops, &res);
+    let out: Vec<Op> = ops
+        .into_iter()
+        .enumerate()
+        .map(|(i, op)| match spots.get(&i) {
+            // Un tracciato che ritaglia deve continuare a ritagliare: resta com'è.
+            Some(sp) if targets.contains(&i) && !sp.clips => Op::new("n", Vec::new()),
+            _ => op,
+        })
+        .collect();
+    Ok((serialize_ops(&out), left))
+}

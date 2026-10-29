@@ -13,7 +13,9 @@ use std::sync::mpsc::{Receiver, channel};
 use egui::{Align, Pos2, Rect, Sense, Stroke, Vec2, vec2};
 use serde::{Deserialize, Serialize};
 use winfiles_geom::{Unit, format_length, format_number};
-use winfiles_pdf_edit::{Ink, NewInk, PageScan, Part, PathId, PathInfo, Restyle, Snapshot};
+use winfiles_pdf_edit::{
+    BleedMode, BleedSpec, Ink, NewInk, PageScan, Part, PathId, PathInfo, Restyle, Snapshot,
+};
 
 use crate::icons;
 use crate::theme::{Tokens, semibold};
@@ -211,6 +213,13 @@ pub struct PathTool {
     after_scan: Option<Vec<PathId>>,
     /// Altezza del contenuto del pannello, tenuta mentre la pagina si rilegge (lo scorrimento resta).
     content_height: f32,
+    /// L'abbondanza da creare, in mm.
+    bleed_amount: f64,
+    /// I lati dove crearla: sopra, destra, sotto, sinistra.
+    bleed_sides: [bool; 4],
+    bleed_mode: BleedMode,
+    /// La lettura (versione, pagina) per cui i lati sono stati proposti.
+    bleed_for: Option<(u64, usize)>,
 }
 
 impl Default for PathTool {
@@ -235,6 +244,10 @@ impl Default for PathTool {
             sat: 0.0,
             after_scan: None,
             content_height: 0.0,
+            bleed_amount: 3.0,
+            bleed_sides: [true; 4],
+            bleed_mode: BleedMode::Mirror,
+            bleed_for: None,
         }
     }
 }
@@ -483,6 +496,8 @@ fn cmyk_fields(ui: &mut egui::Ui, c: &mut [f64; 4]) {
 /// Cosa chiede il pannello al modulo.
 pub enum Request {
     Restyle(Vec<PathId>, Restyle),
+    /// Crea l'abbondanza; i tracciati sono la fustella, da tenere fuori dalla grafica ribaltata.
+    Bleed(BleedSpec, Vec<PathId>),
 }
 
 /// Distanza dal punto `p` al segmento `a`–`b`.
@@ -964,9 +979,14 @@ impl PathTool {
                     ui.disable();
                 }
                 let top = ui.cursor().top();
-                self.check_card(ui, &scan, inks, unit, spots);
+                let c = check(&scan, inks);
+                self.check_card(ui, &scan, &c, unit, spots);
                 ui.add_space(8.0);
-                request = self.selection_card(ui, &scan, inks, unit, spots);
+                let bleed = self.bleed_card(ui, &c, unit);
+                if c.finished.is_some() {
+                    ui.add_space(8.0);
+                }
+                request = self.selection_card(ui, &scan, inks, unit, spots).or(bleed);
                 if !busy {
                     self.content_height = ui.cursor().top() - top;
                 }
@@ -978,12 +998,11 @@ impl PathTool {
         &mut self,
         ui: &mut egui::Ui,
         scan: &PageScan,
-        inks: &[InkName],
+        c: &Check,
         unit: Unit,
         spots: &[winfiles_pdf_edit::Spot],
     ) {
         let t = Tokens::get(ui.ctx());
-        let c = check(scan, inks);
         card_frame(ui, |ui| {
             ui.label(
                 egui::RichText::new("Controllo della pagina")
@@ -1109,6 +1128,156 @@ impl PathTool {
                 );
             }
         });
+    }
+
+    /// Crea l'abbondanza che manca attorno al formato finito.
+    fn bleed_card(&mut self, ui: &mut egui::Ui, c: &Check, unit: Unit) -> Option<Request> {
+        let t = Tokens::get(ui.ctx());
+        let (finished, from) = c.finished?;
+        // I lati si propongono a ogni lettura nuova: quelli con meno abbondanza di quella voluta.
+        let key = self.scanned.as_ref().map(|s| s.key);
+        let propose = |amount: f64| -> [bool; 4] {
+            match c.bleed {
+                Some(b) => b.map(|v| v + 0.05 < amount),
+                None => [true; 4],
+            }
+        };
+        if self.bleed_for != key {
+            self.bleed_for = key;
+            self.bleed_sides = propose(self.bleed_amount);
+        }
+        let mut request = None;
+        card_frame(ui, |ui| {
+            ui.label(
+                egui::RichText::new("Crea l'abbondanza")
+                    .font(semibold(13.0))
+                    .color(t.text_strong),
+            );
+            ui.add_space(2.0);
+            let size = winfiles_geom::format_size(
+                winfiles_geom::Size::new(finished[2] - finished[0], finished[3] - finished[1]),
+                unit,
+            );
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(format!(
+                        "Formato finito {size} ({})",
+                        match from {
+                            "fustella" => "dalla fustella",
+                            "filetto" => "dal filetto",
+                            _ => "dal TrimBox",
+                        }
+                    ))
+                    .color(t.text_dim),
+                )
+                .wrap(),
+            );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Abbondanza").color(t.text_dim));
+                let resp = crate::fluent::number(
+                    ui,
+                    90.0,
+                    egui::DragValue::new(&mut self.bleed_amount)
+                        .range(0.5..=50.0)
+                        .speed(0.1)
+                        .custom_formatter(|v, _| format!("{} mm", format_number(v, 1, true)))
+                        .custom_parser(|text| {
+                            let clean = text.trim().trim_end_matches("mm").trim().replace(',', ".");
+                            clean.parse::<f64>().ok()
+                        }),
+                );
+                if resp.changed() {
+                    self.bleed_sides = propose(self.bleed_amount);
+                }
+            });
+            ui.add_space(4.0);
+            let names = ["Sopra", "Destra", "Sotto", "Sinistra"];
+            egui::Grid::new("abbondanza-lati")
+                .num_columns(2)
+                .spacing(vec2(16.0, 4.0))
+                .show(ui, |ui| {
+                    for (i, name) in names.iter().enumerate() {
+                        if let Some(side) = self.bleed_sides.get_mut(i) {
+                            let have = c
+                                .bleed
+                                .and_then(|b| b.get(i).copied())
+                                .map(|v| format!("c'è {} mm", format_number(v, 1, true)))
+                                .unwrap_or_default();
+                            ui.add(crate::fluent::checkbox(side, *name)).on_hover_text(have);
+                        }
+                        if i % 2 == 1 {
+                            ui.end_row();
+                        }
+                    }
+                });
+            ui.add_space(6.0);
+            crate::app::segmented(
+                ui,
+                "abbondanza-modo",
+                &mut self.bleed_mode,
+                &[
+                    (BleedMode::Mirror, "A specchio"),
+                    (BleedMode::Stretch, "Allunga il bordo"),
+                ],
+            );
+            ui.add_space(4.0);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(match self.bleed_mode {
+                        BleedMode::Mirror => {
+                            "La grafica vicino al bordo si ribalta fuori dal formato finito: va bene per foto e sfondi."
+                        }
+                        BleedMode::Stretch => {
+                            "L'ultimo mezzo millimetro di grafica si allunga fino al bordo: va bene per tinte unite e sfumature."
+                        }
+                    })
+                    .size(12.0)
+                    .color(t.text_dim),
+                )
+                .wrap(),
+            );
+            ui.add_space(8.0);
+            let any = self.bleed_sides.iter().any(|s| *s);
+            let go = egui::Button::new(
+                egui::RichText::new("Crea abbondanza")
+                    .font(semibold(13.5))
+                    .color(if any { t.on_primary } else { t.text_disabled }),
+            )
+            .fill(if any { t.primary } else { t.button })
+            .min_size(vec2(ui.available_width(), 32.0));
+            if ui
+                .add_enabled(any, go)
+                .on_hover_text(
+                    "La pagina diventa formato finito più l'abbondanza sui lati scelti; la fustella \
+                     non si ribalta. Formato finito e abbondanza si scrivono nel PDF (TrimBox e BleedBox).",
+                )
+                .on_disabled_hover_text("Scegli almeno un lato")
+                .clicked()
+            {
+                // La fustella (e il filetto da cui si è preso il formato finito) resta fuori.
+                let mut die: Vec<PathId> = c
+                    .dies
+                    .iter()
+                    .flat_map(|(_, _, g)| g.ids.iter().copied())
+                    .collect();
+                if from == "filetto"
+                    && let Some(g) = c.suspects.first()
+                {
+                    die.extend(g.ids.iter().copied());
+                }
+                request = Some(Request::Bleed(
+                    BleedSpec {
+                        finished,
+                        amount: self.bleed_amount,
+                        sides: self.bleed_sides,
+                        mode: self.bleed_mode,
+                    },
+                    die,
+                ));
+            }
+        });
+        request
     }
 
     fn selection_card(

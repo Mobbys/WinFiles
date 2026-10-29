@@ -102,6 +102,9 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Strumento "Tracciati": clic su una linea per vederne colore, spessore, lunghezza; farla
   diventare una tinta con nome libero (fustella, cordonatura…), cambiare spessore e sovrastampa;
   controllo della pagina con fustella e abbondanza per lato ([ADR 0023](adr/0023-tracciati-e-fustelle.md))
+- [x] "Crea l'abbondanza": a specchio o allungando il bordo, sui lati scelti, in vettoriale, senza
+  ribaltare la fustella; TrimBox e BleedBox scritti ([ADR 0024](adr/0024-abbondanza-vettoriale.md))
+- [ ] Abbondanza lungo una fustella sagomata (angoli tondi, forme)
 - [ ] Provata da Michel su file veri
 
 ## Fase 8 in dettaglio

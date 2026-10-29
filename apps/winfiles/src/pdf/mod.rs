@@ -2187,34 +2187,51 @@ impl PdfModule {
             });
         });
         ui.add_space(6.0);
-        let request = self.paths.panel(&mut ui, unit, &mut self.inks, &spots);
-        if let Some(tracciati::Request::Restyle(ids, change)) = request {
-            let page = self.current;
-            let mut new_ids = None;
-            self.apply(|e| {
-                let r = e.restyle_paths(page, &ids, &change)?;
-                new_ids = Some(r.ids.clone());
-                let n = |k: usize| {
-                    if k == 1 {
-                        "1 tracciato".to_string()
-                    } else {
-                        format!("{k} tracciati")
+        let page = self.current;
+        match self.paths.panel(&mut ui, unit, &mut self.inks, &spots) {
+            None => {}
+            Some(tracciati::Request::Restyle(ids, change)) => {
+                let mut new_ids = None;
+                self.apply(|e| {
+                    let r = e.restyle_paths(page, &ids, &change)?;
+                    new_ids = Some(r.ids.clone());
+                    let n = |k: usize| {
+                        if k == 1 {
+                            "1 tracciato".to_string()
+                        } else {
+                            format!("{k} tracciati")
+                        }
+                    };
+                    let mut msg = match (&change.ink, r.done) {
+                        (_, 0) => "Niente da cambiare".to_string(),
+                        (Some(winfiles_pdf_edit::NewInk::Spot { name, .. }), k) => {
+                            format!("{} in tinta {}", n(k), name.trim())
+                        }
+                        (_, k) => format!("{} cambiati", n(k)),
+                    };
+                    if r.skipped > 0 {
+                        msg.push_str(&format!(" ({} di ritaglio lasciati com'erano)", r.skipped));
                     }
-                };
-                let mut msg = match (&change.ink, r.done) {
-                    (_, 0) => "Niente da cambiare".to_string(),
-                    (Some(winfiles_pdf_edit::NewInk::Spot { name, .. }), k) => {
-                        format!("{} in tinta {}", n(k), name.trim())
-                    }
-                    (_, k) => format!("{} cambiati", n(k)),
-                };
-                if r.skipped > 0 {
-                    msg.push_str(&format!(" ({} di ritaglio lasciati com'erano)", r.skipped));
+                    Ok(msg)
+                });
+                if let Some(ids) = new_ids.filter(|v| !v.is_empty()) {
+                    self.paths.select_after_scan(ids);
+                }
+            }
+            Some(tracciati::Request::Bleed(spec, die)) => {
+                self.apply(|e| {
+                let left = e.add_bleed(page, &spec, &die)?;
+                let mut msg = format!(
+                    "Abbondanza di {} mm creata",
+                    winfiles_geom::format_number(spec.amount, 1, true)
+                );
+                if left > 0 {
+                    msg.push_str(&format!(
+                        " ({left} tracciati della fustella stanno in un gruppo del PDF e si sono ribaltati anche loro)"
+                    ));
                 }
                 Ok(msg)
             });
-            if let Some(ids) = new_ids.filter(|v| !v.is_empty()) {
-                self.paths.select_after_scan(ids);
             }
         }
     }
