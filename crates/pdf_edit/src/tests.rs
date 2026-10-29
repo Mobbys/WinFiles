@@ -1094,3 +1094,163 @@ fn fustella_su_una_pagina_ruotata() {
         assert!(near(*a, b), "{after:?} {before:?}");
     }
 }
+
+/// Un cerchio (quattro curve) di centro (cx, cy) e raggio r, in punti.
+fn circle(cx: f64, cy: f64, r: f64) -> String {
+    let k = r * 0.552_284_75;
+    format!(
+        "{} {cy} m {} {} {} {} {cx} {} c {} {} {} {} {} {cy} c {} {} {} {} {cx} {} c {} {} {} {} {} {cy} c h",
+        cx + r,
+        cx + r,
+        cy + k,
+        cx + k,
+        cy + r,
+        cy + r,
+        cx - k,
+        cy + r,
+        cx - r,
+        cy + k,
+        cx - r,
+        cx - r,
+        cy - k,
+        cx - k,
+        cy - r,
+        cy - r,
+        cx + k,
+        cy - r,
+        cx + r,
+        cy - k,
+        cx + r,
+    )
+}
+
+fn leak(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+fn is_red(p: [u8; 3]) -> bool {
+    p[0] > 200 && p[1] < 60 && p[2] < 60
+}
+
+fn is_blue(p: [u8; 3]) -> bool {
+    p[2] > 200 && p[0] < 60 && p[1] < 60
+}
+
+fn is_white(p: [u8; 3]) -> bool {
+    p.iter().all(|v| *v > 240)
+}
+
+#[test]
+fn abbondanza_che_segue_un_cerchio() {
+    // Grafica rossa a sinistra e blu a destra, ritagliata sul cerchio; sopra la fustella nera.
+    let c = circle(150.0, 150.0, 100.0);
+    let content = leak(format!(
+        "q {c} W n 1 0 0 rg 0 0 150 300 re f 0 0 1 rg 150 0 150 300 re f Q 0 0 0 1 K 0.5 w {c} S"
+    ));
+    let mut e = editor(&[page([0.0, 0.0, 400.0, 300.0], 0, content)]);
+    let scan = e.scan_page(0).unwrap();
+    let die: Vec<PathId> = scan
+        .paths
+        .iter()
+        .filter(|p| p.line.is_some())
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(outline_is_rectangle(&scan, &die), Some(false));
+    e.add_shaped_bleed(0, 5.0, &die, &die, &[], &[]).unwrap();
+    assert_eq!(e.undo_label(), Some("Crea abbondanza"));
+    let b = mm_to_pt(5.0);
+    let size = 200.0 + 2.0 * b;
+    let info = &e.pages()[0];
+    assert!(near(info.size.w, pt_to_mm(size)) && near(info.size.h, pt_to_mm(size)));
+    let img = render(&reread(&e), 0);
+    let mid = (size / 2.0) as u32;
+    // Fuori dal cerchio, a 2,5 mm: a sinistra il rosso, a destra il blu.
+    let out = (100.0 + mm_to_pt(2.5)) as u32;
+    assert!(
+        is_red(pixel(&img, mid - out, mid)),
+        "{:?}",
+        pixel(&img, mid - out, mid)
+    );
+    assert!(
+        is_blue(pixel(&img, mid + out, mid)),
+        "{:?}",
+        pixel(&img, mid + out, mid)
+    );
+    // Anche in diagonale (dentro un ventaglio o tra due lati).
+    let d = ((100.0 + mm_to_pt(2.5)) / 2f64.sqrt()) as u32;
+    assert!(is_red(pixel(&img, mid - d, mid - d)));
+    assert!(is_blue(pixel(&img, mid + d, mid + d)));
+    // Nell'angolo della pagina, oltre l'abbondanza, resta il bianco.
+    assert!(is_white(pixel(&img, 3, 3)));
+    assert!(is_white(pixel(&img, size as u32 - 3, size as u32 - 3)));
+    // La fustella resta: un pixel scuro sul cerchio, in alto.
+    let top = (size / 2.0 - 100.0) as u32;
+    let dark = (top - 1..=top + 1).any(|y| pixel(&img, mid, y).iter().all(|v| *v < 120));
+    assert!(dark, "{:?}", pixel(&img, mid, top));
+    // Il formato finito è il rettangolo del cerchio.
+    let trim = e.pages()[0].trim.unwrap();
+    assert!(
+        near(trim.w, pt_to_mm(200.0)) && near(trim.h, pt_to_mm(200.0)),
+        "{trim:?}"
+    );
+}
+
+#[test]
+fn abbondanza_che_segue_una_stella() {
+    // Una stella a cinque punte rossa: sulle punte (angoli stretti) e negli incavi.
+    let (cx, cy) = (150.0, 150.0);
+    let mut d = String::from("1 0 0 rg ");
+    let mut tips = Vec::new();
+    let mut notches = Vec::new();
+    for i in 0..10 {
+        let a = std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::PI / 5.0;
+        let r = if i % 2 == 0 { 120.0 } else { 50.0 };
+        let (x, y) = (cx + r * a.cos(), cy + r * a.sin());
+        if i % 2 == 0 {
+            tips.push(a);
+        } else {
+            notches.push(a);
+        }
+        d.push_str(&format!("{x} {y} {} ", if i == 0 { "m" } else { "l" }));
+    }
+    d.push_str("h f");
+    let mut e = editor(&[page([0.0, 0.0, 300.0, 300.0], 0, leak(d))]);
+    let id = e.scan_page(0).unwrap().paths[0].id;
+    let before = e.scan_page(0).unwrap().paths[0].bounds;
+    e.add_shaped_bleed(0, 3.0, &[id], &[], &[], &[]).unwrap();
+    let img = render(&reread(&e), 0);
+    let b = mm_to_pt(3.0);
+    // Il centro della stella sulla pagina nuova (asse y in giù, come i pixel).
+    let x0 = mm_to_pt(before[0]) - b;
+    let y0 = mm_to_pt(before[1]) - b;
+    let (ccx, ccy) = (cx - x0, (300.0 - cy) - y0);
+    let at = |a: f64, r: f64| pixel(&img, (ccx + r * a.cos()) as u32, (ccy - r * a.sin()) as u32);
+    for a in &tips {
+        // Oltre la punta di 1,5 mm.
+        let p = at(*a, 120.0 + mm_to_pt(1.5));
+        assert!(is_red(p), "punta {a}: {p:?}");
+    }
+    for a in &notches {
+        // Nell'incavo, 1,5 mm fuori.
+        let p = at(*a, 50.0 + mm_to_pt(1.5));
+        assert!(is_red(p), "incavo {a}: {p:?}");
+        // A metà tra due punte, lontano dalla stella: bianco.
+        let p = at(*a, 95.0);
+        assert!(is_white(p), "fuori {a}: {p:?}");
+    }
+}
+
+#[test]
+fn il_rettangolo_si_riconosce() {
+    let c = leak(format!(
+        "0 0 1 rg 10 10 100 50 re f {} f 0 0 m 100 0 l 50 80 l h f",
+        circle(200.0, 50.0, 30.0)
+    ));
+    let e = editor(&[page([0.0, 0.0, 300.0, 100.0], 0, c)]);
+    let scan = e.scan_page(0).unwrap();
+    let id = |i: usize| [scan.paths[i].id];
+    assert_eq!(outline_is_rectangle(&scan, &id(0)), Some(true));
+    assert_eq!(outline_is_rectangle(&scan, &id(1)), Some(false));
+    assert_eq!(outline_is_rectangle(&scan, &id(2)), Some(false));
+    assert_eq!(outline_is_rectangle(&scan, &[]), None);
+}

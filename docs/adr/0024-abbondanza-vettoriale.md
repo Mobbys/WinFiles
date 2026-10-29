@@ -38,9 +38,8 @@ dentro; i fondi bianchi sotto tutta la grafica si tolgono, perché anche loro, s
 lascerebbero un filo chiaro. Sulla carta un fondo bianco non stampa nulla.
 
 ## Conseguenze
-- Solo abbondanza rettangolare, attorno al rettangolo del formato finito: con una fustella
-  sagomata (angoli tondi, forme) dove la grafica si ferma sulla fustella l'abbondanza lungo la
-  forma è la fase successiva.
+- Solo abbondanza rettangolare, attorno al rettangolo del formato finito: lungo una fustella
+  sagomata (angoli tondi, forme) vedi l'ADR 0026.
 - I tracciati della fustella dentro un modulo del PDF non si possono togliere dalla copia
   ribaltata: il messaggio lo dice.
 - Una pagina sola alla volta (quella aperta), perché il formato finito si legge pagina per pagina.

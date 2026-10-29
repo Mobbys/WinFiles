@@ -107,7 +107,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Abbondanza solo per i tracciati scelti (lo sfondo), il resto resta com'è
 - [x] "Crea la fustella" dal contorno dei tracciati scelti, uniti se si sovrappongono
   ([ADR 0025](adr/0025-fustella-dalla-selezione.md))
-- [ ] Abbondanza lungo una fustella sagomata (angoli tondi, forme)
+- [x] Abbondanza lungo una fustella sagomata (angoli tondi, forme), ADR 0026
 - [ ] Provata da Michel su file veri
 
 ## Fase 8 in dettaglio

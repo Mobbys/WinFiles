@@ -145,6 +145,9 @@ pub struct PathInfo {
     pub fill: Option<Fill>,
     /// Il rettangolo che lo contiene: x0, y0, x1, y1 in millimetri.
     pub bounds: [f64; 4],
+    /// La parte di `bounds` che si vede, dentro il ritaglio in corso (un fondo più largo del
+    /// tracciato che lo ritaglia si vede solo fin lì).
+    pub visible: [f64; 4],
     /// La lunghezza di tutti i pezzi, in millimetri.
     pub length: f64,
     /// Sta dentro un modulo: cambiarlo cambia ogni copia del modulo.
@@ -680,6 +683,7 @@ impl Scanner<'_> {
                 overprint: s.op_fill,
             }),
             bounds,
+            visible: s.clip.and_then(|c| intersect(c, bounds)).unwrap_or(bounds),
             length,
             in_form,
             clips,
@@ -1114,6 +1118,81 @@ pub(crate) fn only(doc: &Document, page: usize, ids: &[PathId]) -> Result<Vec<u8
     Ok(serialize_ops(&out))
 }
 
+/// Una forma chiusa: il contorno esterno e poi i buchi, punti in millimetri della pagina come si
+/// vede.
+pub(crate) type Shape = Vec<Vec<[f64; 2]>>;
+
+/// Il contorno dell'unione dei tracciati `ids`: ogni tracciato si pulisce da solo (pari-dispari:
+/// i buchi restano buchi), poi tutti insieme si uniscono (non-zero: quello che si sovrappone
+/// diventa una forma sola).
+pub(crate) fn outline(scanned: &PageScan, ids: &[PathId]) -> Result<Vec<Shape>, EditError> {
+    use i_overlay::core::fill_rule::FillRule;
+    use i_overlay::float::simplify::SimplifyShape;
+
+    let wanted: HashSet<PathId> = ids.iter().copied().collect();
+    let mut contours: Vec<Vec<[f64; 2]>> = Vec::new();
+    let mut points = 0usize;
+    for p in scanned.paths.iter().filter(|p| wanted.contains(&p.id)) {
+        let own: Vec<Vec<[f64; 2]>> = p
+            .parts
+            .iter()
+            .filter(|part| part.points.len() >= 3)
+            .map(|part| part.points.clone())
+            .collect();
+        points = points.saturating_add(own.iter().map(Vec::len).sum());
+        if points > MAX_POINTS {
+            return Err(EditError::Invalid(
+                "i tracciati scelti sono troppo complessi".into(),
+            ));
+        }
+        for shape in own.simplify_shape(FillRule::EvenOdd) {
+            contours.extend(shape);
+        }
+    }
+    let shapes: Vec<Shape> = contours
+        .simplify_shape(FillRule::NonZero)
+        .into_iter()
+        .map(|s| s.into_iter().filter(|c| c.len() >= 3).collect::<Shape>())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if shapes.is_empty() {
+        return Err(EditError::Invalid(
+            "i tracciati scelti non chiudono un'area".into(),
+        ));
+    }
+    Ok(shapes)
+}
+
+/// L'area con il segno (positiva se il giro è antiorario con l'asse y in su).
+pub(crate) fn signed_area(c: &[[f64; 2]]) -> f64 {
+    let n = c.len();
+    (0..n)
+        .filter_map(|i| Some((c.get(i)?, c.get((i + 1) % n)?)))
+        .map(|(a, b)| a[0] * b[1] - b[0] * a[1])
+        .sum::<f64>()
+        / 2.0
+}
+
+/// Il contorno dei tracciati `ids` è un rettangolo dritto (None: non chiudono un'area). Serve a
+/// scegliere tra l'abbondanza sui quattro lati e quella che segue la forma.
+pub fn outline_is_rectangle(scanned: &PageScan, ids: &[PathId]) -> Option<bool> {
+    let shapes = outline(scanned, ids).ok()?;
+    let [shape] = shapes.as_slice() else {
+        return Some(false);
+    };
+    let [c] = shape.as_slice() else {
+        return Some(false);
+    };
+    let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for p in c {
+        b = [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])];
+    }
+    // Riempie il rettangolo che lo contiene, a meno di un decimo di mm sul giro.
+    let area = signed_area(c).abs();
+    let (w, h) = (b[2] - b[0], b[3] - b[1]);
+    Some(w * h - area <= 0.1 * 2.0 * (w + h))
+}
+
 /// La fustella nuova da creare attorno ai tracciati scelti.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NewDie {
@@ -1135,9 +1214,6 @@ pub(crate) fn add_die(
     ids: &[PathId],
     die: &NewDie,
 ) -> Result<usize, EditError> {
-    use i_overlay::core::fill_rule::FillRule;
-    use i_overlay::float::simplify::SimplifyShape;
-
     let name = die.name.trim();
     if name.is_empty() || name.len() > 127 {
         return Err(EditError::Invalid("nome della tinta non valido".into()));
@@ -1145,36 +1221,8 @@ pub(crate) fn add_die(
     if !(die.width.is_finite() && (0.0..=100.0).contains(&die.width)) {
         return Err(EditError::Invalid("spessore non valido".into()));
     }
-    let wanted: HashSet<PathId> = ids.iter().copied().collect();
-    let scanned = scan(doc, page)?;
-    // Ogni tracciato si pulisce da solo (pari-dispari: i buchi restano buchi), poi tutti insieme si
-    // uniscono (non-zero: quello che si sovrappone diventa una forma sola).
-    let mut contours: Vec<Vec<[f64; 2]>> = Vec::new();
-    let mut points = 0usize;
-    for p in scanned.paths.iter().filter(|p| wanted.contains(&p.id)) {
-        let own: Vec<Vec<[f64; 2]>> = p
-            .parts
-            .iter()
-            .filter(|part| part.points.len() >= 3)
-            .map(|part| part.points.clone())
-            .collect();
-        points = points.saturating_add(own.iter().map(Vec::len).sum());
-        if points > MAX_POINTS {
-            return Err(EditError::Invalid(
-                "i tracciati scelti sono troppo complessi".into(),
-            ));
-        }
-        for shape in own.simplify_shape(FillRule::EvenOdd) {
-            contours.extend(shape);
-        }
-    }
-    let shapes = contours.simplify_shape(FillRule::NonZero);
-    let outlines: Vec<&Vec<[f64; 2]>> = shapes.iter().flatten().filter(|c| c.len() >= 3).collect();
-    if outlines.is_empty() {
-        return Err(EditError::Invalid(
-            "i tracciati scelti non chiudono un'area: niente fustella".into(),
-        ));
-    }
+    let shapes = outline(&scan(doc, page)?, ids)?;
+    let outlines: Vec<&Vec<[f64; 2]>> = shapes.iter().flatten().collect();
     // Dai millimetri della pagina come si vede alle unità del PDF.
     let back = page_matrix(doc, page)?
         .matrix

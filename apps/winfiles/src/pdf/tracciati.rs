@@ -182,6 +182,9 @@ struct Scanned {
 /// La lettura in corso: per quale versione e pagina, e da dove arriva.
 type Pending = ((u64, usize), Receiver<Result<PageScan, String>>);
 
+/// Per quale lettura e quali tracciati si sa se il contorno è un rettangolo, e la risposta.
+type ShapeKnown = ((u64, usize), Vec<PathId>, Option<bool>);
+
 /// Il pannello: lo stato dello strumento.
 pub struct PathTool {
     /// Lo strumento è acceso: clic sulla pagina sceglie i tracciati.
@@ -227,6 +230,10 @@ pub struct PathTool {
     finish_choice: Option<Finish>,
     /// Con dei tracciati scelti: si allungano solo loro (lo sfondo), il resto resta com'è.
     bleed_only_selected: bool,
+    /// Con una fustella sagomata l'abbondanza segue la sua forma (altrimenti il rettangolo).
+    bleed_follow: bool,
+    /// Per quale lettura e quali tracciati si sa se il contorno è un rettangolo, e la risposta.
+    shape_known: Option<ShapeKnown>,
     /// La fustella da creare dai tracciati scelti: nome e spessore in mm.
     die_name: String,
     die_width: f64,
@@ -260,6 +267,8 @@ impl Default for PathTool {
             bleed_for: None,
             finish_choice: None,
             bleed_only_selected: true,
+            bleed_follow: true,
+            shape_known: None,
             die_name: "Taglio".into(),
             die_width: 0.1,
         }
@@ -517,6 +526,8 @@ pub enum Request {
         paper: Vec<PathId>,
         /// Solo questi si allungano (vuoto: tutta la pagina).
         only: Vec<PathId>,
+        /// L'abbondanza segue la forma di questi tracciati (vuoto: il rettangolo di `spec`).
+        outline: Vec<PathId>,
     },
     /// Crea una fustella dal contorno dei tracciati.
     Die(Vec<PathId>, NewDie),
@@ -768,7 +779,7 @@ pub fn check(scan: &PageScan, inks: &[InkName]) -> Check {
         let visible = !crop_mark
             && (p.line.as_ref().is_some_and(|l| !is_paper(&l.ink))
                 || p.fill.as_ref().is_some_and(|f| !is_paper(&f.ink)));
-        if visible && let Some(b) = clip(p.bounds) {
+        if visible && let Some(b) = clip(p.visible) {
             content = Some(union(content, b));
         }
         if let (Some(l), None) = (&p.line, &p.fill)
@@ -1281,7 +1292,7 @@ impl PathTool {
             .iter()
             .filter(|p| self.selected.contains(&p.id))
             .collect();
-        let chosen_bounds = chosen.iter().fold(None, |acc, p| Some(union(acc, p.bounds)));
+        let chosen_bounds = chosen.iter().fold(None, |acc, p| Some(union(acc, p.visible)));
         let mut sources = c.sources.clone();
         if let Some(b) = chosen_bounds {
             sources.insert(0, (b, Finish::Selection));
@@ -1292,6 +1303,36 @@ impl PathTool {
             .and_then(|f| sources.iter().find(|(_, s)| *s == f).copied())
             .unwrap_or(auto);
         let only_selected = chosen_bounds.is_some() && self.bleed_only_selected;
+        // La forma da cui viene il formato finito: se non è un rettangolo l'abbondanza può seguirla.
+        let outline_ids: Vec<PathId> = match from {
+            Finish::Die => c
+                .dies
+                .iter()
+                .filter(|(_, r, _)| *r == Role::Cut)
+                .flat_map(|(_, _, g)| g.ids.iter().copied())
+                .collect(),
+            Finish::Hairline => c.suspects.first().map(|g| g.ids.clone()).unwrap_or_default(),
+            Finish::Selection => chosen.iter().map(|p| p.id).collect(),
+            _ => Vec::new(),
+        };
+        let shaped = !outline_ids.is_empty() && {
+            let key = self.scanned.as_ref().map(|s| s.key).unwrap_or_default();
+            let known = self
+                .shape_known
+                .as_ref()
+                .filter(|(k, ids, _)| *k == key && *ids == outline_ids)
+                .map(|(_, _, r)| *r);
+            let rect = match known {
+                Some(r) => r,
+                None => {
+                    let r = winfiles_pdf_edit::outline_is_rectangle(scan, &outline_ids);
+                    self.shape_known = Some((key, outline_ids.clone(), r));
+                    r
+                }
+            };
+            rect == Some(false)
+        };
+        let follow = shaped && self.bleed_follow;
         // La grafica che deve arrivare all'abbondanza: quella scelta, o tutta.
         let content = if only_selected { chosen_bounds } else { c.content };
         // I lati si propongono a ogni lettura o scelta nuova: quelli con meno abbondanza di
@@ -1399,38 +1440,67 @@ impl PathTool {
                     self.bleed_sides = propose(self.bleed_amount, finished);
                 }
             });
-            ui.add_space(4.0);
-            let names = ["Sopra", "Destra", "Sotto", "Sinistra"];
-            egui::Grid::new("abbondanza-lati")
-                .num_columns(2)
-                .spacing(vec2(16.0, 4.0))
-                .show(ui, |ui| {
-                    for (i, name) in names.iter().enumerate() {
-                        if let Some(side) = self.bleed_sides.get_mut(i) {
-                            let have = c
-                                .content
-                                .and_then(|content| bleed_beyond(finished, content).get(i).copied())
-                                .map(|v| format!("c'è {} mm", format_number(v, 1, true)))
-                                .unwrap_or_default();
-                            ui.add(crate::fluent::checkbox(side, *name)).on_hover_text(have);
+            if shaped {
+                ui.add_space(4.0);
+                ui.add(crate::fluent::checkbox(
+                    &mut self.bleed_follow,
+                    match from {
+                        Finish::Selection => "Segui la forma dei tracciati scelti",
+                        Finish::Hairline => "Segui la forma del filetto",
+                        _ => "Segui la forma della fustella",
+                    },
+                ))
+                .on_hover_text(
+                    "La fustella non è un rettangolo: l'abbondanza le gira attorno, a pari \
+                     distanza; senza la spunta si crea sui lati del rettangolo che la contiene",
+                );
+            }
+            if follow {
+                ui.add_space(4.0);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "Lungo tutto il contorno l'ultimo mezzo millimetro di grafica si allunga verso fuori; \
+                             sulle punte strette si apre a ventaglio.",
+                        )
+                        .size(12.0)
+                        .color(t.text_dim),
+                    )
+                    .wrap(),
+                );
+            } else {
+                ui.add_space(4.0);
+                let names = ["Sopra", "Destra", "Sotto", "Sinistra"];
+                egui::Grid::new("abbondanza-lati")
+                    .num_columns(2)
+                    .spacing(vec2(16.0, 4.0))
+                    .show(ui, |ui| {
+                        for (i, name) in names.iter().enumerate() {
+                            if let Some(side) = self.bleed_sides.get_mut(i) {
+                                let have = c
+                                    .content
+                                    .and_then(|content| bleed_beyond(finished, content).get(i).copied())
+                                    .map(|v| format!("c'è {} mm", format_number(v, 1, true)))
+                                    .unwrap_or_default();
+                                ui.add(crate::fluent::checkbox(side, *name)).on_hover_text(have);
+                            }
+                            if i % 2 == 1 {
+                                ui.end_row();
+                            }
                         }
-                        if i % 2 == 1 {
-                            ui.end_row();
-                        }
-                    }
-                });
-            ui.add_space(6.0);
-            crate::app::segmented(
-                ui,
-                "abbondanza-modo",
-                &mut self.bleed_mode,
-                &[
-                    (BleedMode::Mirror, "A specchio"),
-                    (BleedMode::Stretch, "Allunga il bordo"),
-                ],
-            );
-            ui.add_space(4.0);
-            ui.add(
+                    });
+                ui.add_space(6.0);
+                crate::app::segmented(
+                    ui,
+                    "abbondanza-modo",
+                    &mut self.bleed_mode,
+                    &[
+                        (BleedMode::Mirror, "A specchio"),
+                        (BleedMode::Stretch, "Allunga il bordo"),
+                    ],
+                );
+                ui.add_space(4.0);
+                ui.add(
                 egui::Label::new(
                     egui::RichText::new(match self.bleed_mode {
                         BleedMode::Mirror => {
@@ -1445,8 +1515,9 @@ impl PathTool {
                 )
                 .wrap(),
             );
+            }
             ui.add_space(8.0);
-            let any = self.bleed_sides.iter().any(|s| *s);
+            let any = follow || self.bleed_sides.iter().any(|s| *s);
             let go = egui::Button::new(
                 egui::RichText::new("Crea abbondanza")
                     .font(semibold(13.5))
@@ -1488,6 +1559,7 @@ impl PathTool {
                     } else {
                         Vec::new()
                     },
+                    outline: if follow { outline_ids.clone() } else { Vec::new() },
                 });
             }
         });

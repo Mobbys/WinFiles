@@ -570,3 +570,452 @@ pub(crate) fn bleed(
         },
     )
 }
+
+/// Un punto (o un vettore) in punti della pagina come si vede, asse y in su.
+type Pt = [f64; 2];
+
+fn sub(a: Pt, b: Pt) -> Pt {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
+fn add(a: Pt, b: Pt) -> Pt {
+    [a[0] + b[0], a[1] + b[1]]
+}
+
+fn mul(a: Pt, k: f64) -> Pt {
+    [a[0] * k, a[1] * k]
+}
+
+fn dot(a: Pt, b: Pt) -> f64 {
+    a[0] * b[0] + a[1] * b[1]
+}
+
+fn cross(a: Pt, b: Pt) -> f64 {
+    a[0] * b[1] - a[1] * b[0]
+}
+
+fn unit(a: Pt) -> Option<Pt> {
+    let l = a[0].hypot(a[1]);
+    (l.is_finite() && l > 1e-9).then(|| [a[0] / l, a[1] / l])
+}
+
+/// Tra `a` e `b` (versori) a una frazione `t`.
+fn between(a: Pt, b: Pt, t: f64) -> Option<Pt> {
+    unit(add(mul(a, 1.0 - t), mul(b, t)))
+}
+
+/// Distanza di `p` dalla retta per `a` e `b`.
+fn line_distance(p: Pt, a: Pt, b: Pt) -> f64 {
+    match unit(sub(b, a)) {
+        Some(u) => cross(u, sub(p, a)).abs(),
+        None => dist(p, a),
+    }
+}
+
+/// Douglas-Peucker su una spezzata aperta: gli indici dei punti da tenere tra `lo` e `hi`.
+fn simplify_open(c: &[Pt], lo: usize, hi: usize, tol: f64, keep: &mut [bool]) {
+    let mut stack = vec![(lo, hi)];
+    while let Some((lo, hi)) = stack.pop() {
+        if hi <= lo + 1 {
+            continue;
+        }
+        let (Some(&a), Some(&b)) = (c.get(lo), c.get(hi)) else {
+            continue;
+        };
+        let mut far = (lo, 0.0);
+        for i in lo + 1..hi {
+            if let Some(&p) = c.get(i) {
+                let d = line_distance(p, a, b);
+                if d > far.1 {
+                    far = (i, d);
+                }
+            }
+        }
+        if far.1 > tol {
+            if let Some(k) = keep.get_mut(far.0) {
+                *k = true;
+            }
+            stack.push((lo, far.0));
+            stack.push((far.0, hi));
+        }
+    }
+}
+
+/// Il contorno chiuso `c` con meno punti: nessuno si sposta dal contorno di più di `tol`.
+fn simplify_closed(c: &[Pt], tol: f64) -> Vec<Pt> {
+    let n = c.len();
+    if n <= 4 {
+        return c.to_vec();
+    }
+    let Some(&first) = c.first() else {
+        return Vec::new();
+    };
+    // Si spezza nel punto più lontano dal primo: due spezzate aperte.
+    let far = (1..n)
+        .filter_map(|i| Some((i, dist(*c.get(i)?, first))))
+        .fold((1, 0.0), |acc, (i, d)| if d > acc.1 { (i, d) } else { acc })
+        .0;
+    let mut ring = c.to_vec();
+    ring.push(first);
+    let mut keep = vec![false; ring.len()];
+    for k in [0, far, n] {
+        if let Some(v) = keep.get_mut(k) {
+            *v = true;
+        }
+    }
+    simplify_open(&ring, 0, far, tol, &mut keep);
+    simplify_open(&ring, far, n, tol, &mut keep);
+    ring.iter()
+        .zip(&keep)
+        .take(n)
+        .filter(|(_, k)| **k)
+        .map(|(p, _)| *p)
+        .collect()
+}
+
+fn dist(a: Pt, b: Pt) -> f64 {
+    (a[0] - b[0]).hypot(a[1] - b[1])
+}
+
+/// Un pezzo dell'abbondanza sagomata: dove si disegna e come si stira la grafica per riempirlo.
+struct Piece {
+    clip: Vec<Pt>,
+    matrix: Matrix,
+}
+
+/// Di quanto (mm) il contorno si semplifica per i pezzi dell'abbondanza sagomata: il ritaglio
+/// della pagina vera resta sul contorno intero.
+const SHAPE_TOLERANCE_MM: f64 = 0.1;
+/// Fino a questa svolta (gradi) i pezzi di due lati vicini si incontrano a metà; oltre, l'angolo
+/// fuori si riempie a ventaglio.
+const MITER_MAX_DEG: f64 = 40.0;
+/// Il ventaglio di un angolo si fa a spicchi di al massimo tanti gradi.
+const FAN_STEP_DEG: f64 = 40.0;
+/// Pezzi al massimo (ognuno ridisegna la grafica): oltre, la forma è troppo complicata.
+const MAX_PIECES: usize = 6000;
+
+/// I pezzi attorno al contorno `c` (la forma sta alla sua sinistra): uno per lato, che stira
+/// verso l'esterno l'ultima striscia di grafica, e un ventaglio negli angoli sporgenti, che apre
+/// la punta della grafica fino a coprire l'angolo. `reach` è fin dove arrivano, fuori dal contorno.
+fn shape_pieces(c: &[Pt], reach: f64, out: &mut Vec<Piece>) {
+    let n = c.len();
+    let s = mm_to_pt(STRETCH_MM);
+    let g = SEAM;
+    // I lati: punto di partenza, direzione e normale verso fuori.
+    let edges: Vec<(Pt, Pt, Pt, Pt)> = (0..n)
+        .filter_map(|i| {
+            let a = *c.get(i)?;
+            let b = *c.get((i + 1) % n)?;
+            let u = unit(sub(b, a))?;
+            Some((a, b, u, [u[1], -u[0]]))
+        })
+        .collect();
+    let m = edges.len();
+    if m < 3 {
+        return;
+    }
+    let miter = MITER_MAX_DEG.to_radians();
+    // La svolta all'inizio del lato `i` (dal lato prima): positiva dove la forma sporge.
+    let turn = |i: usize| -> Option<(f64, Pt, Pt)> {
+        let (_, _, u1, _) = *edges.get((i + m - 1) % m)?;
+        let (_, _, u2, _) = *edges.get(i)?;
+        Some((cross(u1, u2).atan2(dot(u1, u2)), u1, u2))
+    };
+    // Il punto fuori, all'inizio o alla fine di un lato: a metà tra le due normali se la svolta è
+    // piccola e sporgente, altrimenti dritto sulla normale del lato.
+    let outer = |at: Pt, own: Pt, other: Pt, tau: f64| -> Pt {
+        if tau > 0.0 && tau <= miter {
+            let k = 1.0 + dot(own, other);
+            if k > 1e-6 {
+                return add(at, mul(add(own, other), reach / k));
+            }
+        }
+        add(at, mul(own, reach))
+    };
+    for i in 0..m {
+        let Some(&(a, b, u, nrm)) = edges.get(i) else {
+            continue;
+        };
+        let (Some((t0, _, _)), Some((t1, _, _))) = (turn(i), turn((i + 1) % m)) else {
+            continue;
+        };
+        let prev_n = edges.get((i + m - 1) % m).map_or(nrm, |e| e.3);
+        let next_n = edges.get((i + 1) % m).map_or(nrm, |e| e.3);
+        let start = outer(a, nrm, prev_n, t0);
+        let end = outer(b, nrm, next_n, t1);
+        // Negli angoli sporgenti il pezzo va un soffio oltre il lato, sotto il vicino (niente filo
+        // tra i due); in quelli rientranti si ferma, perché oltre c'è l'abbondanza dell'altro lato.
+        let (ga, gb) = (if t0 > 0.0 { g } else { 0.0 }, if t1 > 0.0 { g } else { 0.0 });
+        // Vicino a una punta stretta (meno di 90°) la striscia da stirare uscirebbe dall'altro
+        // lato: per un tratto `cap` si allunga anche lungo il lato il primo pezzo di striscia che
+        // ci sta tutto.
+        let len = dist(a, b);
+        let cap = |tau: f64| {
+            let inside = std::f64::consts::PI - tau;
+            if tau > miter && inside < std::f64::consts::FRAC_PI_2 {
+                ((g + s) / inside.tan().max(1e-3)).min(len / 2.0)
+            } else {
+                0.0
+            }
+        };
+        let (ca, cb) = (cap(t0), cap(t1));
+        let at = |along: f64, t: f64| add(add(a, mul(u, along)), mul(nrm, t));
+        // La striscia tra -(g+s) e -g dalla linea (dentro la forma) si stira fino a `reach` fuori;
+        // la linea a -(g+s) resta ferma. `along`: anche lungo il lato, (punto fermo, fattore).
+        let stretch = |along: Option<(f64, f64)>| -> Matrix {
+            let fixed = -(g + s);
+            let k = (reach - fixed) / s - 1.0;
+            let shift = -k * (dot(a, nrm) + fixed);
+            let (ku, su) = match along {
+                Some((f, scale)) => (scale - 1.0, -(scale - 1.0) * (dot(a, u) + f)),
+                None => (0.0, 0.0),
+            };
+            [
+                1.0 + k * nrm[0] * nrm[0] + ku * u[0] * u[0],
+                k * nrm[0] * nrm[1] + ku * u[0] * u[1],
+                k * nrm[0] * nrm[1] + ku * u[0] * u[1],
+                1.0 + k * nrm[1] * nrm[1] + ku * u[1] * u[1],
+                shift * nrm[0] + su * u[0],
+                shift * nrm[1] + su * u[1],
+            ]
+        };
+        let (lo, hi) = (ca, len - cb);
+        let inner = -2.0 * g;
+        if hi - lo > 1e-6 || (ca == 0.0 && cb == 0.0) {
+            let p_lo = if ca > 0.0 {
+                at(lo, reach)
+            } else {
+                sub(start, mul(u, ga))
+            };
+            let p_hi = if cb > 0.0 {
+                at(hi, reach)
+            } else {
+                add(end, mul(u, gb))
+            };
+            let (from, to) = (
+                if ca > 0.0 { lo } else { -ga },
+                if cb > 0.0 { hi } else { len + gb },
+            );
+            out.push(Piece {
+                clip: vec![at(from, inner), at(to, inner), p_hi, p_lo],
+                matrix: stretch(None),
+            });
+        }
+        if ca > 0.0 {
+            // Da [ca, ca+s] lungo il lato a [-ga, ca+s]: il punto ca+s resta fermo.
+            let f = ca + s;
+            out.push(Piece {
+                clip: vec![
+                    at(-ga, inner),
+                    at(lo, inner),
+                    at(lo, reach),
+                    sub(start, mul(u, ga)),
+                ],
+                matrix: stretch(Some((f, (f + ga) / s))),
+            });
+        }
+        if cb > 0.0 {
+            let f = hi - s;
+            out.push(Piece {
+                clip: vec![
+                    at(hi, inner),
+                    at(len + gb, inner),
+                    add(end, mul(u, gb)),
+                    at(hi, reach),
+                ],
+                matrix: stretch(Some((f, (len + gb - f) / s))),
+            });
+        }
+    }
+    // I ventagli negli angoli sporgenti con una svolta forte.
+    for i in 0..m {
+        let Some((tau, u1, u2)) = turn(i) else {
+            continue;
+        };
+        if tau <= miter {
+            continue;
+        }
+        let (Some(&(v, _, _, n2)), Some(&(_, _, _, n1))) = (edges.get(i), edges.get((i + m - 1) % m)) else {
+            continue;
+        };
+        let (e1, e2) = (mul(u1, -1.0), u2);
+        let Some(inward) = unit(add(e1, e2)) else {
+            continue;
+        };
+        // La punta della grafica da aprire: un poco dentro, lontano dai due lati quanto `g`.
+        let half = (std::f64::consts::PI - tau) / 2.0;
+        let depth = (g / half.sin().max(1e-3)).min(6.0 * g);
+        let tip = add(v, mul(inward, depth));
+        let steps = (tau / FAN_STEP_DEG.to_radians()).ceil().max(1.0);
+        let count = steps as usize;
+        for j in 0..count {
+            let (ta, tb) = (j as f64 / steps, (j + 1) as f64 / steps);
+            let (Some(na), Some(nb), Some(ea), Some(eb)) = (
+                between(n1, n2, ta),
+                between(n1, n2, tb),
+                between(e1, e2, ta),
+                between(e1, e2, tb),
+            ) else {
+                continue;
+            };
+            // Il triangolo deve coprire l'arco di raggio `reach` tra le due normali.
+            let cover = |p: Pt, q: Pt| reach / ((1.0 + dot(p, q)) / 2.0).sqrt().max(1e-3);
+            let r = cover(na, nb);
+            let widen = 0.03;
+            let (Some(wa), Some(wb)) = (between(n1, n2, ta - widen), between(n1, n2, tb + widen)) else {
+                continue;
+            };
+            let rw = cover(wa, wb);
+            let clip = vec![v, add(v, mul(wa, rw)), add(v, mul(wb, rw))];
+            // ea → na·r/s e eb → nb·r/s: la punta larga `s` si apre fino a coprire lo spicchio.
+            let det = cross(ea, eb);
+            if det.abs() < 1e-9 {
+                continue;
+            }
+            let z = r / s;
+            let (pa, pb) = (mul(na, z), mul(nb, z));
+            // A = [pa pb] · [ea eb]⁻¹
+            let inv = [eb[1] / det, -eb[0] / det, -ea[1] / det, ea[0] / det];
+            let l = [
+                pa[0] * inv[0] + pb[0] * inv[2],
+                pa[0] * inv[1] + pb[0] * inv[3],
+                pa[1] * inv[0] + pb[1] * inv[2],
+                pa[1] * inv[1] + pb[1] * inv[3],
+            ];
+            let moved = [l[0] * tip[0] + l[1] * tip[1], l[2] * tip[0] + l[3] * tip[1]];
+            let matrix = [l[0], l[2], l[1], l[3], v[0] - moved[0], v[1] - moved[1]];
+            out.push(Piece { clip, matrix });
+        }
+    }
+}
+
+fn polygon_ops(c: &[Pt], ops: &mut String) {
+    for (i, p) in c.iter().enumerate() {
+        ops.push_str(&format!(
+            "{} {} {} ",
+            num(p[0]),
+            num(p[1]),
+            if i == 0 { "m" } else { "l" }
+        ));
+    }
+    ops.push_str("h\n");
+}
+
+/// Crea l'abbondanza attorno a una forma qualsiasi (una fustella sagomata): la pagina diventa il
+/// rettangolo della forma più `amount` per lato; attorno al contorno l'ultima striscia di `art`
+/// (mezzo millimetro, un soffio dentro) si stira fino a `amount` fuori, e negli angoli sporgenti
+/// la punta si apre a ventaglio. Sopra, `base` ritagliata sulla forma e `over` intero, come per
+/// [`bleed`]. `shapes` è in millimetri della pagina come si vede, dall'alto a sinistra.
+pub(crate) fn bleed_shape(
+    doc: &mut Document,
+    index: usize,
+    shapes: &[crate::paths::Shape],
+    amount: f64,
+    base: &[u8],
+    art: &[u8],
+    over: Option<&[u8]>,
+) -> Result<(), EditError> {
+    let src = source(doc, index)?;
+    let number = src.number;
+    let h = src.h;
+    // In punti, asse y in su, con la forma sempre a sinistra del giro (i buchi al contrario).
+    let mut contours: Vec<Vec<Pt>> = Vec::new();
+    for shape in shapes {
+        for (i, c) in shape.iter().enumerate() {
+            let mut pts: Vec<Pt> = Vec::with_capacity(c.len());
+            for p in c {
+                let q = [mm_to_pt(p[0]), h - mm_to_pt(p[1])];
+                if !(q[0].is_finite() && q[1].is_finite()) {
+                    continue;
+                }
+                if pts.last().is_none_or(|l| dist(*l, q) > 1e-3) {
+                    pts.push(q);
+                }
+            }
+            if let (Some(f), Some(l)) = (pts.first(), pts.last())
+                && pts.len() > 1
+                && dist(*f, *l) <= 1e-3
+            {
+                pts.pop();
+            }
+            let area = crate::paths::signed_area(&pts);
+            if pts.len() < 3 || area.abs() < 1e-3 {
+                continue;
+            }
+            if (area > 0.0) != (i == 0) {
+                pts.reverse();
+            }
+            contours.push(pts);
+        }
+    }
+    let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for p in contours.iter().flatten() {
+        bb = [bb[0].min(p[0]), bb[1].min(p[1]), bb[2].max(p[0]), bb[3].max(p[1])];
+    }
+    let min = mm_to_pt(1.0);
+    if contours.is_empty() || !(bb[2] - bb[0] >= min && bb[3] - bb[1] >= min) {
+        return Err(EditError::Invalid(format!(
+            "la forma sulla pagina {number} non chiude un'area"
+        )));
+    }
+    let b = mm_to_pt(amount);
+    let r = [bb[0] - b, bb[1] - b, bb[2] + b, bb[3] + b];
+    let mut pieces = Vec::new();
+    let tol = mm_to_pt(SHAPE_TOLERANCE_MM);
+    for c in &contours {
+        shape_pieces(&simplify_closed(c, tol), b + 2.0 * SEAM, &mut pieces);
+        if pieces.len() > MAX_PIECES {
+            return Err(EditError::Invalid(
+                "la forma è troppo complicata per l'abbondanza che la segue".into(),
+            ));
+        }
+    }
+    let base = page_form(doc, &src, base);
+    let art = page_form(doc, &src, art);
+    let over = over.map(|d| page_form(doc, &src, d));
+    let mut ops = format!("q 1 0 0 1 {} {} cm\n", num(-r[0]), num(-r[1]));
+    for p in &pieces {
+        ops.push_str("q ");
+        polygon_ops(&p.clip, &mut ops);
+        let m = &p.matrix;
+        ops.push_str(&format!(
+            "W n {} {} {} {} {} {} cm /{FORM_ART} Do Q\n",
+            num(m[0]),
+            num(m[1]),
+            num(m[2]),
+            num(m[3]),
+            num(m[4]),
+            num(m[5])
+        ));
+    }
+    // La pagina vera ritagliata sulla forma (pari-dispari: i buchi restano fuori).
+    ops.push_str("q ");
+    for c in &contours {
+        polygon_ops(c, &mut ops);
+    }
+    ops.push_str(&format!("W* n /{FORM_NAME} Do Q\n"));
+    if over.is_some() {
+        ops.push_str(&format!("/{FORM_OVER} Do\n"));
+    }
+    ops.push_str("Q\n");
+    let mut forms = vec![(FORM_NAME, base), (FORM_ART, art)];
+    if let Some(d) = over {
+        forms.push((FORM_OVER, d));
+    }
+    let (width, height) = (r[2] - r[0], r[3] - r[1]);
+    let place: Matrix = [1.0, 0.0, 0.0, 1.0, -r[0], -r[1]];
+    let total = compose(&place, &src.upright);
+    finish(
+        doc,
+        &src,
+        NewPage {
+            forms: &forms,
+            ops,
+            width,
+            height,
+            total,
+            trim: Some([b, b, width - b, height - b]),
+            bleed: Some([0.0, 0.0, width, height]),
+        },
+    )
+}

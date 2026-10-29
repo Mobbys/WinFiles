@@ -22,6 +22,7 @@ mod spots;
 pub use frame::{BleedMode, BleedSpec};
 pub use paths::{
     Fill, Ink, Line, NewDie, NewInk, PageScan, Part, PathId, PathInfo, Restyle, Restyled, SubPath,
+    outline_is_rectangle,
 };
 pub use spots::{Overprint, Spot};
 
@@ -505,23 +506,32 @@ impl Editor {
             return Err(EditError::Invalid("abbondanza non valida".into()));
         }
         self.edit("Crea abbondanza", |d| {
-            if !only.is_empty() {
-                // Solo la grafica scelta si allunga; il resto della pagina le sta sopra intero.
-                let art = paths::only(d, page, only)?;
-                let hidden: Vec<PathId> = only.iter().chain(paper).copied().collect();
-                let (rest, _) = paths::without(d, page, &hidden)?;
-                frame::bleed(d, page, spec, &art, &art, Some(&rest))?;
-                return Ok(0);
-            }
-            let hidden: Vec<PathId> = die.iter().chain(paper).copied().collect();
-            let (art, left) = paths::without(d, page, &hidden)?;
-            let (all, _) = paths::without(d, page, paper)?;
-            let over = if die.is_empty() {
-                None
-            } else {
-                Some(paths::only(d, page, die)?)
-            };
-            frame::bleed(d, page, spec, &all, &art, over.as_deref())?;
+            let (base, art, over, left) = bleed_layers(d, page, die, paper, only)?;
+            frame::bleed(d, page, spec, &base, &art, over.as_deref())?;
+            Ok(left)
+        })
+    }
+
+    /// Crea l'abbondanza che segue la forma dei tracciati `outline` (una fustella sagomata, o la
+    /// grafica scelta): la pagina diventa il loro rettangolo più `amount` mm per lato, e lungo
+    /// tutto il contorno l'ultimo mezzo millimetro di grafica si allunga verso fuori. `die`,
+    /// `paper` e `only` come per [`Editor::add_bleed`].
+    pub fn add_shaped_bleed(
+        &mut self,
+        page: usize,
+        amount: f64,
+        outline: &[PathId],
+        die: &[PathId],
+        paper: &[PathId],
+        only: &[PathId],
+    ) -> Result<usize, EditError> {
+        if !(amount.is_finite() && (0.1..=100.0).contains(&amount)) || outline.is_empty() {
+            return Err(EditError::Invalid("abbondanza non valida".into()));
+        }
+        self.edit("Crea abbondanza", |d| {
+            let shapes = paths::outline(&paths::scan(d, page)?, outline)?;
+            let (base, art, over, left) = bleed_layers(d, page, die, paper, only)?;
+            frame::bleed_shape(d, page, &shapes, amount, &base, &art, over.as_deref())?;
             Ok(left)
         })
     }
@@ -567,6 +577,37 @@ impl Editor {
 }
 
 /// Divide le pagine in gruppi: prima di ognuna delle pagine `before` (da 0) comincia un file.
+/// I tre disegni dell'abbondanza: la pagina vera (`base`), la grafica da allungare (`art`) e
+/// quello che resta sopra intero (`over`), più quanti tracciati della fustella non si sono potuti
+/// tenere fuori dalla grafica. Con `only` si allungano solo quei tracciati e tutto il resto della
+/// pagina sta sopra di loro; altrimenti si allunga tutto tranne fustella e fondi bianchi, e sopra
+/// resta la fustella.
+type Layers = (Vec<u8>, Vec<u8>, Option<Vec<u8>>, usize);
+
+fn bleed_layers(
+    d: &Document,
+    page: usize,
+    die: &[PathId],
+    paper: &[PathId],
+    only: &[PathId],
+) -> Result<Layers, EditError> {
+    if !only.is_empty() {
+        let art = paths::only(d, page, only)?;
+        let hidden: Vec<PathId> = only.iter().chain(paper).copied().collect();
+        let (rest, _) = paths::without(d, page, &hidden)?;
+        return Ok((art.clone(), art, Some(rest), 0));
+    }
+    let hidden: Vec<PathId> = die.iter().chain(paper).copied().collect();
+    let (art, left) = paths::without(d, page, &hidden)?;
+    let (all, _) = paths::without(d, page, paper)?;
+    let over = if die.is_empty() {
+        None
+    } else {
+        Some(paths::only(d, page, die)?)
+    };
+    Ok((all, art, over, left))
+}
+
 pub fn split_ranges(page_count: usize, before: &[usize]) -> Vec<std::ops::Range<usize>> {
     organize::split_ranges(page_count, &organize::SplitBy::Before(before.to_vec()))
 }

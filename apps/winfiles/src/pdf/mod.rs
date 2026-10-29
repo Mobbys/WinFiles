@@ -2223,9 +2223,14 @@ impl PdfModule {
                 die,
                 paper,
                 only,
+                outline,
             }) => {
                 self.apply(|e| {
-                let left = e.add_bleed(page, &spec, &die, &paper, &only)?;
+                let left = if outline.is_empty() {
+                    e.add_bleed(page, &spec, &die, &paper, &only)?
+                } else {
+                    e.add_shaped_bleed(page, spec.amount, &outline, &die, &paper, &only)?
+                };
                 let mut msg = format!(
                     "Abbondanza di {} mm creata",
                     winfiles_geom::format_number(spec.amount, 1, true)
