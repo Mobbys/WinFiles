@@ -917,3 +917,16 @@ fn abbondanza_su_una_pagina_ruotata() {
     assert_eq!(pixel(&img, 5, 5), [255, 0, 0]);
     assert_eq!(pixel(&img, 215, 115), [0, 255, 0]);
 }
+
+#[test]
+fn nessun_filo_bianco_tra_abbondanza_e_pagina() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, "0 1 0 rg 0 0 200 100 re f")]);
+    // Il bordo del formato finito cade a metà di un pixel (10,5 punti).
+    let mut spec = bleed_spec(BleedMode::Mirror, [true; 4]);
+    spec.amount = pt_to_mm(10.5);
+    e.add_bleed(0, &spec, &[]).unwrap();
+    let img = render(&reread(&e), 0);
+    for (x, y) in [(10, 60), (210, 60), (100, 10), (100, 110), (10, 10)] {
+        assert_eq!(pixel(&img, x, y), [0, 255, 0], "({x}, {y})");
+    }
+}

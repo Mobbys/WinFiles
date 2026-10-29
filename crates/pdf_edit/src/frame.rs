@@ -428,6 +428,9 @@ const FORM_ART: &str = "WFGrafica";
 /// Quanto della pagina vera resta oltre il formato finito sui lati con l'abbondanza nuova: tiene
 /// intero lo spessore della fustella e toglie i segni di taglio, che stanno più in là.
 const KEEP_BEYOND_MM: f64 = 1.0;
+/// Di quanto (punti) le fasce dell'abbondanza passano sotto la pagina vera: senza, dove si
+/// toccano i due bordi sfumati dall'antialias dell'anteprima si vedrebbe un filo bianco.
+const SEAM: f64 = 0.25;
 /// La striscia di grafica che "Allunga" stira fino al bordo nuovo.
 const STRETCH_MM: f64 = 0.5;
 
@@ -481,8 +484,9 @@ pub(crate) fn bleed(doc: &mut Document, index: usize, spec: &BleedSpec, art: &[u
     let axis = |dir: i32, lo: f64, hi: f64| -> (f64, f64) {
         match (dir, spec.mode) {
             (0, _) => (1.0, 0.0),
-            (-1, BleedMode::Mirror) => (-1.0, 2.0 * hi),
-            (_, BleedMode::Mirror) => (-1.0, 2.0 * lo),
+            // L'asse sta un soffio dentro il formato finito (vedi `SEAM`).
+            (-1, BleedMode::Mirror) => (-1.0, 2.0 * (hi + SEAM)),
+            (_, BleedMode::Mirror) => (-1.0, 2.0 * (lo - SEAM)),
             (-1, BleedMode::Stretch) => {
                 // Da [hi, hi+s] a [lo, hi+s]: il punto hi+s resta fermo.
                 let k = (hi - lo + s) / s;
@@ -501,6 +505,14 @@ pub(crate) fn bleed(doc: &mut Document, index: usize, spec: &BleedSpec, art: &[u
             }
             let (ax, ex) = axis(dx, x0, x1);
             let (ay, ey) = axis(dy, y0, y1);
+            // Il pezzo entra di poco nella pagina vera, così sotto il suo bordo non c'è il bianco.
+            let grow = |v0: f64, v1: f64, dir: i32| match dir {
+                -1 => (v0, v1 + 2.0 * SEAM),
+                1 => (v0 - 2.0 * SEAM, v1),
+                _ => (v0, v1),
+            };
+            let (x0, x1) = grow(x0, x1, dx);
+            let (y0, y1) = grow(y0, y1, dy);
             ops.push_str(&format!(
                 "q {} {} {} {} re W n {} 0 0 {} {} {} cm /{FORM_ART} Do Q\n",
                 num(x0),

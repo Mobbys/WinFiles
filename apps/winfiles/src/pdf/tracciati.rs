@@ -720,7 +720,9 @@ pub fn check(scan: &PageScan, inks: &[InkName]) -> Check {
         (Some(t), _, _) => Some((t, "TrimBox")),
         (None, Some(d), _) => Some((d, "fustella")),
         (None, None, Some(g)) => Some((g.bounds, "filetto")),
-        _ => None,
+        // Senza TrimBox né fustella il formato finito è la pagina: il caso più comune dei file
+        // esportati senza abbondanza.
+        (None, None, None) => Some((page, "pagina")),
     };
     let bleed = match (finished, content) {
         (Some((f, _)), Some(c)) => Some([
@@ -1097,6 +1099,13 @@ impl PathTool {
             }
             ui.add_space(4.0);
             match (c.finished, c.bleed) {
+                (Some((_, "pagina")), _) => status(
+                    ui,
+                    false,
+                    "Formato finito non indicato (niente TrimBox né fustella): si prende la pagina intera, \
+                     senza abbondanza"
+                        .into(),
+                ),
                 (Some((_, from)), Some(b)) => {
                     let ok = b.iter().all(|v| *v >= MIN_BLEED);
                     let fmt = |v: f64| format_number(v / unit.mm(), unit.decimals(), true);
@@ -1165,6 +1174,7 @@ impl PathTool {
                         match from {
                             "fustella" => "dalla fustella",
                             "filetto" => "dal filetto",
+                            "pagina" => "la pagina intera",
                             _ => "dal TrimBox",
                         }
                     ))
@@ -1324,9 +1334,15 @@ impl PathTool {
                     .color(t.text_dim),
                 );
                 ui.label(
-                    egui::RichText::new(format!("Sulla pagina: {} tracciati.", scan.paths.len()))
-                        .size(12.0)
-                        .color(t.text_dim),
+                    egui::RichText::new(format!(
+                        "Sulla pagina: {} tracciati.",
+                        scan.paths
+                            .iter()
+                            .filter(|p| p.line.is_some() || p.fill.is_some())
+                            .count()
+                    ))
+                    .size(12.0)
+                    .color(t.text_dim),
                 );
                 return;
             }
