@@ -100,6 +100,8 @@ pub struct Prefs {
     pub keep_legacy: bool,
     /// "Non ora" sul certificato del menu di Windows 11: la barra non si ripropone da sola.
     pub menu11_later: bool,
+    /// I nomi delle tinte usati in Modifica PDF (taglio, cordonatura…), con il loro ruolo.
+    pub inks: Vec<crate::pdf::tracciati::InkName>,
 }
 
 impl Prefs {
@@ -128,6 +130,7 @@ impl Prefs {
             .take(MAX_CALIBRATIONS)
             .collect();
         self.presets = crate::presets::sanitized(std::mem::take(&mut self.presets));
+        self.inks = crate::pdf::tracciati::sanitized(std::mem::take(&mut self.inks));
         self
     }
 }
@@ -224,6 +227,10 @@ mod tests {
             hide_unsupported: true,
             keep_legacy: true,
             menu11_later: true,
+            inks: vec![crate::pdf::tracciati::InkName {
+                name: "Thru-cut".into(),
+                role: crate::pdf::tracciati::Role::Cut,
+            }],
         };
         save_to(&file, &prefs).unwrap();
         assert_eq!(load_from(&file), prefs);

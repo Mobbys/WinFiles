@@ -19,7 +19,7 @@ mod illustrator;
 mod paths;
 mod spots;
 
-pub use paths::{Fill, Ink, Line, NewInk, PageScan, Part, PathId, PathInfo, Restyle, SubPath};
+pub use paths::{Fill, Ink, Line, NewInk, PageScan, Part, PathId, PathInfo, Restyle, Restyled, SubPath};
 pub use spots::{Overprint, Spot};
 
 #[cfg(test)]
@@ -137,6 +137,11 @@ impl PdfFile {
 pub struct Snapshot(Document);
 
 impl Snapshot {
+    /// I tracciati della pagina `page` (da 0), da leggere in un altro thread.
+    pub fn scan_page(&self, page: usize) -> Result<PageScan, EditError> {
+        paths::scan(&self.0, page)
+    }
+
     /// Il PDF da disegnare: senza flussi di oggetti compressi, che qui farebbero solo perdere tempo.
     pub fn preview_bytes(&self) -> Result<Vec<u8>, EditError> {
         let opts = SaveOptions {
@@ -453,13 +458,16 @@ impl Editor {
     }
 
     /// Cambia colore, spessore o sovrastampa dei tracciati scelti della pagina `page`.
-    /// Restituisce quanti sono cambiati e quanti sono rimasti com'erano perché ritagliano
-    /// anche il resto del disegno.
-    pub fn restyle_paths(&mut self, page: usize, ids: &[PathId], change: &Restyle) -> Result<(usize, usize), EditError> {
+    pub fn restyle_paths(
+        &mut self,
+        page: usize,
+        ids: &[PathId],
+        change: &Restyle,
+    ) -> Result<Restyled, EditError> {
         let mut probe = self.doc.clone();
-        let (done, skipped) = paths::restyle(&mut probe, page, ids, change)?;
-        if done == 0 {
-            return Ok((0, skipped));
+        let probed = paths::restyle(&mut probe, page, ids, change)?;
+        if probed.done == 0 {
+            return Ok(probed);
         }
         let label = match (&change.ink, change.width, change.overprint) {
             (Some(NewInk::Spot { .. }), _, _) => "Tracciati in tinta",

@@ -264,6 +264,9 @@ impl WinFilesApp {
             inbox: None,
         };
         // Le stampanti si cercano subito, così Stampa le trova già pronte.
+        if !app.prefs.inks.is_empty() {
+            app.pdf.inks = app.prefs.inks.clone();
+        }
         if app.batch_pdf.is_none() && app.batch_calibration.is_none() {
             app.scan_printers();
             // Come la 4.9: all'avvio si chiede a GitHub se c'è una versione nuova, senza aspettare.
@@ -2841,6 +2844,7 @@ impl WinFilesApp {
             hide_unsupported: self.hide_unsupported,
             keep_legacy: self.keep_legacy,
             menu11_later: self.menu11_later,
+            inks: self.pdf.inks.clone(),
         }
     }
 

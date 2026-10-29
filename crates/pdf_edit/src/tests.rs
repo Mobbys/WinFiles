@@ -660,7 +660,9 @@ fn il_filetto_diventa_una_fustella_in_tinta() {
         width: None,
         overprint: Some(true),
     };
-    assert_eq!(e.restyle_paths(0, &[id], &change).unwrap(), (1, 0));
+    let r = e.restyle_paths(0, &[id], &change).unwrap();
+    assert_eq!((r.done, r.skipped), (1, 0));
+    assert_eq!(r.ids, [e.scan_page(0).unwrap().paths[1].id]);
     assert_eq!(e.undo_label(), Some("Tracciati in tinta"));
     let spots = e.spots().unwrap();
     assert_eq!(spots.len(), 1);
@@ -688,10 +690,16 @@ fn il_filetto_diventa_una_fustella_in_tinta() {
         overprint: None,
     };
     let id = e.scan_page(0).unwrap().paths[1].id;
-    assert_eq!(e.restyle_paths(0, &[id], &thin).unwrap(), (1, 0));
+    assert_eq!(e.restyle_paths(0, &[id], &thin).unwrap().done, 1);
     let line = e.scan_page(0).unwrap().paths[1].line.clone().unwrap();
     assert!(near(line.width, 0.1));
-    assert_eq!(line.ink, Ink::Spot { name: "CutContour".into(), tint: 1.0 });
+    assert_eq!(
+        line.ink,
+        Ink::Spot {
+            name: "CutContour".into(),
+            tint: 1.0
+        }
+    );
 }
 
 #[test]
@@ -709,7 +717,8 @@ fn un_tracciato_che_ritaglia_non_si_cambia() {
         width: None,
         overprint: None,
     };
-    assert_eq!(e.restyle_paths(0, &[scan.paths[0].id], &change).unwrap(), (0, 1));
+    let r = e.restyle_paths(0, &[scan.paths[0].id], &change).unwrap();
+    assert_eq!((r.done, r.skipped), (0, 1));
     assert!(e.undo_label().is_none());
     // Il fondo blu, ritagliato, sta dentro il ritaglio.
     let b = scan.paths[1].bounds;
@@ -743,7 +752,7 @@ fn i_tracciati_dei_moduli_si_trovano_e_si_cambiano() {
         width: None,
         overprint: None,
     };
-    assert_eq!(e.restyle_paths(0, &[path.id], &change).unwrap(), (1, 0));
+    assert_eq!(e.restyle_paths(0, &[path.id], &change).unwrap().done, 1);
     assert_eq!(e.spots().unwrap()[0].name, "Cordonatura");
     let img = render(&reread(&e), 0);
     assert_eq!((img.1, img.2), (200, 100));
@@ -764,5 +773,10 @@ fn immagini_e_formato_finito() {
     assert!(near(t[0], pt_to_mm(10.0)) && near(t[1], pt_to_mm(10.0)));
     assert_eq!(scan.others.len(), 1);
     let o = scan.others[0];
-    assert!(near(o[0], 0.0) && near(o[1], pt_to_mm(50.0)) && near(o[2], pt_to_mm(100.0)) && near(o[3], pt_to_mm(100.0)));
+    assert!(
+        near(o[0], 0.0)
+            && near(o[1], pt_to_mm(50.0))
+            && near(o[2], pt_to_mm(100.0))
+            && near(o[3], pt_to_mm(100.0))
+    );
 }

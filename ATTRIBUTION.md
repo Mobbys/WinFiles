@@ -39,6 +39,9 @@ Il font dell'interfaccia è Inter (SIL OFL); le icone sono Lucide (ISC), le stes
 | `apps/winfiles/assets/icons/redo-2.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
 | `apps/winfiles/assets/icons/crop.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
 | `apps/winfiles/assets/icons/scissors.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/mouse-pointer-2.svg` | Lucide Icons and Contributors | https://lucide.dev (copia da storytold/pdfcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/triangle-alert.svg` | Lucide Icons and Contributors | https://lucide.dev (copia da storytold/pdfcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/circle-check.svg` | Lucide Icons and Contributors | https://lucide.dev (copia da storytold/pdfcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
 | `apps/winfiles/assets/icons/palette.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
 | `apps/winfiles/assets/icons/files.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
 | `apps/winfiles/assets/icons/file-output.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |

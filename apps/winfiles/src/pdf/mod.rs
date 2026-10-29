@@ -5,6 +5,7 @@
 
 mod dialogs;
 mod render;
+pub mod tracciati;
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -103,6 +104,10 @@ pub struct PdfModule {
     unit: Unit,
     /// La stampa o il PDF con le quote chiesti, che l'app prende e manda avanti.
     pub output: Option<crate::quotes::Output>,
+    /// Lo strumento Seleziona tracciato, con il suo pannello a destra.
+    paths: tracciati::PathTool,
+    /// I nomi delle tinte usati (taglio, cordonatura…), ricordati nelle impostazioni.
+    pub inks: Vec<tracciati::InkName>,
 }
 
 impl PdfModule {
@@ -140,6 +145,8 @@ impl PdfModule {
             illustrator_ask: None,
             unit: Unit::Mm,
             output: None,
+            paths: tracciati::PathTool::default(),
+            inks: tracciati::default_inks(),
         }
     }
 
@@ -995,6 +1002,7 @@ impl PdfModule {
                         self.spots_open = !self.spots_open;
                         if self.spots_open {
                             self.quoting = false;
+                            self.paths.on = false;
                         }
                     }
                     if text_toggle(ui, "ruler", "Quote", open, self.quoting)
@@ -1006,6 +1014,21 @@ impl PdfModule {
                     {
                         self.quoting = !self.quoting;
                         if self.quoting {
+                            self.cutter.clear();
+                            self.paths.on = false;
+                        }
+                    }
+                    if text_toggle(ui, "mouse-pointer-2", "Tracciati", open, self.paths.on)
+                        .on_hover_text(
+                            "Clicca una linea sulla pagina per vederne colore, spessore e lunghezza, e \
+                             farla diventare una tinta (fustella, cordonatura…). Controlla anche \
+                             fustella e abbondanza della pagina",
+                        )
+                        .clicked()
+                    {
+                        self.paths.on = !self.paths.on;
+                        if self.paths.on {
+                            self.quoting = false;
                             self.cutter.clear();
                         }
                     }
@@ -1261,7 +1284,16 @@ impl PdfModule {
         }
         let list_w = (full.width() * 0.3).clamp(170.0, 460.0);
         let list = Rect::from_min_size(full.min, vec2(list_w, full.height()));
-        let side_w = if self.spots_open || self.quoting {
+        if self.paths.on
+            && let Some(e) = &self.editor
+        {
+            let key = (self.generation, self.current);
+            self.paths.update(ui.ctx(), key, || e.snapshot());
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.paths.selected.clear();
+            }
+        }
+        let side_w = if self.spots_open || self.quoting || self.paths.on {
             SPOTS_W
         } else {
             0.0
@@ -1275,6 +1307,8 @@ impl PdfModule {
         let side = Rect::from_min_max(egui::pos2(view.right() + 10.0, full.top()), full.max);
         if self.quoting {
             self.quotes_panel(ui, side, unit);
+        } else if self.paths.on {
+            self.paths_panel(ui, side, unit);
         } else if self.spots_open {
             self.spots_panel(ui, side);
         }
@@ -1819,6 +1853,11 @@ impl PdfModule {
                     }
                     self.quotes.paint(ui, paper, w, unit);
                     self.quotes.lens
+                } else if self.paths.on {
+                    if hand.is_none() {
+                        self.paths.interact(ui, ui.id().with("tracciati"), paper, w);
+                    }
+                    None
                 } else {
                     if hand.is_none() {
                         self.cutter.interact(ui, ui.id().with("taglierina"), paper, w, h);
@@ -2097,15 +2136,80 @@ impl PdfModule {
     }
 
     /// Il pannello a destra con le tinte piatte: colore, nome (si rinomina), pagine e sovrastampa.
-    fn spots_panel(&mut self, ui: &mut egui::Ui, rect: Rect) {
-        let t = Tokens::get(ui.ctx());
-        card(ui, rect);
+    /// Le tinte piatte del documento, rilette se il documento è cambiato.
+    fn fresh_spots(&mut self) {
         if self.spots.as_ref().is_none_or(|(g, _)| *g != self.generation)
             && let Some(e) = &self.editor
         {
             let list = e.spots().map_err(|e| e.to_string());
             self.spots = Some((self.generation, list));
         }
+    }
+
+    /// Il pannello dello strumento Seleziona tracciato.
+    fn paths_panel(&mut self, ui: &mut egui::Ui, rect: Rect, unit: Unit) {
+        let t = Tokens::get(ui.ctx());
+        card(ui, rect);
+        self.fresh_spots();
+        let spots = match &self.spots {
+            Some((_, Ok(list))) => list.clone(),
+            _ => Vec::new(),
+        };
+        let inner = rect.shrink2(vec2(14.0, 10.0));
+        let mut ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(inner)
+                .layout(egui::Layout::top_down(Align::Min)),
+        );
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Tracciati")
+                    .font(semibold(14.0))
+                    .color(t.text_strong),
+            );
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if icons::button(ui, "x", "Chiudi lo strumento", false, true, 24.0).clicked() {
+                    self.paths.on = false;
+                }
+            });
+        });
+        ui.add_space(6.0);
+        let request = self.paths.panel(&mut ui, unit, &mut self.inks, &spots);
+        if let Some(tracciati::Request::Restyle(ids, change)) = request {
+            let page = self.current;
+            let mut new_ids = None;
+            self.apply(|e| {
+                let r = e.restyle_paths(page, &ids, &change)?;
+                new_ids = Some(r.ids.clone());
+                let n = |k: usize| {
+                    if k == 1 {
+                        "1 tracciato".to_string()
+                    } else {
+                        format!("{k} tracciati")
+                    }
+                };
+                let mut msg = match (&change.ink, r.done) {
+                    (_, 0) => "Niente da cambiare".to_string(),
+                    (Some(winfiles_pdf_edit::NewInk::Spot { name, .. }), k) => {
+                        format!("{} in tinta {}", n(k), name.trim())
+                    }
+                    (_, k) => format!("{} cambiati", n(k)),
+                };
+                if r.skipped > 0 {
+                    msg.push_str(&format!(" ({} di ritaglio lasciati com'erano)", r.skipped));
+                }
+                Ok(msg)
+            });
+            if let Some(ids) = new_ids.filter(|v| !v.is_empty()) {
+                self.paths.selected = ids.into_iter().collect();
+            }
+        }
+    }
+
+    fn spots_panel(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let t = Tokens::get(ui.ctx());
+        card(ui, rect);
+        self.fresh_spots();
         let inner = rect.shrink2(vec2(14.0, 10.0));
         let mut ui = ui.new_child(
             egui::UiBuilder::new()
