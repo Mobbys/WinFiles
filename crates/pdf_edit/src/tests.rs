@@ -1254,3 +1254,56 @@ fn il_rettangolo_si_riconosce() {
     assert_eq!(outline_is_rectangle(&scan, &id(2)), Some(false));
     assert_eq!(outline_is_rectangle(&scan, &[]), None);
 }
+
+#[test]
+fn lo_sfondo_sagomato_scelto_si_allarga_in_un_tracciato_solo() {
+    // Un cerchio rosso con sopra un testo finto (quadratino blu): si sceglie il cerchio.
+    let content = leak(format!(
+        "1 0 0 rg {} f 0 0 1 rg 140 140 20 20 re f",
+        circle(150.0, 150.0, 100.0)
+    ));
+    let mut e = editor(&[page([0.0, 0.0, 300.0, 300.0], 0, content)]);
+    let before = e.scan_page(0).unwrap();
+    let id = before.paths[0].id;
+    e.add_shaped_bleed(0, 3.0, &[id], &[], &[], &[id]).unwrap();
+    let after = e.scan_page(0).unwrap();
+    // Sempre due tracciati: il cerchio, ora più grande di 3 mm per lato, e il quadratino.
+    assert_eq!(after.paths.len(), 2);
+    let (b0, b1) = (before.paths[0].bounds, after.paths[0].bounds);
+    let page_w = pt_to_mm(200.0) + 6.0;
+    assert!(near(b1[0], 0.0) && near(b1[1], 0.0), "{b1:?}");
+    assert!(
+        (b1[2] - page_w).abs() < 0.05 && (b1[3] - page_w).abs() < 0.05,
+        "{b1:?} {b0:?}"
+    );
+    assert_eq!(after.paths[0].parts.len(), 1);
+    let info = &e.pages()[0];
+    assert!(near(info.size.w, page_w) && near(info.trim.unwrap().w, pt_to_mm(200.0)));
+    // Il quadratino è rimasto al suo posto, al centro.
+    let q = after.paths[1].bounds;
+    assert!(near((q[0] + q[2]) / 2.0, page_w / 2.0));
+}
+
+#[test]
+fn lo_sfondo_rettangolare_scelto_si_allarga_con_gli_angoli_vivi() {
+    let mut e = editor(&[page(
+        [0.0, 0.0, 300.0, 200.0],
+        0,
+        "1 0 0 rg 50 50 200 100 re f 0 0 1 rg 140 90 20 20 re f",
+    )]);
+    let scan = e.scan_page(0).unwrap();
+    let id = scan.paths[0].id;
+    let spec = BleedSpec {
+        finished: scan.paths[0].bounds,
+        amount: 3.0,
+        sides: [true; 4],
+        mode: BleedMode::Mirror,
+    };
+    e.add_bleed(0, &spec, &[], &[], &[id]).unwrap();
+    let after = e.scan_page(0).unwrap();
+    assert_eq!(after.paths.len(), 2);
+    let img = render(&reread(&e), 0);
+    // Gli angoli della pagina sono rossi: niente angoli tondi.
+    assert!(is_red(pixel(&img, 1, 1)) && is_red(pixel(&img, img.1 - 2, img.2 - 2)));
+    assert_eq!(after.paths[0].parts[0].points.len(), 4);
+}

@@ -34,6 +34,13 @@ tracciati della fustella (o di quelli scelti), con `i_overlay` come per l'ADR 00
 Il pannello Tracciati propone "Segui la forma della fustella" solo quando il contorno non è un
 rettangolo (`outline_is_rectangle`); senza la spunta resta l'abbondanza rettangolare.
 
+Quando quello che si allunga è solo uno sfondo scelto in tinta unita (un riempimento senza
+contorno, non in un modulo, non ritagliato), non servono pezzi: la sua forma si allarga di
+`amount` (`i_overlay`, angoli tondi; vivi se il formato finito è il suo rettangolo) e si riscrive
+al suo posto con lo stesso colore, come curve morbide che passano per i punti del contorno
+semplificato a 0,05 mm (`paths::grow`). Resta un tracciato solo, liscio, che si modifica come gli
+altri in Illustrator; la pagina prende formato finito e abbondanza senza ritagli.
+
 ## Conseguenze
 - Colori, tinte piatte e risoluzione restano quelli del file: la fascia è la grafica stessa.
 - Ogni pezzo ridisegna la grafica (ritagliata): una forma con molte curve fa un PDF con qualche

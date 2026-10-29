@@ -642,7 +642,7 @@ fn simplify_open(c: &[Pt], lo: usize, hi: usize, tol: f64, keep: &mut [bool]) {
 }
 
 /// Il contorno chiuso `c` con meno punti: nessuno si sposta dal contorno di più di `tol`.
-fn simplify_closed(c: &[Pt], tol: f64) -> Vec<Pt> {
+pub(crate) fn simplify_closed(c: &[Pt], tol: f64) -> Vec<Pt> {
     let n = c.len();
     if n <= 4 {
         return c.to_vec();
@@ -1010,6 +1010,53 @@ pub(crate) fn bleed_shape(
         &src,
         NewPage {
             forms: &forms,
+            ops,
+            width,
+            height,
+            total,
+            trim: Some([b, b, width - b, height - b]),
+            bleed: Some([0.0, 0.0, width, height]),
+        },
+    )
+}
+
+/// La pagina diventa il formato finito `finished` (mm dall'alto a sinistra, come in
+/// [`BleedSpec`]) più `amount` mm per lato, con TrimBox e BleedBox: il contenuto resta com'è,
+/// senza ritagli (serve quando la grafica è già stata allargata fino all'abbondanza).
+pub(crate) fn bleed_boxes(
+    doc: &mut Document,
+    index: usize,
+    finished: [f64; 4],
+    amount: f64,
+) -> Result<(), EditError> {
+    let src = source(doc, index)?;
+    let number = src.number;
+    let h = src.h;
+    let f = [
+        mm_to_pt(finished[0]),
+        h - mm_to_pt(finished[3]),
+        mm_to_pt(finished[2]),
+        h - mm_to_pt(finished[1]),
+    ];
+    let min = mm_to_pt(1.0);
+    if !(f.iter().all(|v| v.is_finite()) && f[2] - f[0] >= min && f[3] - f[1] >= min) {
+        return Err(EditError::Invalid(format!(
+            "il formato finito della pagina {number} non è valido"
+        )));
+    }
+    let b = mm_to_pt(amount);
+    let r = [f[0] - b, f[1] - b, f[2] + b, f[3] + b];
+    let body = content(doc, src.page, number)?;
+    let form = page_form(doc, &src, &body);
+    let ops = format!("q 1 0 0 1 {} {} cm /{FORM_NAME} Do Q\n", num(-r[0]), num(-r[1]));
+    let (width, height) = (r[2] - r[0], r[3] - r[1]);
+    let place: Matrix = [1.0, 0.0, 0.0, 1.0, -r[0], -r[1]];
+    let total = compose(&place, &src.upright);
+    finish(
+        doc,
+        &src,
+        NewPage {
+            forms: &[(FORM_NAME, form)],
             ops,
             width,
             height,

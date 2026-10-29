@@ -506,6 +506,16 @@ impl Editor {
             return Err(EditError::Invalid("abbondanza non valida".into()));
         }
         self.edit("Crea abbondanza", |d| {
+            // Uno sfondo in tinta unita grande quanto il formato finito si allarga e basta: resta
+            // un tracciato solo, con gli angoli vivi.
+            if !only.is_empty()
+                && spec.sides.iter().all(|s| *s)
+                && fills_finished(d, page, only, spec.finished)?
+                && paths::grow(d, page, only, spec.amount, false)?
+            {
+                frame::bleed_boxes(d, page, spec.finished, spec.amount)?;
+                return Ok(0);
+            }
             let (base, art, over, left) = bleed_layers(d, page, die, paper, only)?;
             frame::bleed(d, page, spec, &base, &art, over.as_deref())?;
             Ok(left)
@@ -529,7 +539,28 @@ impl Editor {
             return Err(EditError::Invalid("abbondanza non valida".into()));
         }
         self.edit("Crea abbondanza", |d| {
-            let shapes = paths::outline(&paths::scan(d, page)?, outline)?;
+            let scanned = paths::scan(d, page)?;
+            let shapes = paths::outline(&scanned, outline)?;
+            // La forma è lo sfondo scelto, in tinta unita: si allarga lui, con gli angoli tondi,
+            // e resta un tracciato solo e liscio.
+            let same = {
+                let mut a = only.to_vec();
+                let mut b = outline.to_vec();
+                a.sort_unstable();
+                b.sort_unstable();
+                a == b
+            };
+            if same && paths::grow(d, page, only, amount, true)? {
+                let finished = shapes
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| {
+                        [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]
+                    });
+                frame::bleed_boxes(d, page, finished, amount)?;
+                return Ok(0);
+            }
             let (base, art, over, left) = bleed_layers(d, page, die, paper, only)?;
             frame::bleed_shape(d, page, &shapes, amount, &base, &art, over.as_deref())?;
             Ok(left)
@@ -577,6 +608,23 @@ impl Editor {
 }
 
 /// Divide le pagine in gruppi: prima di ognuna delle pagine `before` (da 0) comincia un file.
+/// I tracciati `ids` riempiono il formato finito `f` (mm): il loro rettangolo coincide con lui.
+fn fills_finished(d: &Document, page: usize, ids: &[PathId], f: [f64; 4]) -> Result<bool, EditError> {
+    let scanned = paths::scan(d, page)?;
+    let b = scanned
+        .paths
+        .iter()
+        .filter(|p| ids.contains(&p.id))
+        .fold(None, |acc: Option<[f64; 4]>, p| {
+            let v = p.visible;
+            Some(match acc {
+                Some(a) => [a[0].min(v[0]), a[1].min(v[1]), a[2].max(v[2]), a[3].max(v[3])],
+                None => v,
+            })
+        });
+    Ok(b.is_some_and(|b| b.iter().zip(f).all(|(x, y)| (x - y).abs() < 0.05)))
+}
+
 /// I tre disegni dell'abbondanza: la pagina vera (`base`), la grafica da allungare (`art`) e
 /// quello che resta sopra intero (`over`), più quanti tracciati della fustella non si sono potuti
 /// tenere fuori dalla grafica. Con `only` si allungano solo quei tracciati e tutto il resto della

@@ -237,6 +237,10 @@ pub struct PathTool {
     /// La fustella da creare dai tracciati scelti: nome e spessore in mm.
     die_name: String,
     die_width: f64,
+    /// Il colore con cui la fustella nuova si vede, e tinta e saturazione della sua ruota.
+    die_cmyk: [f64; 4],
+    die_hue: f64,
+    die_sat: f64,
 }
 
 impl Default for PathTool {
@@ -271,6 +275,9 @@ impl Default for PathTool {
             shape_known: None,
             die_name: "Taglio".into(),
             die_width: 0.1,
+            die_cmyk: Role::Cut.cmyk(),
+            die_hue: 0.0,
+            die_sat: 0.0,
         }
     }
 }
@@ -350,7 +357,7 @@ const QUICK: [(&str, [f64; 4]); 8] = [
 /// La ruota dei colori: giro = tinta, distanza dal centro = saturazione; sotto la barra della
 /// luminosità, i colori rapidi e i valori C, M, Y, K. `hue`/`sat` tengono la tinta quando il
 /// colore passa dal grigio.
-fn colour_wheel(ui: &mut egui::Ui, c: &mut [f64; 4], hue: &mut f64, sat: &mut f64) {
+fn colour_wheel(ui: &mut egui::Ui, salt: &str, c: &mut [f64; 4], hue: &mut f64, sat: &mut f64) {
     let t = Tokens::get(ui.ctx());
     let [h0, s0, v0] = rgb_to_hsv(cmyk_rgb(*c));
     if s0 > 0.02 && v0 > 0.02 {
@@ -486,7 +493,7 @@ fn colour_wheel(ui: &mut egui::Ui, c: &mut [f64; 4], hue: &mut f64, sat: &mut f6
         ))
         .color(t.text_dim),
     )
-    .id_salt("tracciati-cmyk")
+    .id_salt(("tracciati-cmyk", salt))
     .show(ui, |ui| cmyk_fields(ui, c));
 }
 
@@ -1460,8 +1467,8 @@ impl PathTool {
                 ui.add(
                     egui::Label::new(
                         egui::RichText::new(
-                            "Lungo tutto il contorno l'ultimo mezzo millimetro di grafica si allunga verso fuori; \
-                             sulle punte strette si apre a ventaglio.",
+                            "L'abbondanza gira attorno al contorno, alla stessa distanza. Uno sfondo in tinta \
+                             unita si allarga e resta un tracciato solo; il resto della grafica si allunga dal bordo.",
                         )
                         .size(12.0)
                         .color(t.text_dim),
@@ -1919,9 +1926,9 @@ impl PathTool {
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new("Colore a schermo e nelle prove").color(t.text_dim))
                     .on_hover_text("Il RIP stampa la tinta per nome; questo è il colore con cui si vede");
-                colour_wheel(ui, &mut self.cmyk, &mut self.hue, &mut self.sat);
+                colour_wheel(ui, "cambia", &mut self.cmyk, &mut self.hue, &mut self.sat);
             } else if self.mode == InkMode::Process {
-                colour_wheel(ui, &mut self.cmyk, &mut self.hue, &mut self.sat);
+                colour_wheel(ui, "cambia", &mut self.cmyk, &mut self.hue, &mut self.sat);
             }
             if self.part == Part::Line {
                 ui.add_space(8.0);
@@ -2067,6 +2074,7 @@ impl PathTool {
                                 let text = format!("{}  ·  {}", i.name, i.role.label());
                                 if ui.selectable_label(self.die_name == i.name, text).clicked() {
                                     self.die_name = i.name.clone();
+                                    self.die_cmyk = i.color();
                                 }
                             }
                         })
@@ -2088,6 +2096,16 @@ impl PathTool {
                             }),
                     );
                 });
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Colore a schermo e nelle prove").color(t.text_dim))
+                    .on_hover_text("Il RIP stampa la tinta per nome; questo è il colore con cui si vede");
+                colour_wheel(
+                    ui,
+                    "fustella",
+                    &mut self.die_cmyk,
+                    &mut self.die_hue,
+                    &mut self.die_sat,
+                );
                 ui.add_space(6.0);
                 let name = self.die_name.trim().to_string();
                 let ok = !name.is_empty();
@@ -2110,11 +2128,7 @@ impl PathTool {
                         Role::Other => Role::Cut,
                         r => r,
                     };
-                    let cmyk = inks
-                        .iter()
-                        .find(|i| i.name == name)
-                        .map(InkName::color)
-                        .unwrap_or_else(|| role.cmyk());
+                    let cmyk = self.die_cmyk;
                     remember(inks, &name, role, cmyk);
                     request = Some(Request::Die(
                         ids.clone(),

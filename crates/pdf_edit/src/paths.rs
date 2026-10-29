@@ -156,6 +156,8 @@ pub struct PathInfo {
     pub clips: bool,
     /// Millimetri per unità del contenuto, per scrivere uno spessore nuovo.
     scale: f64,
+    /// Dalle unità del contenuto ai millimetri della pagina, per scrivere una forma nuova.
+    to_mm: Matrix,
 }
 
 impl PathInfo {
@@ -688,6 +690,7 @@ impl Scanner<'_> {
             in_form,
             clips,
             scale,
+            to_mm: s.ctm,
         });
     }
 }
@@ -1116,6 +1119,165 @@ pub(crate) fn only(doc: &Document, page: usize, ids: &[PathId]) -> Result<Vec<u8
         })
         .collect();
     Ok(serialize_ops(&out))
+}
+
+/// Di quanto (mm) il contorno allargato può scostarsi dai suoi punti quando diventa curve.
+const SMOOTH_TOLERANCE_MM: f64 = 0.05;
+
+/// Il contorno chiuso `c` come curve di Bézier che passano per i suoi punti (da, controllo,
+/// controllo, a). Dove il contorno fa un angolo, o dove un lato lungo incontra uno corto, le
+/// curve seguono il loro lato: gli spigoli restano spigoli e i lati dritti restano dritti.
+fn smooth(c: &[[f64; 2]]) -> Vec<[[f64; 2]; 4]> {
+    let n = c.len();
+    let at = |i: usize| c.get(i % n).copied().unwrap_or([0.0, 0.0]);
+    let sub = |a: [f64; 2], b: [f64; 2]| [a[0] - b[0], a[1] - b[1]];
+    let len = |a: [f64; 2]| a[0].hypot(a[1]);
+    let unit = |a: [f64; 2]| {
+        let l = len(a);
+        if l > 1e-12 {
+            [a[0] / l, a[1] / l]
+        } else {
+            [0.0, 0.0]
+        }
+    };
+    // La direzione della curva nel punto i, o None se lì c'è uno spigolo.
+    let tangent = |i: usize| -> Option<[f64; 2]> {
+        let p = at(i);
+        let (din, dout) = (sub(p, at(i + n - 1)), sub(at(i + 1), p));
+        let (lin, lout) = (len(din), len(dout));
+        let (ui, uo) = (unit(din), unit(dout));
+        let cos = ui[0] * uo[0] + ui[1] * uo[1];
+        let ratio = lin.max(lout) / lin.min(lout).max(1e-9);
+        (cos > 20f64.to_radians().cos() && ratio < 3.0).then(|| unit(sub(at(i + 1), at(i + n - 1))))
+    };
+    let tangents: Vec<Option<[f64; 2]>> = (0..n).map(tangent).collect();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (at(i), at(i + 1));
+            let d = sub(b, a);
+            let k = len(d) / 3.0;
+            let own = unit(d);
+            let ta = tangents.get(i).copied().flatten().unwrap_or(own);
+            let tb = tangents.get((i + 1) % n).copied().flatten().unwrap_or(own);
+            [
+                a,
+                [a[0] + ta[0] * k, a[1] + ta[1] * k],
+                [b[0] - tb[0] * k, b[1] - tb[1] * k],
+                b,
+            ]
+        })
+        .collect()
+}
+
+/// Allarga di `amount` mm i riempimenti `ids` in tinta unita: la loro forma diventa il contorno
+/// spostato verso fuori (angoli tondi con `round`, vivi altrimenti), un tracciato solo con lo
+/// stesso colore. Restituisce false, senza toccare nulla, se uno di loro non si può allargare così
+/// (ha un contorno, una sfumatura, sta in un modulo o dentro un ritaglio).
+pub(crate) fn grow(
+    doc: &mut Document,
+    page: usize,
+    ids: &[PathId],
+    amount: f64,
+    round: bool,
+) -> Result<bool, EditError> {
+    use i_overlay::core::fill_rule::FillRule;
+    use i_overlay::float::simplify::SimplifyShape;
+    use i_overlay::mesh::float::outline::offset::OutlineOffset;
+    use i_overlay::mesh::float::style::{LineJoin, OutlineStyle};
+
+    let page_ref = organize::pages(doc)?
+        .get(page)
+        .map(|p| p.obj)
+        .ok_or(EditError::NoPage(page.saturating_add(1)))?;
+    let scanned = scan(doc, page)?;
+    let wanted: HashSet<PathId> = ids.iter().copied().collect();
+    let chosen: Vec<&PathInfo> = scanned.paths.iter().filter(|p| wanted.contains(&p.id)).collect();
+    let flat = |p: &PathInfo| {
+        p.id.owner == Owner::Page(page_ref)
+            && p.line.is_none()
+            && !p.clips
+            && !p.in_form
+            && p.visible == p.bounds
+            && p.fill.as_ref().is_some_and(|f| !matches!(f.ink, Ink::Other(_)))
+    };
+    if chosen.is_empty() || chosen.len() != wanted.len() || !chosen.iter().all(|p| flat(p)) {
+        return Ok(false);
+    }
+    let data = page_content(doc, page_ref)?;
+    let res = read_res(doc, &page_resources(doc, page_ref));
+    let mut ops = parse(&data).ops;
+    let spots = locate(&ops, &res);
+    // Il nuovo disegno di ogni tracciato, al posto degli operatori che lo costruivano.
+    let mut swaps: Vec<(usize, usize, Vec<Op>)> = Vec::new();
+    let join = if round {
+        LineJoin::Round(0.05)
+    } else {
+        LineJoin::Miter(0.1)
+    };
+    let n = |v: f64| pdfcraft_content::num(v);
+    for p in &chosen {
+        let (Some(sp), Some(paint)) = (spots.get(&p.id.op), ops.get(p.id.op)) else {
+            return Ok(false);
+        };
+        let rule = if matches!(paint.op.as_slice(), b"f*" | b"B*" | b"b*") {
+            FillRule::EvenOdd
+        } else {
+            FillRule::NonZero
+        };
+        let own: Vec<Vec<[f64; 2]>> = p
+            .parts
+            .iter()
+            .filter(|part| part.points.len() >= 3)
+            .map(|part| part.points.clone())
+            .collect();
+        let shapes = own.simplify_shape(rule);
+        let style = OutlineStyle::new(amount).line_join(join.clone());
+        let grown = shapes.outline(&style);
+        let Some(back) = p.to_mm.invert() else {
+            return Ok(false);
+        };
+        let mut new = Vec::new();
+        let pt = |q: [f64; 2]| {
+            let (x, y) = back.apply(q[0], q[1]);
+            vec![n(x), n(y)]
+        };
+        for c in grown.iter().flatten().filter(|c| c.len() >= 3) {
+            if round {
+                // Pochi punti e curve morbide tra loro, come un tracciato disegnato a mano.
+                let c = crate::frame::simplify_closed(c, SMOOTH_TOLERANCE_MM);
+                for (i, seg) in smooth(&c).into_iter().enumerate() {
+                    if i == 0 {
+                        new.push(Op::new("m", pt(seg[0])));
+                    }
+                    let mut args = pt(seg[1]);
+                    args.extend(pt(seg[2]));
+                    args.extend(pt(seg[3]));
+                    new.push(Op::new("c", args));
+                }
+            } else {
+                for (i, q) in c.iter().enumerate() {
+                    new.push(Op::new(if i == 0 { "m" } else { "l" }, pt(*q)));
+                }
+            }
+            new.push(Op::new("h", Vec::new()));
+        }
+        if new.is_empty() {
+            return Ok(false);
+        }
+        new.push(Op::new("f", Vec::new()));
+        swaps.push((sp.start, p.id.op, new));
+    }
+    // Dal fondo, così gli indici di quelli prima restano buoni.
+    swaps.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
+    for (start, paint, new) in swaps {
+        if start > paint || paint >= ops.len() {
+            return Ok(false);
+        }
+        ops.splice(start..=paint, new);
+    }
+    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), &serialize_ops(&ops))));
+    doc.update_dict(page_ref, |d| d.set(b"Contents".to_vec(), Object::Ref(contents)))?;
+    Ok(true)
 }
 
 /// Una forma chiusa: il contorno esterno e poi i buchi, punti in millimetri della pagina come si
