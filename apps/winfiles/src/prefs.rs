@@ -230,6 +230,7 @@ mod tests {
             inks: vec![crate::pdf::tracciati::InkName {
                 name: "Thru-cut".into(),
                 role: crate::pdf::tracciati::Role::Cut,
+                cmyk: Some([0.0, 1.0, 0.0, 0.0]),
             }],
         };
         save_to(&file, &prefs).unwrap();

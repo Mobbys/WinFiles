@@ -780,3 +780,30 @@ fn immagini_e_formato_finito() {
             && near(o[3], pt_to_mm(100.0))
     );
 }
+
+#[test]
+fn colore_in_quadricromia_sul_riempimento() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, HAIRLINE)]);
+    let id = e.scan_page(0).unwrap().paths[0].id;
+    let change = Restyle {
+        part: Part::Fill,
+        ink: Some(NewInk::Cmyk([0.0, 0.0, 0.0, 1.0])),
+        width: None,
+        overprint: None,
+    };
+    assert_eq!(e.restyle_paths(0, &[id], &change).unwrap().done, 1);
+    assert_eq!(e.undo_label(), Some("Colore dei tracciati"));
+    let scan = e.scan_page(0).unwrap();
+    assert_eq!(
+        scan.paths[0].fill.as_ref().unwrap().ink,
+        Ink::Cmyk([0.0, 0.0, 0.0, 1.0])
+    );
+    // Il filetto dopo il fondo resta magenta.
+    assert_eq!(
+        scan.paths[1].line.as_ref().unwrap().ink,
+        Ink::Cmyk([0.0, 1.0, 0.0, 0.0])
+    );
+    let img = render(&reread(&e), 0);
+    // Il nero in quadricromia a schermo è un grigio molto scuro (conversione CMYK).
+    assert!(pixel(&img, 120, 50).iter().all(|v| *v < 60));
+}

@@ -106,29 +106,50 @@ impl Role {
 pub struct InkName {
     pub name: String,
     pub role: Role,
+    /// Il colore con cui la tinta si vede a schermo e nelle prove (C, M, Y, K da 0 a 1); senza,
+    /// quello del ruolo.
+    #[serde(default)]
+    pub cmyk: Option<[f64; 4]>,
 }
 
-/// I nomi di partenza: quelli più usati da RIP e plotter.
+impl InkName {
+    pub fn color(&self) -> [f64; 4] {
+        self.cmyk.unwrap_or(self.role.cmyk())
+    }
+}
+
+/// I nomi di partenza: quelli che legge Onyx in ditta (Michel, 29 ottobre 2026).
 pub fn default_inks() -> Vec<InkName> {
     [
-        ("CutContour", Role::Cut),
-        ("Cordonatura", Role::Crease),
-        ("Bianco", Role::White),
-        ("Vernice", Role::Varnish),
+        ("Taglio", Role::Cut),
+        ("Cordone", Role::Crease),
+        ("Spot1", Role::White),
+        ("Spot2", Role::Varnish),
     ]
     .into_iter()
     .map(|(n, r)| InkName {
         name: n.into(),
         role: r,
+        cmyk: Some(r.cmyk()),
     })
     .collect()
 }
 
-/// Toglie i nomi vuoti, troppo lunghi o doppi.
+/// I nomi di partenza della prima prova: chi ha solo quelli riceve i nuovi.
+const OLD_DEFAULTS: [&str; 4] = ["CutContour", "Cordonatura", "Bianco", "Vernice"];
+
+/// Toglie i nomi vuoti, troppo lunghi o doppi, e i colori impossibili.
 pub fn sanitized(inks: Vec<InkName>) -> Vec<InkName> {
+    if !inks.is_empty() && inks.iter().all(|i| OLD_DEFAULTS.contains(&i.name.as_str())) {
+        return default_inks();
+    }
     let mut out: Vec<InkName> = Vec::new();
     for mut i in inks {
         i.name = i.name.trim().to_string();
+        i.cmyk = i
+            .cmyk
+            .filter(|c| c.iter().all(|v| v.is_finite()))
+            .map(|c| c.map(|v| v.clamp(0.0, 1.0)));
         if i.name.is_empty() || i.name.len() > 127 || out.iter().any(|o| o.name == i.name) {
             continue;
         }
@@ -169,6 +190,12 @@ pub struct PathTool {
     /// Il nome della tinta da dare.
     ink_name: String,
     role: Role,
+    /// Tinta piatta o quadricromia.
+    mode: InkMode,
+    /// Il colore da dare (C, M, Y, K da 0 a 1): della tinta a schermo, o in quadricromia.
+    cmyk: [f64; 4],
+    /// Il primo tracciato scelto quando il colore è stato proposto dalla scelta.
+    prefilled: Option<PathId>,
     /// Lo spessore da dare, in millimetri.
     width: f64,
 }
@@ -182,11 +209,61 @@ impl Default for PathTool {
             selected: BTreeSet::new(),
             marquee: None,
             part: Part::Line,
-            ink_name: "CutContour".into(),
+            ink_name: "Taglio".into(),
             role: Role::Cut,
+            mode: InkMode::Spot,
+            cmyk: Role::Cut.cmyk(),
+            prefilled: None,
             width: 0.25,
         }
     }
+}
+
+/// Il colore nuovo: una tinta piatta o un colore di quadricromia.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InkMode {
+    Spot,
+    Process,
+}
+
+/// Il colore di quadricromia per lo schermo.
+fn cmyk_screen(c: [f64; 4]) -> egui::Color32 {
+    let rgb = Ink::Cmyk(c).screen().unwrap_or([0, 0, 0]);
+    egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+}
+
+/// Quattro campi C, M, Y, K in percentuale, con il quadratino del colore.
+fn cmyk_fields(ui: &mut egui::Ui, c: &mut [f64; 4]) {
+    let t = Tokens::get(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        // Quattro campi e il quadratino nella larghezza che c'è (il pannello è stretto).
+        let field = ((ui.available_width() - 18.0 - 4.0 * 14.0 - 12.0) / 4.0).clamp(28.0, 48.0);
+        let (r, _) = ui.allocate_exact_size(vec2(18.0, crate::fluent::HEIGHT), Sense::hover());
+        ui.painter().rect(
+            r.shrink2(vec2(0.0, 5.0)),
+            4.0,
+            cmyk_screen(*c),
+            Stroke::new(1.0, t.border),
+            egui::StrokeKind::Inside,
+        );
+        for (v, label) in c.iter_mut().zip(["C", "M", "Y", "K"]) {
+            ui.label(egui::RichText::new(label).color(t.text_dim));
+            let mut pc = (*v * 100.0).round();
+            let resp = crate::fluent::number(
+                ui,
+                field,
+                egui::DragValue::new(&mut pc)
+                    .range(0.0..=100.0)
+                    .speed(1.0)
+                    .max_decimals(0),
+            )
+            .on_hover_text(format!("{label} in percentuale"));
+            if resp.changed() {
+                *v = (pc / 100.0).clamp(0.0, 1.0);
+            }
+        }
+    });
 }
 
 /// Cosa chiede il pannello al modulo.
@@ -757,7 +834,7 @@ impl PathTool {
                 });
                 if ui
                     .button("Seleziona questi filetti")
-                    .on_hover_text("Poi sotto si fanno diventare una tinta, per esempio CutContour")
+                    .on_hover_text("Poi sotto si fanno diventare una tinta, per esempio Taglio")
                     .clicked()
                 {
                     self.selected = g.ids.iter().copied().collect();
@@ -1012,6 +1089,17 @@ impl PathTool {
             self.part = Part::Line;
         }
         let ids: Vec<PathId> = chosen.iter().map(|p| p.id).collect();
+        // Il colore si propone da quello del primo tracciato scelto, se è in quadricromia.
+        if self.prefilled != Some(ids[0]) {
+            self.prefilled = Some(ids[0]);
+            let current = chosen.iter().find_map(|p| match self.part {
+                Part::Line => p.line.as_ref().map(|l| l.ink.clone()),
+                Part::Fill => p.fill.as_ref().map(|f| f.ink.clone()),
+            });
+            if let Some(c) = current.as_ref().and_then(as_cmyk) {
+                self.cmyk = c;
+            }
+        }
         card_frame(ui, |ui| {
             ui.label(
                 egui::RichText::new("Cambia")
@@ -1028,85 +1116,127 @@ impl PathTool {
                 );
                 ui.add_space(6.0);
             }
-            ui.label(egui::RichText::new("Tinta piatta").color(t.text_dim));
-            ui.horizontal(|ui| {
-                let edit = egui::TextEdit::singleline(&mut self.ink_name)
-                    .hint_text("Nome della tinta")
-                    .desired_width((ui.available_width() - 56.0).max(80.0));
-                let resp = crate::fluent::text_field(ui, edit);
-                if resp.changed() {
-                    self.role = role_of(inks, self.ink_name.trim());
+            crate::app::segmented(
+                ui,
+                "tracciati-modo",
+                &mut self.mode,
+                &[
+                    (InkMode::Spot, "Tinta piatta"),
+                    (InkMode::Process, "Quadricromia"),
+                ],
+            );
+            ui.add_space(6.0);
+            if self.mode == InkMode::Process {
+                ui.label(egui::RichText::new("Colore").color(t.text_dim));
+                cmyk_fields(ui, &mut self.cmyk);
+                ui.add_space(4.0);
+                let go = egui::Button::new(
+                    egui::RichText::new("Applica il colore")
+                        .font(semibold(13.5))
+                        .color(t.on_primary),
+                )
+                .fill(t.primary)
+                .min_size(vec2(ui.available_width(), 32.0));
+                if ui
+                    .add(go)
+                    .on_hover_text("Colora i tracciati scelti in quadricromia con questi valori")
+                    .clicked()
+                {
+                    request = Some(Request::Restyle(
+                        ids.clone(),
+                        Restyle {
+                            part: self.part,
+                            ink: Some(NewInk::Cmyk(self.cmyk)),
+                            width: None,
+                            overprint: None,
+                        },
+                    ));
                 }
-                egui::ComboBox::from_id_salt("tracciati-nomi")
-                    .icon(crate::fluent::combo_icon)
-                    .selected_text("")
-                    .width(28.0)
-                    .show_ui(ui, |ui| {
-                        for i in inks.iter() {
-                            let text = format!("{}  ·  {}", i.name, i.role.label());
-                            if ui.selectable_label(self.ink_name == i.name, text).clicked() {
-                                self.ink_name = i.name.clone();
-                                self.role = i.role;
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text("I nomi usati di recente");
-            });
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Ruolo").color(t.text_dim));
-                egui::ComboBox::from_id_salt("tracciati-ruolo")
-                    .icon(crate::fluent::combo_icon)
-                    .selected_text(self.role.label())
-                    .width(140.0)
-                    .show_ui(ui, |ui| {
-                        for r in Role::ALL {
-                            ui.selectable_value(&mut self.role, r, r.label());
-                        }
-                    });
-            });
-            ui.add_space(4.0);
-            let name = self.ink_name.trim().to_string();
-            let target = if self.part == Part::Line {
-                "il contorno"
             } else {
-                "il riempimento"
-            };
-            let go = egui::Button::new(
-                egui::RichText::new("Diventa tinta")
-                    .font(semibold(13.5))
-                    .color(t.on_primary),
-            )
-            .fill(t.primary)
-            .min_size(vec2(ui.available_width(), 32.0));
-            if ui
-                .add_enabled(!name.is_empty(), go)
-                .on_hover_text(format!(
-                    "Colora {target} dei tracciati scelti con la tinta «{name}» al 100%, in sovrastampa \
-                     come vogliono i RIP per taglio e cordonatura"
-                ))
-                .clicked()
-            {
-                // A schermo la tinta resta del colore che aveva, se era in quadricromia.
-                let current = chosen.iter().find_map(|p| match self.part {
-                    Part::Line => p.line.as_ref().map(|l| l.ink.clone()),
-                    Part::Fill => p.fill.as_ref().map(|f| f.ink.clone()),
+                ui.label(egui::RichText::new("Nome della tinta").color(t.text_dim));
+                ui.horizontal(|ui| {
+                    let edit = egui::TextEdit::singleline(&mut self.ink_name)
+                        .hint_text("Nome della tinta")
+                        .desired_width((ui.available_width() - 56.0).max(80.0));
+                    let resp = crate::fluent::text_field(ui, edit);
+                    if resp.changed() {
+                        let name = self.ink_name.trim();
+                        self.role = role_of(inks, name);
+                        if let Some(i) = inks.iter().find(|i| i.name == name) {
+                            self.cmyk = i.color();
+                        }
+                    }
+                    egui::ComboBox::from_id_salt("tracciati-nomi")
+                        .icon(crate::fluent::combo_icon)
+                        .selected_text("")
+                        .width(28.0)
+                        .show_ui(ui, |ui| {
+                            for i in inks.iter() {
+                                let text = format!("{}  ·  {}", i.name, i.role.label());
+                                if ui.selectable_label(self.ink_name == i.name, text).clicked() {
+                                    self.ink_name = i.name.clone();
+                                    self.role = i.role;
+                                    self.cmyk = i.color();
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text("I nomi usati di recente");
                 });
-                let cmyk = current.as_ref().and_then(as_cmyk).unwrap_or(self.role.cmyk());
-                let overprint = matches!(self.role, Role::Cut | Role::Crease | Role::Varnish | Role::White);
-                request = Some(Request::Restyle(
-                    ids.clone(),
-                    Restyle {
-                        part: self.part,
-                        ink: Some(NewInk::Spot {
-                            name: name.clone(),
-                            cmyk,
-                        }),
-                        width: None,
-                        overprint: overprint.then_some(true),
-                    },
-                ));
-                remember(inks, &name, self.role);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Ruolo").color(t.text_dim));
+                    egui::ComboBox::from_id_salt("tracciati-ruolo")
+                        .icon(crate::fluent::combo_icon)
+                        .selected_text(self.role.label())
+                        .width(140.0)
+                        .show_ui(ui, |ui| {
+                            for r in Role::ALL {
+                                ui.selectable_value(&mut self.role, r, r.label());
+                            }
+                        });
+                });
+                ui.label(egui::RichText::new("Colore a schermo e nelle prove").color(t.text_dim))
+                    .on_hover_text("Il RIP stampa la tinta per nome; questo è il colore con cui si vede");
+                cmyk_fields(ui, &mut self.cmyk);
+                ui.add_space(4.0);
+                let name = self.ink_name.trim().to_string();
+                let target = if self.part == Part::Line {
+                    "il contorno"
+                } else {
+                    "il riempimento"
+                };
+                let go = egui::Button::new(
+                    egui::RichText::new("Diventa tinta")
+                        .font(semibold(13.5))
+                        .color(t.on_primary),
+                )
+                .fill(t.primary)
+                .min_size(vec2(ui.available_width(), 32.0));
+                if ui
+                    .add_enabled(!name.is_empty(), go)
+                    .on_hover_text(format!(
+                        "Colora {target} dei tracciati scelti con la tinta «{name}» al 100%, in sovrastampa \
+                     come vogliono i RIP per taglio e cordonatura"
+                    ))
+                    .clicked()
+                {
+                    let cmyk = self.cmyk;
+                    let overprint =
+                        matches!(self.role, Role::Cut | Role::Crease | Role::Varnish | Role::White);
+                    request = Some(Request::Restyle(
+                        ids.clone(),
+                        Restyle {
+                            part: self.part,
+                            ink: Some(NewInk::Spot {
+                                name: name.clone(),
+                                cmyk,
+                            }),
+                            width: None,
+                            overprint: overprint.then_some(true),
+                        },
+                    ));
+                    remember(inks, &name, self.role, cmyk);
+                }
             }
             if self.part == Part::Line {
                 ui.add_space(8.0);
@@ -1167,13 +1297,14 @@ impl PathTool {
 }
 
 /// Ricorda il nome (in cima all'elenco) con il suo ruolo.
-pub fn remember(inks: &mut Vec<InkName>, name: &str, role: Role) {
+pub fn remember(inks: &mut Vec<InkName>, name: &str, role: Role, cmyk: [f64; 4]) {
     inks.retain(|i| i.name != name);
     inks.insert(
         0,
         InkName {
             name: name.to_string(),
             role,
+            cmyk: Some(cmyk),
         },
     );
     inks.truncate(MAX_INKS);
@@ -1210,37 +1341,42 @@ mod tests {
     #[test]
     fn i_nomi_ricordati_vincono_sulle_parole() {
         let mut inks = default_inks();
-        remember(&mut inks, "Linea 2", Role::Crease);
+        remember(&mut inks, "Linea 2", Role::Crease, [1.0, 0.0, 0.0, 0.0]);
         assert_eq!(role_of(&inks, "Linea 2"), Role::Crease);
         assert_eq!(inks[0].name, "Linea 2");
-        remember(&mut inks, "CutContour", Role::Cut);
-        assert_eq!(inks[0].name, "CutContour");
-        assert_eq!(inks.iter().filter(|i| i.name == "CutContour").count(), 1);
+        remember(&mut inks, "Taglio", Role::Cut, [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(inks[0].name, "Taglio");
+        assert_eq!(inks.iter().filter(|i| i.name == "Taglio").count(), 1);
+        assert_eq!(inks[1].color(), [1.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]
     fn nomi_vuoti_o_doppi_si_tolgono() {
+        let ink = |n: &str, r: Role, c: Option<[f64; 4]>| InkName {
+            name: n.into(),
+            role: r,
+            cmyk: c,
+        };
         let inks = sanitized(vec![
-            InkName {
-                name: " Taglio ".into(),
-                role: Role::Cut,
-            },
-            InkName {
-                name: "Taglio".into(),
-                role: Role::Other,
-            },
-            InkName {
-                name: "".into(),
-                role: Role::Other,
-            },
+            ink(" Taglio ", Role::Cut, Some([0.0, 2.0, f64::NAN, 0.0])),
+            ink("Taglio", Role::Other, None),
+            ink("", Role::Other, None),
+            ink("Spot1", Role::White, Some([0.0, 1.5, 0.0, 0.0])),
         ]);
         assert_eq!(
             inks,
-            [InkName {
-                name: "Taglio".into(),
-                role: Role::Cut
-            }]
+            [
+                ink("Taglio", Role::Cut, None),
+                ink("Spot1", Role::White, Some([0.0, 1.0, 0.0, 0.0]))
+            ]
         );
+        // Chi aveva solo i nomi della prima prova riceve quelli della ditta.
+        let old = sanitized(vec![
+            ink("CutContour", Role::Cut, None),
+            ink("Bianco", Role::White, None),
+        ]);
+        assert_eq!(old, default_inks());
+        assert_eq!(old[0].name, "Taglio");
     }
 
     #[test]

@@ -28,9 +28,10 @@ fustelle e nesting: fattibilità" del progetto.
 - Un tracciato che è anche ritaglio (`W n` o `W S`) non si cambia: chiudere lo stato grafico dopo
   di lui toglierebbe il ritaglio al resto. Il pannello lo dice.
 - Un tracciato dentro un modulo disegnato più volte cambia in tutte le copie; il pannello lo dice.
-- La tinta nuova prende come colore di prova quello che il tracciato aveva (se era in
-  quadricromia), così a schermo e nelle prove non cambia aspetto; senza, quello del ruolo
-  (taglio magenta, cordonatura ciano…). Taglio, cordonatura, bianco e vernice vanno in sovrastampa.
+- I nomi di partenza sono quelli che legge Onyx in ditta: Taglio, Cordone, Spot1 (bianco),
+  Spot2 (vernice). Il colore di prova della tinta si sceglie in CMYK; si propone quello che il
+  tracciato aveva (se era in quadricromia), così a schermo non cambia aspetto, oppure quello
+  ricordato con il nome. In alternativa i tracciati prendono un colore CMYK qualsiasi. Taglio, cordonatura, bianco e vernice vanno in sovrastampa.
 - I nomi delle tinte con il loro ruolo stanno in `impostazioni.json` (`inks`), il più recente in
   cima; il ruolo di un nome sconosciuto si indovina dalle parole (le stesse del pannello di
   nesting per Illustrator, `Mobbys/illustratorNesting`).
