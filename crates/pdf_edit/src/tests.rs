@@ -610,3 +610,159 @@ fn names_in(o: &pdfcraft_cos::Object) -> Vec<Vec<u8>> {
         _ => Vec::new(),
     }
 }
+
+/// Un filetto magenta chiuso sopra un fondo blu: la fustella fatta in quadricromia.
+const HAIRLINE: &str = "0 0 1 rg 0 0 200 100 re f 0 1 0 0 K 4 w 10 10 m 50 10 l 50 50 l 10 50 l h S";
+
+#[test]
+fn legge_i_tracciati_con_colore_spessore_e_posizione() {
+    let e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, HAIRLINE)]);
+    let scan = e.scan_page(0).unwrap();
+    assert_eq!(scan.paths.len(), 2);
+    assert!(near(scan.width, pt_to_mm(200.0)) && near(scan.height, pt_to_mm(100.0)));
+    let fondo = &scan.paths[0];
+    assert!(fondo.line.is_none());
+    assert_eq!(fondo.fill.as_ref().unwrap().ink, Ink::Rgb([0.0, 0.0, 1.0]));
+    let filetto = &scan.paths[1];
+    assert!(filetto.fill.is_none() && filetto.closed() && !filetto.in_form);
+    let line = filetto.line.as_ref().unwrap();
+    assert_eq!(line.ink, Ink::Cmyk([0.0, 1.0, 0.0, 0.0]));
+    assert!(near(line.width, pt_to_mm(4.0)));
+    // In millimetri dall'alto a sinistra: y del PDF 10..50 su una pagina alta 100.
+    let b = filetto.bounds;
+    assert!(near(b[0], pt_to_mm(10.0)) && near(b[1], pt_to_mm(50.0)));
+    assert!(near(b[2], pt_to_mm(50.0)) && near(b[3], pt_to_mm(90.0)));
+    assert!(near(filetto.length, pt_to_mm(160.0)));
+}
+
+#[test]
+fn le_pagine_ruotate_si_leggono_come_si_vedono() {
+    let e = editor(&[page([0.0, 0.0, 200.0, 100.0], 90, "0 0 0 1 k 0 80 20 20 re f")]);
+    let scan = e.scan_page(0).unwrap();
+    assert!(near(scan.width, pt_to_mm(100.0)) && near(scan.height, pt_to_mm(200.0)));
+    // Ruotata di 90° in senso orario, l'angolo in alto a sinistra va in alto a destra.
+    let b = scan.paths[0].bounds;
+    assert!(near(b[0], pt_to_mm(80.0)) && near(b[1], 0.0));
+    assert!(near(b[2], pt_to_mm(100.0)) && near(b[3], pt_to_mm(20.0)));
+}
+
+#[test]
+fn il_filetto_diventa_una_fustella_in_tinta() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, HAIRLINE)]);
+    let before = render(&reread(&e), 0);
+    let id = e.scan_page(0).unwrap().paths[1].id;
+    let change = Restyle {
+        part: Part::Line,
+        ink: Some(NewInk::Spot {
+            name: "CutContour".into(),
+            cmyk: [0.0, 1.0, 0.0, 0.0],
+        }),
+        width: None,
+        overprint: Some(true),
+    };
+    assert_eq!(e.restyle_paths(0, &[id], &change).unwrap(), (1, 0));
+    assert_eq!(e.undo_label(), Some("Tracciati in tinta"));
+    let spots = e.spots().unwrap();
+    assert_eq!(spots.len(), 1);
+    assert_eq!(spots[0].name, "CutContour");
+    assert_eq!(spots[0].overprint, Overprint::All);
+    let scan = e.scan_page(0).unwrap();
+    let line = scan.paths[1].line.as_ref().unwrap();
+    assert_eq!(
+        line.ink,
+        Ink::Spot {
+            name: "CutContour".into(),
+            tint: 1.0
+        }
+    );
+    assert!(line.overprint && near(line.width, pt_to_mm(4.0)));
+    // Il fondo dopo la linea resta senza sovrastampa e com'era.
+    assert!(!scan.paths[0].fill.as_ref().unwrap().overprint);
+    let img = render(&reread(&e), 0);
+    assert_eq!(pixel(&img, 120, 50), pixel(&before, 120, 50));
+    // Lo spessore si cambia a parte.
+    let thin = Restyle {
+        part: Part::Line,
+        ink: None,
+        width: Some(0.1),
+        overprint: None,
+    };
+    let id = e.scan_page(0).unwrap().paths[1].id;
+    assert_eq!(e.restyle_paths(0, &[id], &thin).unwrap(), (1, 0));
+    let line = e.scan_page(0).unwrap().paths[1].line.clone().unwrap();
+    assert!(near(line.width, 0.1));
+    assert_eq!(line.ink, Ink::Spot { name: "CutContour".into(), tint: 1.0 });
+}
+
+#[test]
+fn un_tracciato_che_ritaglia_non_si_cambia() {
+    let mut e = editor(&[page(
+        [0.0, 0.0, 200.0, 100.0],
+        0,
+        "0 1 0 0 K 10 10 50 50 re W S 0 0 1 rg 0 0 200 100 re f",
+    )]);
+    let scan = e.scan_page(0).unwrap();
+    assert!(scan.paths[0].clips);
+    let change = Restyle {
+        part: Part::Line,
+        ink: Some(NewInk::Cmyk([0.0, 0.0, 0.0, 1.0])),
+        width: None,
+        overprint: None,
+    };
+    assert_eq!(e.restyle_paths(0, &[scan.paths[0].id], &change).unwrap(), (0, 1));
+    assert!(e.undo_label().is_none());
+    // Il fondo blu, ritagliato, sta dentro il ritaglio.
+    let b = scan.paths[1].bounds;
+    assert!(near(b[2] - b[0], 200.0 * 25.4 / 72.0));
+    assert!(scan.others.is_empty());
+}
+
+#[test]
+fn i_tracciati_dei_moduli_si_trovano_e_si_cambiano() {
+    let mut p = page([0.0, 0.0, 200.0, 100.0], 0, "q 1 0 0 1 100 0 cm /F Do Q");
+    p.resources = "<< /XObject << /F 5 0 R >> >>";
+    let form_content = "0 1 0 0 K 1 w 0 0 m 50 50 l S";
+    let form = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 200 100] /Length {} >>\nstream\n{form_content}\nendstream",
+        form_content.len() + 1
+    );
+    let mut e = Editor::new(
+        PdfFile::from_bytes(pdf_extra(&[p], &[&form])).unwrap(),
+        PathBuf::from("prova.pdf"),
+    );
+    let scan = e.scan_page(0).unwrap();
+    let path = &scan.paths[0];
+    assert!(path.in_form && !path.closed());
+    assert!(near(path.bounds[0], pt_to_mm(100.0)));
+    let change = Restyle {
+        part: Part::Line,
+        ink: Some(NewInk::Spot {
+            name: "Cordonatura".into(),
+            cmyk: [0.0, 1.0, 0.0, 0.0],
+        }),
+        width: None,
+        overprint: None,
+    };
+    assert_eq!(e.restyle_paths(0, &[path.id], &change).unwrap(), (1, 0));
+    assert_eq!(e.spots().unwrap()[0].name, "Cordonatura");
+    let img = render(&reread(&e), 0);
+    assert_eq!((img.1, img.2), (200, 100));
+}
+
+#[test]
+fn immagini_e_formato_finito() {
+    let mut p = page([0.0, 0.0, 200.0, 100.0], 0, "q 100 0 0 50 0 0 cm /Im Do Q");
+    p.trim = Some([10.0, 10.0, 190.0, 90.0]);
+    p.resources = "<< /XObject << /Im 5 0 R >> >>";
+    let img = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream";
+    let e = Editor::new(
+        PdfFile::from_bytes(pdf_extra(&[p], &[img])).unwrap(),
+        PathBuf::from("prova.pdf"),
+    );
+    let scan = e.scan_page(0).unwrap();
+    let t = scan.trim.unwrap();
+    assert!(near(t[0], pt_to_mm(10.0)) && near(t[1], pt_to_mm(10.0)));
+    assert_eq!(scan.others.len(), 1);
+    let o = scan.others[0];
+    assert!(near(o[0], 0.0) && near(o[1], pt_to_mm(50.0)) && near(o[2], pt_to_mm(100.0)) && near(o[3], pt_to_mm(100.0)));
+}

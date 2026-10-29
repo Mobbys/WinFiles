@@ -49,7 +49,7 @@ fn map_rect(m: &Matrix, r: [f64; 4]) -> [f64; 4] {
 
 /// Dal riquadro visibile (CropBox) alla pagina come si vede, con l'angolo in basso a sinistra
 /// in (0, 0): la stessa matrice di `page_as_form` di PdfCraft.
-fn upright(rotation: i64, c: [f64; 4]) -> Matrix {
+pub(crate) fn upright(rotation: i64, c: [f64; 4]) -> Matrix {
     match rotation {
         90 => [0.0, -1.0, 1.0, 0.0, -c[1], c[2]],
         180 => [-1.0, 0.0, 0.0, -1.0, c[2], c[3]],

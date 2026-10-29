@@ -16,8 +16,10 @@ use winfiles_geom::{Paper, Size, pt_to_mm};
 
 mod frame;
 mod illustrator;
+mod paths;
 mod spots;
 
+pub use paths::{Fill, Ink, Line, NewInk, PageScan, Part, PathId, PathInfo, Restyle, SubPath};
 pub use spots::{Overprint, Spot};
 
 #[cfg(test)]
@@ -443,6 +445,29 @@ impl Editor {
         }
         let label = if on { "Sovrastampa" } else { "Togli sovrastampa" };
         self.edit(label, |d| spots::set_overprint(d, name, on))
+    }
+
+    /// I tracciati della pagina `page` (da 0), per lo strumento Seleziona tracciato.
+    pub fn scan_page(&self, page: usize) -> Result<PageScan, EditError> {
+        paths::scan(&self.doc, page)
+    }
+
+    /// Cambia colore, spessore o sovrastampa dei tracciati scelti della pagina `page`.
+    /// Restituisce quanti sono cambiati e quanti sono rimasti com'erano perché ritagliano
+    /// anche il resto del disegno.
+    pub fn restyle_paths(&mut self, page: usize, ids: &[PathId], change: &Restyle) -> Result<(usize, usize), EditError> {
+        let mut probe = self.doc.clone();
+        let (done, skipped) = paths::restyle(&mut probe, page, ids, change)?;
+        if done == 0 {
+            return Ok((0, skipped));
+        }
+        let label = match (&change.ink, change.width, change.overprint) {
+            (Some(NewInk::Spot { .. }), _, _) => "Tracciati in tinta",
+            (Some(NewInk::Cmyk(_)), _, _) => "Colore dei tracciati",
+            (None, Some(_), _) => "Spessore dei tracciati",
+            _ => "Sovrastampa dei tracciati",
+        };
+        self.edit(label, |d| paths::restyle(d, page, ids, change))
     }
 
     /// Il PDF porta la copia del file di Illustrator, quella che Illustrator apre al posto delle
