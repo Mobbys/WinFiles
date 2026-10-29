@@ -425,9 +425,10 @@ pub struct BleedSpec {
 /// Il modulo con la grafica senza fustella: quello ribaltato nell'abbondanza (l'altro, con la
 /// pagina intera, è `FORM_NAME`).
 const FORM_ART: &str = "WFGrafica";
-/// Il modulo con la sola fustella, ridisegnata sopra: la pagina vera si ferma al formato finito e
-/// taglierebbe a metà lo spessore della linea.
-const FORM_DIE: &str = "WFFustella";
+/// Il modulo disegnato sopra tutto, senza ritaglio: la fustella (la pagina vera si ferma al
+/// formato finito e taglierebbe a metà lo spessore della linea) o, quando l'abbondanza si crea
+/// solo per i tracciati scelti, tutto il resto della pagina.
+const FORM_OVER: &str = "WFSopra";
 /// Di quanto (punti) le fasce dell'abbondanza passano sotto la pagina vera: senza, dove si
 /// toccano i due bordi sfumati dall'antialias dell'anteprima si vedrebbe un filo bianco.
 const SEAM: f64 = 1.0;
@@ -435,16 +436,17 @@ const SEAM: f64 = 1.0;
 const STRETCH_MM: f64 = 0.5;
 
 /// Crea l'abbondanza: la pagina diventa formato finito più `amount` sui lati scelti; lì si
-/// disegna `art` (la grafica senza fustella) ribaltata o allungata. Sopra, la pagina vera `all` fino al
-/// formato finito (i segni di taglio e il bianco attorno spariscono) e la fustella `die` intera.
+/// disegna `art` (la grafica senza fustella) ribaltata o allungata. Sopra, `base` (la pagina vera)
+/// fino al formato finito (i segni di taglio e il bianco attorno spariscono) e `over` intero (la
+/// fustella, o il resto della pagina quando si allunga solo la grafica scelta).
 /// TrimBox e BleedBox si scrivono, così il RIP sa dove tagliare.
 pub(crate) fn bleed(
     doc: &mut Document,
     index: usize,
     spec: &BleedSpec,
-    all: &[u8],
+    base: &[u8],
     art: &[u8],
-    die: Option<&[u8]>,
+    over: Option<&[u8]>,
 ) -> Result<(), EditError> {
     let src = source(doc, index)?;
     let number = src.number;
@@ -481,9 +483,9 @@ pub(crate) fn bleed(
     ];
     // Il bordo da cui si ribalta o si allunga: il formato finito.
     let edge = [fx0, fy0, fx1, fy1];
-    let all = page_form(doc, &src, all);
+    let base = page_form(doc, &src, base);
     let art = page_form(doc, &src, art);
-    let die = die.map(|d| page_form(doc, &src, d));
+    let over = over.map(|d| page_form(doc, &src, d));
     let mut ops = format!("q 1 0 0 1 {} {} cm\n", num(-r[0]), num(-r[1]));
     // I pezzi attorno: sinistra/centro/destra per sotto/centro/sopra, tranne il centro.
     let xs = [(r[0], edge[0], -1), (edge[0], edge[2], 0), (edge[2], r[2], 1)];
@@ -542,13 +544,13 @@ pub(crate) fn bleed(
         num(c[2] - c[0]),
         num(c[3] - c[1])
     ));
-    if die.is_some() {
-        ops.push_str(&format!("/{FORM_DIE} Do\n"));
+    if over.is_some() {
+        ops.push_str(&format!("/{FORM_OVER} Do\n"));
     }
     ops.push_str("Q\n");
-    let mut forms = vec![(FORM_NAME, all), (FORM_ART, art)];
-    if let Some(d) = die {
-        forms.push((FORM_DIE, d));
+    let mut forms = vec![(FORM_NAME, base), (FORM_ART, art)];
+    if let Some(d) = over {
+        forms.push((FORM_OVER, d));
     }
     let (width, height) = (r[2] - r[0], r[3] - r[1]);
     let place: Matrix = [1.0, 0.0, 0.0, 1.0, -r[0], -r[1]];

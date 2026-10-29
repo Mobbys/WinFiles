@@ -14,7 +14,7 @@ use egui::{Align, Pos2, Rect, Sense, Stroke, Vec2, vec2};
 use serde::{Deserialize, Serialize};
 use winfiles_geom::{Unit, format_length, format_number};
 use winfiles_pdf_edit::{
-    BleedMode, BleedSpec, Ink, NewInk, PageScan, Part, PathId, PathInfo, Restyle, Snapshot,
+    BleedMode, BleedSpec, Ink, NewDie, NewInk, PageScan, Part, PathId, PathInfo, Restyle, Snapshot,
 };
 
 use crate::icons;
@@ -222,9 +222,14 @@ pub struct PathTool {
     bleed_sides: [bool; 4],
     bleed_mode: BleedMode,
     /// La lettura (versione, pagina) per cui i lati sono stati proposti.
-    bleed_for: Option<(u64, usize)>,
+    bleed_for: Option<((u64, usize), Option<PathId>, usize)>,
     /// Il formato finito scelto a mano (altrimenti il primo che si trova).
     finish_choice: Option<Finish>,
+    /// Con dei tracciati scelti: si allungano solo loro (lo sfondo), il resto resta com'è.
+    bleed_only_selected: bool,
+    /// La fustella da creare dai tracciati scelti: nome e spessore in mm.
+    die_name: String,
+    die_width: f64,
 }
 
 impl Default for PathTool {
@@ -254,6 +259,9 @@ impl Default for PathTool {
             bleed_mode: BleedMode::Mirror,
             bleed_for: None,
             finish_choice: None,
+            bleed_only_selected: true,
+            die_name: "Taglio".into(),
+            die_width: 0.1,
         }
     }
 }
@@ -507,7 +515,11 @@ pub enum Request {
         spec: BleedSpec,
         die: Vec<PathId>,
         paper: Vec<PathId>,
+        /// Solo questi si allungano (vuoto: tutta la pagina).
+        only: Vec<PathId>,
     },
+    /// Crea una fustella dal contorno dei tracciati.
+    Die(Vec<PathId>, NewDie),
 }
 
 /// Distanza dal punto `p` al segmento `a`–`b`.
@@ -630,6 +642,8 @@ pub enum Finish {
     Art,
     /// La pagina intera.
     Page,
+    /// Il rettangolo attorno ai tracciati scelti.
+    Selection,
 }
 
 impl Finish {
@@ -641,6 +655,7 @@ impl Finish {
             Finish::Hairline => "Filetto",
             Finish::Art => "Grafica, senza il bianco attorno",
             Finish::Page => "Pagina intera",
+            Finish::Selection => "Tracciati scelti",
         }
     }
 
@@ -652,6 +667,7 @@ impl Finish {
             Finish::Hairline => "dal filetto",
             Finish::Art => "dalla grafica",
             Finish::Page => "la pagina intera",
+            Finish::Selection => "dai tracciati scelti",
         }
     }
 }
@@ -1100,7 +1116,7 @@ impl PathTool {
                 let c = check(&scan, inks);
                 self.check_card(ui, &scan, &c, unit, spots);
                 ui.add_space(8.0);
-                let bleed = self.bleed_card(ui, &c, unit);
+                let bleed = self.bleed_card(ui, &c, &scan, unit);
                 if c.finished.is_some() {
                     ui.add_space(8.0);
                 }
@@ -1257,17 +1273,35 @@ impl PathTool {
     }
 
     /// Crea l'abbondanza che manca attorno al formato finito.
-    fn bleed_card(&mut self, ui: &mut egui::Ui, c: &Check, unit: Unit) -> Option<Request> {
+    fn bleed_card(&mut self, ui: &mut egui::Ui, c: &Check, scan: &PageScan, unit: Unit) -> Option<Request> {
         let t = Tokens::get(ui.ctx());
-        let auto = c.finished?;
+        // Con dei tracciati scelti il primo formato finito proposto è il loro rettangolo.
+        let chosen: Vec<&PathInfo> = scan
+            .paths
+            .iter()
+            .filter(|p| self.selected.contains(&p.id))
+            .collect();
+        let chosen_bounds = chosen.iter().fold(None, |acc, p| Some(union(acc, p.bounds)));
+        let mut sources = c.sources.clone();
+        if let Some(b) = chosen_bounds {
+            sources.insert(0, (b, Finish::Selection));
+        }
+        let auto = sources.first().copied()?;
         let (finished, from) = self
             .finish_choice
-            .and_then(|f| c.sources.iter().find(|(_, s)| *s == f).copied())
+            .and_then(|f| sources.iter().find(|(_, s)| *s == f).copied())
             .unwrap_or(auto);
-        // I lati si propongono a ogni lettura nuova: quelli con meno abbondanza di quella voluta.
-        let key = self.scanned.as_ref().map(|s| s.key);
+        let only_selected = chosen_bounds.is_some() && self.bleed_only_selected;
+        // La grafica che deve arrivare all'abbondanza: quella scelta, o tutta.
+        let content = if only_selected { chosen_bounds } else { c.content };
+        // I lati si propongono a ogni lettura o scelta nuova: quelli con meno abbondanza di
+        // quella voluta.
+        let key = self
+            .scanned
+            .as_ref()
+            .map(|s| (s.key, self.selected.first().copied(), self.selected.len()));
         let propose = |amount: f64, f: [f64; 4]| -> [bool; 4] {
-            match c.content {
+            match content {
                 Some(content) => bleed_beyond(f, content).map(|v| v + 0.05 < amount),
                 None => [true; 4],
             }
@@ -1288,14 +1322,43 @@ impl PathTool {
                 winfiles_geom::Size::new(finished[2] - finished[0], finished[3] - finished[1]),
                 unit,
             );
+            if chosen_bounds.is_some() {
+                let n = chosen.len();
+                ui.add(crate::fluent::checkbox(
+                    &mut self.bleed_only_selected,
+                    if n == 1 {
+                        "Solo il tracciato scelto".to_string()
+                    } else {
+                        format!("Solo i {n} tracciati scelti")
+                    },
+                ))
+                .on_hover_text(
+                    "Si allunga solo la grafica scelta (lo sfondo); tutto il resto, fustella \
+                     compresa, resta com'è sopra di lei",
+                );
+                ui.add_space(4.0);
+            } else {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "Per allungare solo lo sfondo e lasciare com'è il resto, sceglilo sulla pagina.",
+                        )
+                        .size(12.0)
+                        .color(t.text_dim),
+                    )
+                    .wrap(),
+                );
+                ui.add_space(4.0);
+            }
             ui.label(egui::RichText::new("Formato finito").color(t.text_dim));
             let mut picked = None;
             egui::ComboBox::from_id_salt("abbondanza-finito")
                 .icon(crate::fluent::combo_icon)
                 .selected_text(format!("{size} · {}", from.origin()))
                 .width(ui.available_width() - 8.0)
+                .truncate()
                 .show_ui(ui, |ui| {
-                    for (r, f) in &c.sources {
+                    for (r, f) in &sources {
                         let size = winfiles_geom::format_size(
                             winfiles_geom::Size::new(r[2] - r[0], r[3] - r[1]),
                             unit,
@@ -1420,6 +1483,11 @@ impl PathTool {
                     },
                     die,
                     paper: c.paper.clone(),
+                    only: if only_selected {
+                        chosen.iter().map(|p| p.id).collect()
+                    } else {
+                        Vec::new()
+                    },
                 });
             }
         });
@@ -1889,6 +1957,105 @@ impl PathTool {
                 self.prefilled = None;
             }
         });
+        // La fustella dal contorno dei tracciati scelti (servono forme con un'area).
+        let has_area = chosen
+            .iter()
+            .any(|p| p.parts.iter().any(|part| part.points.len() >= 3));
+        if has_area {
+            ui.add_space(8.0);
+            card_frame(ui, |ui| {
+                ui.label(
+                    egui::RichText::new("Crea la fustella")
+                        .font(semibold(13.0))
+                        .color(t.text_strong),
+                );
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "Una linea in tinta piatta sul contorno dei tracciati scelti, uniti se si \
+                             sovrappongono. I tracciati restano com'erano.",
+                        )
+                        .size(12.0)
+                        .color(t.text_dim),
+                    )
+                    .wrap(),
+                );
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let edit = egui::TextEdit::singleline(&mut self.die_name)
+                        .hint_text("Nome della tinta")
+                        .desired_width((ui.available_width() - 56.0).max(80.0));
+                    crate::fluent::text_field(ui, edit);
+                    egui::ComboBox::from_id_salt("fustella-nomi")
+                        .icon(crate::fluent::combo_icon)
+                        .selected_text("")
+                        .width(28.0)
+                        .show_ui(ui, |ui| {
+                            for i in inks.iter() {
+                                let text = format!("{}  ·  {}", i.name, i.role.label());
+                                if ui.selectable_label(self.die_name == i.name, text).clicked() {
+                                    self.die_name = i.name.clone();
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text("I nomi usati di recente");
+                });
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Spessore").color(t.text_dim));
+                    crate::fluent::number(
+                        ui,
+                        90.0,
+                        egui::DragValue::new(&mut self.die_width)
+                            .range(0.0..=5.0)
+                            .speed(0.01)
+                            .custom_formatter(|v, _| format!("{} mm", format_number(v, 2, true)))
+                            .custom_parser(|text| {
+                                let clean = text.trim().trim_end_matches("mm").trim().replace(',', ".");
+                                clean.parse::<f64>().ok()
+                            }),
+                    );
+                });
+                ui.add_space(6.0);
+                let name = self.die_name.trim().to_string();
+                let ok = !name.is_empty();
+                let go = egui::Button::new(
+                    egui::RichText::new("Crea fustella")
+                        .font(semibold(13.5))
+                        .color(if ok { t.on_primary } else { t.text_disabled }),
+                )
+                .fill(if ok { t.primary } else { t.button })
+                .min_size(vec2(ui.available_width(), 32.0));
+                if ui
+                    .add_enabled(ok, go)
+                    .on_hover_text(format!(
+                        "Disegna sopra la pagina la fustella «{name}» in sovrastampa"
+                    ))
+                    .on_disabled_hover_text("Scrivi il nome della tinta")
+                    .clicked()
+                {
+                    let role = match role_of(inks, &name) {
+                        Role::Other => Role::Cut,
+                        r => r,
+                    };
+                    let cmyk = inks
+                        .iter()
+                        .find(|i| i.name == name)
+                        .map(InkName::color)
+                        .unwrap_or_else(|| role.cmyk());
+                    remember(inks, &name, role, cmyk);
+                    request = Some(Request::Die(
+                        ids.clone(),
+                        NewDie {
+                            name,
+                            cmyk,
+                            width: self.die_width,
+                            overprint: true,
+                        },
+                    ));
+                }
+            });
+        }
         request
     }
 }

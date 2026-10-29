@@ -29,3 +29,4 @@ Una decisione si cambia con un nuovo ADR che sostituisce il precedente, mai risc
 | [0022](0022-apri-in-winfiles.md) | "Apri in WinFiles" nel tasto destro e una finestra sola | Accettata |
 | [0023](0023-tracciati-e-fustelle.md) | Tracciati e fustelle: scegliere una linea sulla pagina e cambiarne colore, tinta e spessore | Accettata |
 | [0024](0024-abbondanza-vettoriale.md) | Abbondanza creata in vettoriale, ribaltando la pagina attorno al formato finito | Accettata |
+| [0025](0025-fustella-dalla-selezione.md) | Fustella dai tracciati scelti, unendo le forme (`i_overlay`) | Accettata |

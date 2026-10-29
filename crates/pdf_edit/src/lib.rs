@@ -20,7 +20,9 @@ mod paths;
 mod spots;
 
 pub use frame::{BleedMode, BleedSpec};
-pub use paths::{Fill, Ink, Line, NewInk, PageScan, Part, PathId, PathInfo, Restyle, Restyled, SubPath};
+pub use paths::{
+    Fill, Ink, Line, NewDie, NewInk, PageScan, Part, PathId, PathInfo, Restyle, Restyled, SubPath,
+};
 pub use spots::{Overprint, Spot};
 
 #[cfg(test)]
@@ -482,7 +484,9 @@ impl Editor {
     /// Crea l'abbondanza che manca attorno al formato finito della pagina (vedi [`BleedSpec`]).
     /// I tracciati `die` (la fustella) restano fuori dalla grafica ribaltata o allungata; i fondi
     /// bianchi `paper` sotto tutta la grafica si tolgono (sulla carta non cambia nulla, e senza di
-    /// loro nell'anteprima non resta un filo chiaro sul bordo del formato finito).
+    /// loro nell'anteprima non resta un filo chiaro sul bordo del formato finito). Con `only` non
+    /// vuoto si allungano soltanto quei tracciati (lo sfondo scelto) e tutto il resto della pagina
+    /// resta com'è, sopra di loro.
     /// Restituisce quanti tracciati della fustella non si sono potuti tenere fuori (stanno dentro
     /// un modulo del PDF).
     pub fn add_bleed(
@@ -491,6 +495,7 @@ impl Editor {
         spec: &BleedSpec,
         die: &[PathId],
         paper: &[PathId],
+        only: &[PathId],
     ) -> Result<usize, EditError> {
         let ok = spec.amount.is_finite()
             && (0.1..=100.0).contains(&spec.amount)
@@ -500,17 +505,32 @@ impl Editor {
             return Err(EditError::Invalid("abbondanza non valida".into()));
         }
         self.edit("Crea abbondanza", |d| {
+            if !only.is_empty() {
+                // Solo la grafica scelta si allunga; il resto della pagina le sta sopra intero.
+                let art = paths::only(d, page, only)?;
+                let hidden: Vec<PathId> = only.iter().chain(paper).copied().collect();
+                let (rest, _) = paths::without(d, page, &hidden)?;
+                frame::bleed(d, page, spec, &art, &art, Some(&rest))?;
+                return Ok(0);
+            }
             let hidden: Vec<PathId> = die.iter().chain(paper).copied().collect();
             let (art, left) = paths::without(d, page, &hidden)?;
             let (all, _) = paths::without(d, page, paper)?;
-            let only = if die.is_empty() {
+            let over = if die.is_empty() {
                 None
             } else {
                 Some(paths::only(d, page, die)?)
             };
-            frame::bleed(d, page, spec, &all, &art, only.as_deref())?;
+            frame::bleed(d, page, spec, &all, &art, over.as_deref())?;
             Ok(left)
         })
+    }
+
+    /// Crea una fustella in tinta piatta dal contorno dei tracciati `ids` (uniti se si
+    /// sovrappongono), disegnata sopra la pagina; i tracciati restano com'erano. Restituisce
+    /// quanti contorni ha la fustella.
+    pub fn add_die(&mut self, page: usize, ids: &[PathId], die: &NewDie) -> Result<usize, EditError> {
+        self.edit("Crea fustella", |d| paths::add_die(d, page, ids, die))
     }
 
     /// Il PDF porta la copia del file di Illustrator, quella che Illustrator apre al posto delle

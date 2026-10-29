@@ -868,6 +868,32 @@ pub struct Restyled {
     pub ids: Vec<PathId>,
 }
 
+/// Una tinta piatta nuova: Separation con il nome dato e il colore CMYK per lo schermo.
+fn spot_space(doc: &mut Document, name: &str, cmyk: [f64; 4]) -> ObjRef {
+    let mut f = Dict::new();
+    f.set(b"FunctionType".to_vec(), Object::Int(2));
+    f.set(
+        b"Domain".to_vec(),
+        Object::Array(vec![Object::Int(0), Object::Int(1)]),
+    );
+    f.set(b"C0".to_vec(), Object::Array(vec![Object::Int(0); 4]));
+    f.set(
+        b"C1".to_vec(),
+        Object::Array(
+            cmyk.iter()
+                .map(|v| pdfcraft_content::num(v.clamp(0.0, 1.0)))
+                .collect(),
+        ),
+    );
+    f.set(b"N".to_vec(), Object::Int(1));
+    doc.add(Object::Array(vec![
+        Object::name("Separation"),
+        Object::Name(name.trim().as_bytes().to_vec()),
+        Object::name("DeviceCMYK"),
+        Object::Dict(f),
+    ]))
+}
+
 /// Cambia i tracciati `ids` della pagina.
 pub(crate) fn restyle(
     doc: &mut Document,
@@ -901,31 +927,7 @@ pub(crate) fn restyle(
     }
     // La tinta nuova: uno spazio colore per tutto il documento.
     let spot_cs = match &change.ink {
-        Some(NewInk::Spot { name, cmyk }) => {
-            let mut f = Dict::new();
-            f.set(b"FunctionType".to_vec(), Object::Int(2));
-            f.set(
-                b"Domain".to_vec(),
-                Object::Array(vec![Object::Int(0), Object::Int(1)]),
-            );
-            f.set(b"C0".to_vec(), Object::Array(vec![Object::Int(0); 4]));
-            f.set(
-                b"C1".to_vec(),
-                Object::Array(
-                    cmyk.iter()
-                        .map(|v| pdfcraft_content::num(v.clamp(0.0, 1.0)))
-                        .collect(),
-                ),
-            );
-            f.set(b"N".to_vec(), Object::Int(1));
-            let cs = Object::Array(vec![
-                Object::name("Separation"),
-                Object::Name(name.trim().as_bytes().to_vec()),
-                Object::name("DeviceCMYK"),
-                Object::Dict(f),
-            ]);
-            Some(doc.add(cs))
-        }
+        Some(NewInk::Spot { name, cmyk }) => Some(spot_space(doc, name, *cmyk)),
         _ => None,
     };
     let mut states: HashMap<(bool, bool), ObjRef> = HashMap::new();
@@ -1110,4 +1112,122 @@ pub(crate) fn only(doc: &Document, page: usize, ids: &[PathId]) -> Result<Vec<u8
         })
         .collect();
     Ok(serialize_ops(&out))
+}
+
+/// La fustella nuova da creare attorno ai tracciati scelti.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewDie {
+    /// Il nome della tinta piatta (per esempio "Taglio").
+    pub name: String,
+    /// Il colore con cui la tinta si vede a schermo e nelle prove.
+    pub cmyk: [f64; 4],
+    /// Spessore della linea in millimetri.
+    pub width: f64,
+    pub overprint: bool,
+}
+
+/// Disegna sopra la pagina una fustella nuova: il contorno dell'unione dei tracciati `ids`
+/// (le forme che si sovrappongono diventano una sola), in tinta piatta. I tracciati restano
+/// com'erano. Restituisce quanti contorni ha la fustella.
+pub(crate) fn add_die(
+    doc: &mut Document,
+    page: usize,
+    ids: &[PathId],
+    die: &NewDie,
+) -> Result<usize, EditError> {
+    use i_overlay::core::fill_rule::FillRule;
+    use i_overlay::float::simplify::SimplifyShape;
+
+    let name = die.name.trim();
+    if name.is_empty() || name.len() > 127 {
+        return Err(EditError::Invalid("nome della tinta non valido".into()));
+    }
+    if !(die.width.is_finite() && (0.0..=100.0).contains(&die.width)) {
+        return Err(EditError::Invalid("spessore non valido".into()));
+    }
+    let wanted: HashSet<PathId> = ids.iter().copied().collect();
+    let scanned = scan(doc, page)?;
+    // Ogni tracciato si pulisce da solo (pari-dispari: i buchi restano buchi), poi tutti insieme si
+    // uniscono (non-zero: quello che si sovrappone diventa una forma sola).
+    let mut contours: Vec<Vec<[f64; 2]>> = Vec::new();
+    let mut points = 0usize;
+    for p in scanned.paths.iter().filter(|p| wanted.contains(&p.id)) {
+        let own: Vec<Vec<[f64; 2]>> = p
+            .parts
+            .iter()
+            .filter(|part| part.points.len() >= 3)
+            .map(|part| part.points.clone())
+            .collect();
+        points = points.saturating_add(own.iter().map(Vec::len).sum());
+        if points > MAX_POINTS {
+            return Err(EditError::Invalid(
+                "i tracciati scelti sono troppo complessi".into(),
+            ));
+        }
+        for shape in own.simplify_shape(FillRule::EvenOdd) {
+            contours.extend(shape);
+        }
+    }
+    let shapes = contours.simplify_shape(FillRule::NonZero);
+    let outlines: Vec<&Vec<[f64; 2]>> = shapes.iter().flatten().filter(|c| c.len() >= 3).collect();
+    if outlines.is_empty() {
+        return Err(EditError::Invalid(
+            "i tracciati scelti non chiudono un'area: niente fustella".into(),
+        ));
+    }
+    // Dai millimetri della pagina come si vede alle unità del PDF.
+    let back = page_matrix(doc, page)?
+        .matrix
+        .invert()
+        .ok_or_else(|| EditError::Pdf("la pagina non ha una misura".into()))?;
+    let pages = organize::pages(doc)?;
+    let page_ref = pages
+        .get(page)
+        .map(|p| p.obj)
+        .ok_or(EditError::NoPage(page.saturating_add(1)))?;
+    let mut resources = page_resources(doc, page_ref);
+    let cs_key = free_key(&dict_of(doc, resources.get(b"ColorSpace")), CS_PREFIX);
+    let cs = spot_space(doc, name, die.cmyk);
+    let mut d = dict_of(doc, resources.get(b"ColorSpace"));
+    d.set(cs_key.clone(), Object::Ref(cs));
+    resources.set(b"ColorSpace".to_vec(), Object::Dict(d));
+    let mut state = Dict::new();
+    state.set(b"Type".to_vec(), Object::name("ExtGState"));
+    state.set(b"OP".to_vec(), Object::Bool(die.overprint));
+    state.set(b"op".to_vec(), Object::Bool(false));
+    let state = doc.add(Object::Dict(state));
+    let gs = gs_name(false, die.overprint);
+    add_states(doc, &mut resources, &[(gs.clone(), state)]);
+
+    let n = |v: f64| pdfcraft_content::num(v);
+    let mut ops = vec![
+        Op::new("q", Vec::new()),
+        Op::new("CS", vec![Object::Name(cs_key)]),
+        Op::new("SCN", vec![Object::Int(1)]),
+        Op::new("gs", vec![Object::Name(gs)]),
+        Op::new("w", vec![n(winfiles_geom::mm_to_pt(die.width))]),
+        Op::new("j", vec![Object::Int(0)]),
+        Op::new("J", vec![Object::Int(0)]),
+        Op::new("d", vec![Object::Array(Vec::new()), Object::Int(0)]),
+    ];
+    for c in &outlines {
+        for (i, p) in c.iter().enumerate() {
+            let (x, y) = back.apply(p[0], p[1]);
+            ops.push(Op::new(if i == 0 { "m" } else { "l" }, vec![n(x), n(y)]));
+        }
+        ops.push(Op::new("h", Vec::new()));
+    }
+    ops.push(Op::new("S", Vec::new()));
+    ops.push(Op::new("Q", Vec::new()));
+    // Il contenuto di prima chiuso tra q e Q: quello che lascia in sospeso non tocca la fustella.
+    let mut data = b"q\n".to_vec();
+    data.extend(page_content(doc, page_ref)?);
+    data.extend(b"\nQ\n");
+    data.extend(serialize_ops(&ops));
+    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), &data)));
+    doc.update_dict(page_ref, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(contents));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })?;
+    Ok(outlines.len())
 }

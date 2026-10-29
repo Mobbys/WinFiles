@@ -825,7 +825,7 @@ fn bleed_spec(mode: BleedMode, sides: [bool; 4]) -> BleedSpec {
 fn abbondanza_a_specchio_con_formato_finito() {
     let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, NO_BLEED)]);
     let left = e
-        .add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[], &[])
+        .add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[], &[], &[])
         .unwrap();
     assert_eq!(left, 0);
     assert_eq!(e.undo_label(), Some("Crea abbondanza"));
@@ -855,7 +855,7 @@ fn la_fustella_non_si_ribalta_nell_abbondanza() {
     let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, NO_BLEED)]);
     let die = e.scan_page(0).unwrap().paths[2].id;
     let left = e
-        .add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[die], &[])
+        .add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[die], &[], &[])
         .unwrap();
     assert_eq!(left, 0);
     let img = render(&reread(&e), 0);
@@ -875,6 +875,7 @@ fn abbondanza_allungata_e_solo_su_un_lato() {
         &bleed_spec(BleedMode::Stretch, [false, false, false, true]),
         &[],
         &[],
+        &[],
     )
     .unwrap();
     let info = e.pages();
@@ -890,13 +891,13 @@ fn abbondanza_allungata_e_solo_su_un_lato() {
 fn abbondanza_non_valida() {
     let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, NO_BLEED)]);
     let mut spec = bleed_spec(BleedMode::Mirror, [false; 4]);
-    assert!(e.add_bleed(0, &spec, &[], &[]).is_err());
+    assert!(e.add_bleed(0, &spec, &[], &[], &[]).is_err());
     spec.sides = [true; 4];
     spec.amount = f64::NAN;
-    assert!(e.add_bleed(0, &spec, &[], &[]).is_err());
+    assert!(e.add_bleed(0, &spec, &[], &[], &[]).is_err());
     spec.amount = 3.0;
     spec.finished = [10.0, 10.0, 10.2, 10.2];
-    assert!(e.add_bleed(0, &spec, &[], &[]).is_err());
+    assert!(e.add_bleed(0, &spec, &[], &[], &[]).is_err());
     assert_eq!(e.undo_label(), None);
 }
 
@@ -909,7 +910,7 @@ fn abbondanza_su_una_pagina_ruotata() {
         90,
         "0 1 0 rg 0 0 100 200 re f 1 0 0 rg 0 0 20 20 re f",
     )]);
-    e.add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[], &[])
+    e.add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[], &[], &[])
         .unwrap();
     let info = e.pages();
     assert!(near(info[0].size.w, pt_to_mm(220.0)) && near(info[0].size.h, pt_to_mm(120.0)));
@@ -927,7 +928,7 @@ fn nessun_filo_bianco_tra_abbondanza_e_pagina() {
     // Il bordo del formato finito cade a metà di un pixel (10,5 punti).
     let mut spec = bleed_spec(BleedMode::Mirror, [true; 4]);
     spec.amount = pt_to_mm(10.5);
-    e.add_bleed(0, &spec, &[], &[]).unwrap();
+    e.add_bleed(0, &spec, &[], &[], &[]).unwrap();
     let img = render(&reread(&e), 0);
     for (x, y) in [(10, 60), (210, 60), (100, 10), (100, 110), (10, 10)] {
         assert_eq!(pixel(&img, x, y), [0, 255, 0], "({x}, {y})");
@@ -951,7 +952,7 @@ fn lavoro_piccolo_su_fondo_bianco_e_fustella_sul_bordo() {
         sides: [true; 4],
         mode: BleedMode::Mirror,
     };
-    e.add_bleed(0, &spec, &[die], &[]).unwrap();
+    e.add_bleed(0, &spec, &[die], &[], &[]).unwrap();
     let info = e.pages();
     assert!(near(info[0].size.w, pt_to_mm(120.0)) && near(info[0].size.h, pt_to_mm(70.0)));
     let img = render(&reread(&e), 0);
@@ -979,7 +980,7 @@ fn nessun_filo_bianco_con_il_fondo_bianco_dietro() {
         mode: BleedMode::Mirror,
     };
     let paper = e.scan_page(0).unwrap().paths[0].id;
-    e.add_bleed(0, &spec, &[], &[paper]).unwrap();
+    e.add_bleed(0, &spec, &[], &[paper], &[]).unwrap();
     let img = render(&reread(&e), 0);
     for (x, y) in [
         (10, 35),
@@ -992,5 +993,104 @@ fn nessun_filo_bianco_con_il_fondo_bianco_dietro() {
         (110, 60),
     ] {
         assert_eq!(pixel(&img, x, y), [0, 255, 0], "({x}, {y})");
+    }
+}
+
+/// Come il file di prova di Michel: un fondo rosso, una cornice ciano spessa sul suo bordo (la
+/// fustella fatta a mano) e una stella gialla, su una pagina 200 × 100.
+const BACKGROUND_AND_FRAME: &str = "0 1 1 0 k 10 10 180 80 re f 1 0 0 0 K 4 w 10 10 180 80 re S \
+     0 0 1 0 K 1 w 90 30 m 110 30 l 100 70 l h S";
+
+#[test]
+fn abbondanza_solo_dello_sfondo_scelto() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, BACKGROUND_AND_FRAME)]);
+    let red = e.scan_page(0).unwrap().paths[0].id;
+    let spec = BleedSpec {
+        finished: [pt_to_mm(10.0), pt_to_mm(10.0), pt_to_mm(190.0), pt_to_mm(90.0)],
+        amount: pt_to_mm(8.0),
+        sides: [true; 4],
+        mode: BleedMode::Mirror,
+    };
+    e.add_bleed(0, &spec, &[], &[], &[red]).unwrap();
+    let info = e.pages();
+    assert!(near(info[0].size.w, pt_to_mm(196.0)) && near(info[0].size.h, pt_to_mm(96.0)));
+    let img = render(&reread(&e), 0);
+    // Il rosso arriva al bordo nuovo; la cornice ciano resta una sola, al suo posto (x = 8 → 6..10).
+    let red_px = pixel(&img, 1, 48);
+    assert!(red_px[0] > 200 && red_px[1] < 80, "{red_px:?}");
+    let frame_px = pixel(&img, 8, 48);
+    assert!(frame_px[0] < 80 && frame_px[2] > 150, "{frame_px:?}");
+    // Nessuna seconda cornice ribaltata nell'abbondanza.
+    let inside_bleed = pixel(&img, 3, 48);
+    assert!(inside_bleed[0] > 200 && inside_bleed[2] < 80, "{inside_bleed:?}");
+    // La stella e la cornice sono ancora tracciati che si possono scegliere.
+    let scan = e.scan_page(0).unwrap();
+    assert!(scan.paths.iter().any(|p| {
+        p.line
+            .as_ref()
+            .is_some_and(|l| l.ink == Ink::Cmyk([0.0, 0.0, 1.0, 0.0]))
+    }));
+}
+
+#[test]
+fn fustella_dall_unione_dei_tracciati_scelti() {
+    // Due rettangoli che si sovrappongono e uno staccato.
+    let mut e = editor(&[page(
+        [0.0, 0.0, 200.0, 100.0],
+        0,
+        "0 0 1 rg 10 10 50 50 re f 40 40 50 50 re f 150 10 20 20 re f",
+    )]);
+    let ids: Vec<PathId> = e.scan_page(0).unwrap().paths.iter().map(|p| p.id).collect();
+    let die = NewDie {
+        name: "Taglio".into(),
+        cmyk: [0.0, 1.0, 0.0, 0.0],
+        width: 0.1,
+        overprint: true,
+    };
+    assert_eq!(e.add_die(0, &ids, &die).unwrap(), 2);
+    assert_eq!(e.undo_label(), Some("Crea fustella"));
+    let scan = e.scan_page(0).unwrap();
+    assert_eq!(scan.paths.len(), 4);
+    let cut = &scan.paths[3];
+    let line = cut.line.as_ref().unwrap();
+    assert_eq!(
+        line.ink,
+        Ink::Spot {
+            name: "Taglio".into(),
+            tint: 1.0
+        }
+    );
+    assert!(line.overprint && near(line.width, 0.1) && cut.fill.is_none());
+    assert_eq!(cut.parts.len(), 2);
+    // L'unione dei primi due: da (10, 10) a (90, 90) punti, cioè in mm dall'alto.
+    let b = cut.bounds;
+    assert!(near(b[0], pt_to_mm(10.0)) && near(b[2], pt_to_mm(170.0)));
+    assert!(near(b[1], pt_to_mm(10.0)) && near(b[3], pt_to_mm(90.0)));
+    // Il contorno unito ha 8 vertici (una L doppia), non due quadrati sovrapposti.
+    let big = cut.parts.iter().max_by_key(|p| p.points.len()).unwrap();
+    assert_eq!(big.points.len(), 8);
+    assert!(e.spots().unwrap().iter().any(|s| s.name == "Taglio"));
+    // Niente area chiusa: errore e nessuna modifica.
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, "0 0 0 1 K 10 10 m 50 50 l S")]);
+    let ids: Vec<PathId> = e.scan_page(0).unwrap().paths.iter().map(|p| p.id).collect();
+    assert!(e.add_die(0, &ids, &die).is_err());
+    assert_eq!(e.undo_label(), None);
+}
+
+#[test]
+fn fustella_su_una_pagina_ruotata() {
+    let mut e = editor(&[page([0.0, 0.0, 100.0, 200.0], 90, "0 0 1 rg 10 20 30 40 re f")]);
+    let before = e.scan_page(0).unwrap().paths[0].bounds;
+    let ids = [e.scan_page(0).unwrap().paths[0].id];
+    let die = NewDie {
+        name: "Taglio".into(),
+        cmyk: [0.0, 1.0, 0.0, 0.0],
+        width: 0.1,
+        overprint: true,
+    };
+    e.add_die(0, &ids, &die).unwrap();
+    let after = e.scan_page(0).unwrap().paths[1].bounds;
+    for (a, b) in after.iter().zip(before) {
+        assert!(near(*a, b), "{after:?} {before:?}");
     }
 }

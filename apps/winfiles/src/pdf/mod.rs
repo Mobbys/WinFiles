@@ -2218,9 +2218,14 @@ impl PdfModule {
                     self.paths.select_after_scan(ids);
                 }
             }
-            Some(tracciati::Request::Bleed { spec, die, paper }) => {
+            Some(tracciati::Request::Bleed {
+                spec,
+                die,
+                paper,
+                only,
+            }) => {
                 self.apply(|e| {
-                let left = e.add_bleed(page, &spec, &die, &paper)?;
+                let left = e.add_bleed(page, &spec, &die, &paper, &only)?;
                 let mut msg = format!(
                     "Abbondanza di {} mm creata",
                     winfiles_geom::format_number(spec.amount, 1, true)
@@ -2232,6 +2237,17 @@ impl PdfModule {
                 }
                 Ok(msg)
             });
+            }
+            Some(tracciati::Request::Die(ids, die)) => {
+                self.apply(|e| {
+                    let n = e.add_die(page, &ids, &die)?;
+                    Ok(if n == 1 {
+                        format!("Fustella «{}» creata", die.name.trim())
+                    } else {
+                        format!("Fustella «{}» creata: {n} contorni", die.name.trim())
+                    })
+                });
+                self.paths.selected.clear();
             }
         }
     }

@@ -40,6 +40,9 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 # risoluzione né il profilo ICC, e un TIFF senza risoluzione in tipografia si stampa alla misura
 # sbagliata. È la stessa libreria che `image` usa per i TIFF, quindi nessuna copia in più. MIT.
 tiff = "0.11"
+# Fustella dalla selezione (ADR 0025): unione dei contorni di più tracciati in uno solo. Rust
+# puro, MIT/Apache, senza dipendenze oltre le sue (i_float, i_shape, i_key_sort, i_tree).
+i_overlay = { version = "9.1", default-features = false }
 
 
 # Foto HEIC/HEIF (iPhone, Mac): il lettore di PhotoCraft, Rust puro senza unsafe, che avvolge
