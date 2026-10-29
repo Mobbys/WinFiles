@@ -501,9 +501,18 @@ impl PdfModule {
         let path = match (&self.target, ask) {
             (Some(p), false) => Some(p.clone()),
             _ => {
+                // La finestra propone l'ultimo file salvato, o il nome di partenza con "_modificato".
                 let source = e.path();
-                let dir = source.parent().map(Path::to_path_buf).unwrap_or_default();
-                let name = format!("{}_modificato.pdf", file_stem(source));
+                let (dir, name) = match &self.target {
+                    Some(t) => (
+                        t.parent().map(Path::to_path_buf).unwrap_or_default(),
+                        file_name(t),
+                    ),
+                    None => (
+                        source.parent().map(Path::to_path_buf).unwrap_or_default(),
+                        format!("{}_modificato.pdf", file_stem(source)),
+                    ),
+                };
                 pdf_dialog()
                     .set_title("Salva il PDF")
                     .set_directory(dir)
@@ -854,12 +863,16 @@ impl PdfModule {
                     )
                     .fill(fill)
                     .min_size(vec2(108.0, 34.0));
+                    // Il pulsante chiede sempre dove salvare; Ctrl+S riscrive l'ultimo file senza chiedere.
                     let tip = match &self.target {
-                        Some(p) => format!("Salva in {} (Ctrl+S)", file_name(p)),
+                        Some(p) => format!(
+                            "Salva il PDF modificato: propone {} (Ctrl+S lo riscrive senza chiedere)",
+                            file_name(p)
+                        ),
                         None => "Salva il PDF modificato con un nome nuovo (Ctrl+S)".into(),
                     };
                     if ui.add_enabled(enabled, save).on_hover_text(tip).clicked() {
-                        self.save(false);
+                        self.save(true);
                     }
                     let tip = if self.quoting {
                         "Stampa il PDF com'è adesso, con le quote (Ctrl+P)"
@@ -2201,7 +2214,7 @@ impl PdfModule {
                 Ok(msg)
             });
             if let Some(ids) = new_ids.filter(|v| !v.is_empty()) {
-                self.paths.selected = ids.into_iter().collect();
+                self.paths.select_after_scan(ids);
             }
         }
     }

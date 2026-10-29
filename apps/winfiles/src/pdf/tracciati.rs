@@ -194,10 +194,23 @@ pub struct PathTool {
     mode: InkMode,
     /// Il colore da dare (C, M, Y, K da 0 a 1): della tinta a schermo, o in quadricromia.
     cmyk: [f64; 4],
-    /// Il primo tracciato scelto quando il colore è stato proposto dalla scelta.
-    prefilled: Option<PathId>,
+    /// Il primo tracciato scelto e la parte quando i valori sono stati proposti dalla scelta.
+    prefilled: Option<(PathId, Part)>,
     /// Lo spessore da dare, in millimetri.
     width: f64,
+    /// Lo spessore l'ha cambiato chi usa il pannello (altrimenti non si tocca).
+    width_touched: bool,
+    /// La sovrastampa da dare.
+    overprint: bool,
+    /// La sovrastampa l'ha cambiata chi usa il pannello (o il ruolo della tinta).
+    overprint_touched: bool,
+    /// Tinta e saturazione della ruota, tenute anche quando il colore diventa grigio.
+    hue: f64,
+    sat: f64,
+    /// Dopo un cambio: i tracciati da scegliere quando arriva la pagina riletta.
+    after_scan: Option<Vec<PathId>>,
+    /// Altezza del contenuto del pannello, tenuta mentre la pagina si rilegge (lo scorrimento resta).
+    content_height: f32,
 }
 
 impl Default for PathTool {
@@ -215,13 +228,21 @@ impl Default for PathTool {
             cmyk: Role::Cut.cmyk(),
             prefilled: None,
             width: 0.25,
+            width_touched: false,
+            overprint: true,
+            overprint_touched: false,
+            hue: 0.0,
+            sat: 0.0,
+            after_scan: None,
+            content_height: 0.0,
         }
     }
 }
 
-/// Il colore nuovo: una tinta piatta o un colore di quadricromia.
+/// Il colore nuovo: com'è, una tinta piatta o un colore di quadricromia.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InkMode {
+    Keep,
     Spot,
     Process,
 }
@@ -232,21 +253,214 @@ fn cmyk_screen(c: [f64; 4]) -> egui::Color32 {
     egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2])
 }
 
-/// Quattro campi C, M, Y, K in percentuale, con il quadratino del colore.
+/// Da RGB (0–1) a tinta (0–1), saturazione e luminosità.
+fn rgb_to_hsv([r, g, b]: [f64; 3]) -> [f64; 3] {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let d = max - min;
+    let h = if d <= 1e-9 {
+        0.0
+    } else if max == r {
+        ((g - b) / d).rem_euclid(6.0) / 6.0
+    } else if max == g {
+        ((b - r) / d + 2.0) / 6.0
+    } else {
+        ((r - g) / d + 4.0) / 6.0
+    };
+    let s = if max <= 1e-9 { 0.0 } else { d / max };
+    [h, s, max]
+}
+
+/// Da tinta, saturazione e luminosità (0–1) a RGB (0–1).
+fn hsv_to_rgb([h, s, v]: [f64; 3]) -> [f64; 3] {
+    let h6 = h.rem_euclid(1.0) * 6.0;
+    let c = v * s;
+    let x = c * (1.0 - (h6.rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match h6 {
+        h if h < 1.0 => (c, x, 0.0),
+        h if h < 2.0 => (x, c, 0.0),
+        h if h < 3.0 => (0.0, c, x),
+        h if h < 4.0 => (0.0, x, c),
+        h if h < 5.0 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r + m, g + m, b + m]
+}
+
+/// Il colore di quadricromia visto a schermo, in RGB da 0 a 1.
+fn cmyk_rgb([c, m, y, k]: [f64; 4]) -> [f64; 3] {
+    let ink = |v: f64| (1.0 - v.clamp(0.0, 1.0)) * (1.0 - k.clamp(0.0, 1.0));
+    [ink(c), ink(m), ink(y)]
+}
+
+fn rgb32([r, g, b]: [f64; 3]) -> egui::Color32 {
+    let byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    egui::Color32::from_rgb(byte(r), byte(g), byte(b))
+}
+
+/// I colori a portata di clic sotto la ruota.
+const QUICK: [(&str, [f64; 4]); 8] = [
+    ("Ciano", [1.0, 0.0, 0.0, 0.0]),
+    ("Magenta", [0.0, 1.0, 0.0, 0.0]),
+    ("Giallo", [0.0, 0.0, 1.0, 0.0]),
+    ("Nero", [0.0, 0.0, 0.0, 1.0]),
+    ("Rosso", [0.0, 1.0, 1.0, 0.0]),
+    ("Verde", [1.0, 0.0, 1.0, 0.0]),
+    ("Blu", [1.0, 1.0, 0.0, 0.0]),
+    ("Grigio chiaro", [0.0, 0.0, 0.0, 0.15]),
+];
+
+/// La ruota dei colori: giro = tinta, distanza dal centro = saturazione; sotto la barra della
+/// luminosità, i colori rapidi e i valori C, M, Y, K. `hue`/`sat` tengono la tinta quando il
+/// colore passa dal grigio.
+fn colour_wheel(ui: &mut egui::Ui, c: &mut [f64; 4], hue: &mut f64, sat: &mut f64) {
+    let t = Tokens::get(ui.ctx());
+    let [h0, s0, v0] = rgb_to_hsv(cmyk_rgb(*c));
+    if s0 > 0.02 && v0 > 0.02 {
+        *hue = h0;
+        *sat = s0;
+    } else if v0 > 0.02 {
+        *sat = s0;
+    }
+    let mut v = v0;
+    let size = ui.available_width().min(168.0);
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.add_space(((ui.available_width() - size) / 2.0).max(0.0));
+        let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click_and_drag());
+        let centre = rect.center();
+        let radius = size / 2.0 - 2.0;
+        // La ruota: anelli di triangoli con il colore nei vertici.
+        let mut mesh = egui::Mesh::default();
+        const SEGMENTS: u32 = 72;
+        const RINGS: u32 = 6;
+        let at = |seg: u32, ring: u32| {
+            let a = seg as f64 / f64::from(SEGMENTS) * std::f64::consts::TAU;
+            let r = f64::from(ring) / f64::from(RINGS);
+            let pos = centre + vec2((a.cos() * r) as f32, -(a.sin() * r) as f32) * radius;
+            let col = rgb32(hsv_to_rgb([seg as f64 / f64::from(SEGMENTS), r, v.max(0.15)]));
+            (pos, col)
+        };
+        for ring in 0..RINGS {
+            for seg in 0..SEGMENTS {
+                let base = mesh.vertices.len() as u32;
+                for (sg, rg) in [(seg, ring), (seg + 1, ring), (seg + 1, ring + 1), (seg, ring + 1)] {
+                    let (pos, col) = at(sg, rg);
+                    mesh.colored_vertex(pos, col);
+                }
+                mesh.add_triangle(base, base + 1, base + 2);
+                mesh.add_triangle(base, base + 2, base + 3);
+            }
+        }
+        ui.painter().add(egui::Shape::mesh(mesh));
+        ui.painter()
+            .circle_stroke(centre, radius, Stroke::new(1.0, t.border));
+        if let Some(p) = resp.interact_pointer_pos()
+            && (resp.clicked() || resp.dragged())
+        {
+            let d = p - centre;
+            let a = f64::from(-d.y).atan2(f64::from(d.x));
+            *hue = (a / std::f64::consts::TAU).rem_euclid(1.0);
+            *sat = (f64::from(d.length() / radius)).clamp(0.0, 1.0);
+            if v < 0.05 {
+                v = 1.0;
+            }
+            changed = true;
+        }
+        let a = *hue * std::f64::consts::TAU;
+        let mark = centre + vec2((a.cos() * *sat) as f32, -(a.sin() * *sat) as f32) * radius;
+        ui.painter()
+            .circle_stroke(mark, 6.0, Stroke::new(3.0, egui::Color32::BLACK));
+        ui.painter()
+            .circle_stroke(mark, 6.0, Stroke::new(1.5, egui::Color32::WHITE));
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        resp.on_hover_text("Clicca o trascina per scegliere il colore");
+    });
+    // La luminosità: dal nero al colore pieno.
+    ui.add_space(4.0);
+    let (bar, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click_and_drag());
+    let mut mesh = egui::Mesh::default();
+    const STEPS: u32 = 16;
+    for i in 0..=STEPS {
+        let f = f64::from(i) / f64::from(STEPS);
+        let x = bar.left() + bar.width() * f as f32;
+        let col = rgb32(hsv_to_rgb([*hue, *sat, f]));
+        mesh.colored_vertex(egui::pos2(x, bar.top()), col);
+        mesh.colored_vertex(egui::pos2(x, bar.bottom()), col);
+        if i > 0 {
+            let b = i * 2;
+            mesh.add_triangle(b - 2, b - 1, b);
+            mesh.add_triangle(b - 1, b, b + 1);
+        }
+    }
+    ui.painter().add(egui::Shape::mesh(mesh));
+    ui.painter()
+        .rect_stroke(bar, 3.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    if let Some(p) = resp.interact_pointer_pos()
+        && (resp.clicked() || resp.dragged())
+    {
+        v = f64::from((p.x - bar.left()) / bar.width().max(1.0)).clamp(0.0, 1.0);
+        changed = true;
+    }
+    let x = bar.left() + bar.width() * v as f32;
+    ui.painter().rect_stroke(
+        Rect::from_center_size(egui::pos2(x, bar.center().y), vec2(6.0, 20.0)),
+        2.0,
+        Stroke::new(2.0, t.text_strong),
+        egui::StrokeKind::Middle,
+    );
+    resp.on_hover_text("Più chiaro o più scuro");
+    if changed {
+        let [r, g, b] = hsv_to_rgb([*hue, *sat, v]);
+        if let Some(new) = as_cmyk(&Ink::Rgb([r, g, b])) {
+            *c = new.map(|x| (x * 100.0).round() / 100.0);
+        }
+    }
+    // I colori rapidi.
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        let side = ((ui.available_width() - 7.0 * 4.0) / 8.0).clamp(14.0, 22.0);
+        for (name, q) in QUICK {
+            let (r, resp) = ui.allocate_exact_size(Vec2::splat(side), Sense::click());
+            let on = c.iter().zip(q.iter()).all(|(a, b)| (a - b).abs() < 0.005);
+            ui.painter().rect(
+                r,
+                4.0,
+                cmyk_screen(q),
+                Stroke::new(if on { 2.0 } else { 1.0 }, if on { t.accent } else { t.border }),
+                egui::StrokeKind::Inside,
+            );
+            if resp.on_hover_text(name).clicked() {
+                *c = q;
+            }
+        }
+    });
+    ui.add_space(4.0);
+    egui::CollapsingHeader::new(
+        egui::RichText::new(format!(
+            "C {} M {} Y {} K {}",
+            (c[0] * 100.0).round(),
+            (c[1] * 100.0).round(),
+            (c[2] * 100.0).round(),
+            (c[3] * 100.0).round()
+        ))
+        .color(t.text_dim),
+    )
+    .id_salt("tracciati-cmyk")
+    .show(ui, |ui| cmyk_fields(ui, c));
+}
+
+/// Quattro campi C, M, Y, K in percentuale.
 fn cmyk_fields(ui: &mut egui::Ui, c: &mut [f64; 4]) {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
-        // Quattro campi e il quadratino nella larghezza che c'è (il pannello è stretto).
-        let field = ((ui.available_width() - 18.0 - 4.0 * 14.0 - 12.0) / 4.0).clamp(28.0, 48.0);
-        let (r, _) = ui.allocate_exact_size(vec2(18.0, crate::fluent::HEIGHT), Sense::hover());
-        ui.painter().rect(
-            r.shrink2(vec2(0.0, 5.0)),
-            4.0,
-            cmyk_screen(*c),
-            Stroke::new(1.0, t.border),
-            egui::StrokeKind::Inside,
-        );
+        // Quattro campi nella larghezza che c'è (il pannello è stretto).
+        let field = ((ui.available_width() - 4.0 * 14.0 - 12.0) / 4.0).clamp(28.0, 48.0);
         for (v, label) in c.iter_mut().zip(["C", "M", "Y", "K"]) {
             ui.label(egui::RichText::new(label).color(t.text_dim));
             let mut pc = (*v * 100.0).round();
@@ -563,6 +777,11 @@ impl PathTool {
         self.scanned.as_ref().and_then(|s| s.result.as_ref().ok())
     }
 
+    /// I tracciati da scegliere quando arriva la pagina riletta dopo un cambio.
+    pub fn select_after_scan(&mut self, ids: Vec<PathId>) {
+        self.after_scan = Some(ids);
+    }
+
     /// Chiede la lettura della pagina se serve e raccoglie quella finita.
     pub fn update(&mut self, ctx: &egui::Context, key: (u64, usize), doc: impl FnOnce() -> Snapshot) {
         if let Some((k, rx)) = &self.pending
@@ -571,6 +790,11 @@ impl PathTool {
             let k = *k;
             self.pending = None;
             let result = result.map(Arc::new);
+            if let Some(ids) = self.after_scan.take()
+                && k.1 == key.1
+            {
+                self.selected = ids.into_iter().collect();
+            }
             if let Ok(scan) = &result {
                 // Le scelte che non ci sono più (pagina cambiata, annullato) si lasciano.
                 self.selected.retain(|id| scan.paths.iter().any(|p| p.id == *id));
@@ -728,15 +952,26 @@ impl PathTool {
             }
         };
         let mut request = None;
+        // Mentre la pagina si rilegge dopo un cambio si mostra la lettura di prima, ferma, con la
+        // stessa altezza: lo scorrimento non torna in cima.
+        let busy = self.pending.is_some();
         egui::ScrollArea::vertical()
             .id_salt("pdf-tracciati")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                if busy {
+                    ui.set_min_height(self.content_height);
+                    ui.disable();
+                }
+                let top = ui.cursor().top();
                 self.check_card(ui, &scan, inks, unit, spots);
                 ui.add_space(8.0);
                 request = self.selection_card(ui, &scan, inks, unit, spots);
+                if !busy {
+                    self.content_height = ui.cursor().top() - top;
+                }
             });
-        request
+        if busy { None } else { request }
     }
 
     fn check_card(
@@ -1089,15 +1324,45 @@ impl PathTool {
             self.part = Part::Line;
         }
         let ids: Vec<PathId> = chosen.iter().map(|p| p.id).collect();
-        // Il colore si propone da quello del primo tracciato scelto, se è in quadricromia.
-        if self.prefilled != Some(ids[0]) {
-            self.prefilled = Some(ids[0]);
-            let current = chosen.iter().find_map(|p| match self.part {
+        let current_ink = |part: Part| {
+            chosen.iter().find_map(|p| match part {
                 Part::Line => p.line.as_ref().map(|l| l.ink.clone()),
                 Part::Fill => p.fill.as_ref().map(|f| f.ink.clone()),
-            });
-            if let Some(c) = current.as_ref().and_then(as_cmyk) {
-                self.cmyk = c;
+            })
+        };
+        let current_overprint = |part: Part| {
+            let v: Vec<bool> = chosen
+                .iter()
+                .filter_map(|p| match part {
+                    Part::Line => p.line.as_ref().map(|l| l.overprint),
+                    Part::Fill => p.fill.as_ref().map(|f| f.overprint),
+                })
+                .collect();
+            !v.is_empty() && v.iter().all(|x| *x)
+        };
+        // Taglio, cordonatura, bianco e vernice sui contorni vanno in sovrastampa, come vogliono i RIP.
+        let die_role = |r: Role| matches!(r, Role::Cut | Role::Crease | Role::Varnish | Role::White);
+        // I valori si propongono da quelli del primo tracciato scelto: colore, spessore, sovrastampa.
+        if self.prefilled != Some((ids[0], self.part)) {
+            self.prefilled = Some((ids[0], self.part));
+            if let Some(ink) = current_ink(self.part) {
+                let from_swatch = swatch(&ink, spots).map(|c| {
+                    let f = |v: u8| f64::from(v) / 255.0;
+                    Ink::Rgb([f(c.r()), f(c.g()), f(c.b())])
+                });
+                if let Some(c) = as_cmyk(&ink).or_else(|| from_swatch.as_ref().and_then(as_cmyk)) {
+                    self.cmyk = c.map(|x| (x * 100.0).round() / 100.0);
+                }
+            }
+            if let Some(l) = chosen.iter().find_map(|p| p.line.as_ref()) {
+                self.width = (l.width * 100.0).round() / 100.0;
+            }
+            self.width_touched = false;
+            self.overprint = current_overprint(self.part);
+            self.overprint_touched = false;
+            if self.mode == InkMode::Spot && self.part == Part::Line && die_role(self.role) {
+                self.overprint = true;
+                self.overprint_touched = true;
             }
         }
         card_frame(ui, |ui| {
@@ -1116,44 +1381,30 @@ impl PathTool {
                 );
                 ui.add_space(6.0);
             }
+            ui.label(egui::RichText::new("Colore").color(t.text_dim));
+            let mode_before = self.mode;
             crate::app::segmented(
                 ui,
                 "tracciati-modo",
                 &mut self.mode,
                 &[
+                    (InkMode::Keep, "Com'è"),
                     (InkMode::Spot, "Tinta piatta"),
-                    (InkMode::Process, "Quadricromia"),
+                    (InkMode::Process, "CMYK"),
                 ],
             );
+            if self.mode != mode_before
+                && self.mode == InkMode::Spot
+                && self.part == Part::Line
+                && die_role(self.role)
+            {
+                self.overprint = true;
+                self.overprint_touched = true;
+            }
             ui.add_space(6.0);
-            if self.mode == InkMode::Process {
-                ui.label(egui::RichText::new("Colore").color(t.text_dim));
-                cmyk_fields(ui, &mut self.cmyk);
-                ui.add_space(4.0);
-                let go = egui::Button::new(
-                    egui::RichText::new("Applica il colore")
-                        .font(semibold(13.5))
-                        .color(t.on_primary),
-                )
-                .fill(t.primary)
-                .min_size(vec2(ui.available_width(), 32.0));
-                if ui
-                    .add(go)
-                    .on_hover_text("Colora i tracciati scelti in quadricromia con questi valori")
-                    .clicked()
-                {
-                    request = Some(Request::Restyle(
-                        ids.clone(),
-                        Restyle {
-                            part: self.part,
-                            ink: Some(NewInk::Cmyk(self.cmyk)),
-                            width: None,
-                            overprint: None,
-                        },
-                    ));
-                }
-            } else {
+            if self.mode == InkMode::Spot {
                 ui.label(egui::RichText::new("Nome della tinta").color(t.text_dim));
+                let mut picked_role = None;
                 ui.horizontal(|ui| {
                     let edit = egui::TextEdit::singleline(&mut self.ink_name)
                         .hint_text("Nome della tinta")
@@ -1161,7 +1412,7 @@ impl PathTool {
                     let resp = crate::fluent::text_field(ui, edit);
                     if resp.changed() {
                         let name = self.ink_name.trim();
-                        self.role = role_of(inks, name);
+                        picked_role = Some(role_of(inks, name));
                         if let Some(i) = inks.iter().find(|i| i.name == name) {
                             self.cmyk = i.color();
                         }
@@ -1175,7 +1426,7 @@ impl PathTool {
                                 let text = format!("{}  ·  {}", i.name, i.role.label());
                                 if ui.selectable_label(self.ink_name == i.name, text).clicked() {
                                     self.ink_name = i.name.clone();
-                                    self.role = i.role;
+                                    picked_role = Some(i.role);
                                     self.cmyk = i.color();
                                 }
                             }
@@ -1191,58 +1442,31 @@ impl PathTool {
                         .width(140.0)
                         .show_ui(ui, |ui| {
                             for r in Role::ALL {
-                                ui.selectable_value(&mut self.role, r, r.label());
+                                if ui.selectable_label(self.role == r, r.label()).clicked() {
+                                    picked_role = Some(r);
+                                }
                             }
                         });
                 });
+                if let Some(r) = picked_role {
+                    self.role = r;
+                    if self.part == Part::Line && die_role(r) {
+                        self.overprint = true;
+                        self.overprint_touched = true;
+                    }
+                }
+                ui.add_space(4.0);
                 ui.label(egui::RichText::new("Colore a schermo e nelle prove").color(t.text_dim))
                     .on_hover_text("Il RIP stampa la tinta per nome; questo è il colore con cui si vede");
-                cmyk_fields(ui, &mut self.cmyk);
-                ui.add_space(4.0);
-                let name = self.ink_name.trim().to_string();
-                let target = if self.part == Part::Line {
-                    "il contorno"
-                } else {
-                    "il riempimento"
-                };
-                let go = egui::Button::new(
-                    egui::RichText::new("Diventa tinta")
-                        .font(semibold(13.5))
-                        .color(t.on_primary),
-                )
-                .fill(t.primary)
-                .min_size(vec2(ui.available_width(), 32.0));
-                if ui
-                    .add_enabled(!name.is_empty(), go)
-                    .on_hover_text(format!(
-                        "Colora {target} dei tracciati scelti con la tinta «{name}» al 100%, in sovrastampa \
-                     come vogliono i RIP per taglio e cordonatura"
-                    ))
-                    .clicked()
-                {
-                    let cmyk = self.cmyk;
-                    let overprint =
-                        matches!(self.role, Role::Cut | Role::Crease | Role::Varnish | Role::White);
-                    request = Some(Request::Restyle(
-                        ids.clone(),
-                        Restyle {
-                            part: self.part,
-                            ink: Some(NewInk::Spot {
-                                name: name.clone(),
-                                cmyk,
-                            }),
-                            width: None,
-                            overprint: overprint.then_some(true),
-                        },
-                    ));
-                    remember(inks, &name, self.role, cmyk);
-                }
+                colour_wheel(ui, &mut self.cmyk, &mut self.hue, &mut self.sat);
+            } else if self.mode == InkMode::Process {
+                colour_wheel(ui, &mut self.cmyk, &mut self.hue, &mut self.sat);
             }
             if self.part == Part::Line {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Spessore").color(t.text_dim));
-                    crate::fluent::number(
+                    let resp = crate::fluent::number(
                         ui,
                         90.0,
                         egui::DragValue::new(&mut self.width)
@@ -1254,42 +1478,94 @@ impl PathTool {
                                 clean.parse::<f64>().ok()
                             }),
                     );
-                    if ui.button("Applica").clicked() {
-                        request = Some(Request::Restyle(
-                            ids.clone(),
-                            Restyle {
-                                part: Part::Line,
-                                ink: None,
-                                width: Some(self.width),
-                                overprint: None,
-                            },
-                        ));
+                    if resp.changed() {
+                        self.width_touched = true;
                     }
                 });
             }
             ui.add_space(6.0);
-            let parts: Vec<bool> = chosen
-                .iter()
-                .filter_map(|p| match self.part {
-                    Part::Line => p.line.as_ref().map(|l| l.overprint),
-                    Part::Fill => p.fill.as_ref().map(|f| f.overprint),
-                })
-                .collect();
-            let mut on = !parts.is_empty() && parts.iter().all(|v| *v);
             if ui
-                .add(crate::fluent::checkbox(&mut on, "Sovrastampa"))
-                .on_hover_text("Si stampa sopra gli altri colori senza togliere quello che c'è sotto")
+                .add(crate::fluent::checkbox(&mut self.overprint, "Sovrastampa"))
+                .on_hover_text(
+                    "Si stampa sopra gli altri colori senza togliere quello che c'è sotto: \
+                     giusto per taglio e cordonatura, non per la grafica",
+                )
                 .changed()
             {
+                self.overprint_touched = true;
+            }
+            let name = self.ink_name.trim().to_string();
+            let ink = match self.mode {
+                InkMode::Keep => None,
+                InkMode::Spot => Some(NewInk::Spot {
+                    name: name.clone(),
+                    cmyk: self.cmyk,
+                }),
+                InkMode::Process => Some(NewInk::Cmyk(self.cmyk)),
+            };
+            let width = (self.part == Part::Line && self.width_touched).then_some(self.width);
+            let overprint = (self.overprint_touched || self.overprint != current_overprint(self.part))
+                .then_some(self.overprint);
+            let something = ink.is_some() || width.is_some() || overprint.is_some();
+            let valid = !(self.mode == InkMode::Spot && name.is_empty());
+            ui.add_space(8.0);
+            let n = ids.len();
+            let go = egui::Button::new(
+                egui::RichText::new(if n == 1 {
+                    "Applica".to_string()
+                } else {
+                    format!("Applica ai {n} tracciati")
+                })
+                .font(semibold(13.5))
+                .color(if something && valid {
+                    t.on_primary
+                } else {
+                    t.text_disabled
+                }),
+            )
+            .fill(if something && valid { t.primary } else { t.button })
+            .min_size(vec2(ui.available_width(), 32.0));
+            let target = if self.part == Part::Line {
+                "il contorno"
+            } else {
+                "il riempimento"
+            };
+            let tip = match self.mode {
+                InkMode::Keep => format!(
+                    "Cambia spessore e sovrastampa del{} scelto",
+                    if n == 1 { " tracciato" } else { "i tracciati" }
+                ),
+                InkMode::Spot => format!(
+                    "Colora {target} con la tinta «{name}» al 100%, con spessore e sovrastampa scelti qui"
+                ),
+                InkMode::Process => {
+                    format!("Colora {target} in quadricromia, con spessore e sovrastampa scelti qui")
+                }
+            };
+            if ui
+                .add_enabled(something && valid, go)
+                .on_hover_text(tip)
+                .on_disabled_hover_text(if valid {
+                    "Niente da cambiare: scegli un colore, uno spessore o la sovrastampa"
+                } else {
+                    "Scrivi il nome della tinta"
+                })
+                .clicked()
+            {
+                if self.mode == InkMode::Spot {
+                    remember(inks, &name, self.role, self.cmyk);
+                }
                 request = Some(Request::Restyle(
                     ids.clone(),
                     Restyle {
                         part: self.part,
-                        ink: None,
-                        width: None,
-                        overprint: Some(on),
+                        ink,
+                        width,
+                        overprint,
                     },
                 ));
+                // Dopo il cambio i valori si ripropongono dai tracciati cambiati.
+                self.prefilled = None;
             }
         });
         request
@@ -1383,6 +1659,24 @@ mod tests {
     fn distanza_dal_segmento() {
         assert!((segment_distance([5.0, 3.0], [0.0, 0.0], [10.0, 0.0]) - 3.0).abs() < 1e-9);
         assert!((segment_distance([13.0, 4.0], [0.0, 0.0], [10.0, 0.0]) - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn la_ruota_torna_al_colore_di_partenza() {
+        for c in [
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 0.4],
+        ] {
+            let back = as_cmyk(&Ink::Rgb(hsv_to_rgb(rgb_to_hsv(cmyk_rgb(c))))).unwrap();
+            for (a, b) in back.iter().zip(c.iter()) {
+                assert!((a - b).abs() < 1e-9, "{c:?} -> {back:?}");
+            }
+        }
+        // Il giallo sta a un sesto del giro.
+        let [h, s, v] = rgb_to_hsv(cmyk_rgb([0.0, 0.0, 1.0, 0.0]));
+        assert!((h - 1.0 / 6.0).abs() < 1e-9 && (s - 1.0).abs() < 1e-9 && (v - 1.0).abs() < 1e-9);
     }
 
     #[test]
