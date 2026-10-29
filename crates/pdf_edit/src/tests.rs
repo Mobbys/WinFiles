@@ -1307,3 +1307,58 @@ fn lo_sfondo_rettangolare_scelto_si_allarga_con_gli_angoli_vivi() {
     assert!(is_red(pixel(&img, 1, 1)) && is_red(pixel(&img, img.1 - 2, img.2 - 2)));
     assert_eq!(after.paths[0].parts[0].points.len(), 4);
 }
+
+#[test]
+fn gli_oggetti_mascherati_scelti_si_allargano_con_la_maschera() {
+    // Una maschera quadrata; dentro, il rosso esce dalla maschera e il blu si ferma sul bordo.
+    let mut e = editor(&[page(
+        [0.0, 0.0, 300.0, 300.0],
+        0,
+        "q 50 50 100 100 re W n 1 0 0 rg 0 0 100 300 re f 0 0 1 rg 100 50 50 100 re f Q",
+    )]);
+    let scan = e.scan_page(0).unwrap();
+    assert_eq!(scan.paths.len(), 2);
+    let ids: Vec<PathId> = scan.paths.iter().map(|p| p.id).collect();
+    // Il formato finito dei due scelti è quello che si vede: la maschera.
+    let v = scan.paths[0].visible;
+    assert!(near(v[0], pt_to_mm(50.0)) && near(v[2], pt_to_mm(100.0)), "{v:?}");
+    let finished = [pt_to_mm(50.0), pt_to_mm(150.0), pt_to_mm(150.0), pt_to_mm(250.0)];
+    let spec = BleedSpec {
+        finished,
+        amount: 3.0,
+        sides: [true; 4],
+        mode: BleedMode::Mirror,
+    };
+    e.add_bleed(0, &spec, &[], &[], &ids).unwrap();
+    // Sempre due tracciati, senza copie.
+    assert_eq!(e.scan_page(0).unwrap().paths.len(), 2);
+    let img = render(&reread(&e), 0);
+    let (w, h) = (img.1, img.2);
+    assert!((f64::from(w) - (100.0 + 2.0 * mm_to_pt(3.0))).abs() < 1.5);
+    for y in [1, h / 2, h - 2] {
+        assert!(is_red(pixel(&img, 1, y)), "{y}: {:?}", pixel(&img, 1, y));
+        assert!(is_blue(pixel(&img, w - 2, y)), "{y}: {:?}", pixel(&img, w - 2, y));
+    }
+}
+
+#[test]
+fn oggetti_mascherati_da_un_cerchio_si_allargano_lungo_il_cerchio() {
+    let c = circle(150.0, 150.0, 100.0);
+    let content = leak(format!(
+        "q {c} W n 1 0 0 rg 0 0 150 300 re f 0 0 1 rg 150 50 100 200 re f Q"
+    ));
+    let mut e = editor(&[page([0.0, 0.0, 300.0, 300.0], 0, content)]);
+    let ids: Vec<PathId> = e.scan_page(0).unwrap().paths.iter().map(|p| p.id).collect();
+    assert_eq!(ids.len(), 2);
+    e.add_shaped_bleed(0, 5.0, &ids, &[], &[], &ids).unwrap();
+    assert_eq!(e.scan_page(0).unwrap().paths.len(), 2);
+    let size = 200.0 + 2.0 * mm_to_pt(5.0);
+    let info = &e.pages()[0];
+    assert!(near(info.size.w, pt_to_mm(size)), "{:?}", info.size);
+    let img = render(&reread(&e), 0);
+    let mid = (size / 2.0) as u32;
+    let out = (100.0 + mm_to_pt(2.5)) as u32;
+    assert!(is_red(pixel(&img, mid - out, mid)));
+    assert!(is_blue(pixel(&img, mid + out, mid)));
+    assert!(is_white(pixel(&img, 3, 3)));
+}

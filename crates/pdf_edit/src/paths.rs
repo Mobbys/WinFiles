@@ -158,6 +158,8 @@ pub struct PathInfo {
     scale: f64,
     /// Dalle unità del contenuto ai millimetri della pagina, per scrivere una forma nuova.
     to_mm: Matrix,
+    /// Le maschere che lo ritagliano.
+    masks: Vec<PathId>,
 }
 
 impl PathInfo {
@@ -180,6 +182,8 @@ pub struct PageScan {
     pub height: f64,
     /// La pagina ha più tracciati di quelli letti.
     pub truncated: bool,
+    /// I tracciati che ritagliano quello che viene dopo (le maschere), senza colore.
+    masks: Vec<PathInfo>,
 }
 
 /// Lo spazio colore in uso.
@@ -356,6 +360,8 @@ struct State {
     op_fill: bool,
     /// Il ritaglio in vigore, come rettangolo in millimetri.
     clip: Option<[f64; 4]>,
+    /// I tracciati che ritagliano (le maschere), dal più esterno.
+    masks: Vec<PathId>,
 }
 
 fn space_operand(doc: &Document, op: &Op, res: &Res) -> Space {
@@ -564,6 +570,7 @@ impl Scanner<'_> {
                     let fills = matches!(kw, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
                     let taken = std::mem::take(&mut parts);
                     let bounds = bounds_of(&taken);
+                    let mask_parts = clip_pending.then(|| taken.clone());
                     if (strokes || fills)
                         && let Some(bounds) = bounds
                     {
@@ -581,10 +588,31 @@ impl Scanner<'_> {
                     }
                     if clip_pending {
                         if let Some(b) = bounds {
+                            let visible = s.clip.and_then(|c| intersect(c, b)).unwrap_or(b);
                             s.clip = Some(match s.clip {
                                 Some(c) => intersect(c, b).unwrap_or([b[0], b[1], b[0], b[1]]),
                                 None => b,
                             });
+                            if let Some(parts) = mask_parts
+                                && self.out.masks.len() < MAX_PATHS
+                            {
+                                let id = PathId { owner, op: i };
+                                self.out.masks.push(PathInfo {
+                                    id,
+                                    parts,
+                                    line: None,
+                                    fill: None,
+                                    bounds: b,
+                                    visible,
+                                    length: 0.0,
+                                    in_form: depth > 0,
+                                    clips: true,
+                                    scale: 1.0,
+                                    to_mm: s.ctm,
+                                    masks: s.masks.clone(),
+                                });
+                                s.masks.push(id);
+                            }
                         }
                         clip_pending = false;
                     }
@@ -691,6 +719,7 @@ impl Scanner<'_> {
             clips,
             scale,
             to_mm: s.ctm,
+            masks: s.masks.clone(),
         });
     }
 }
@@ -706,6 +735,7 @@ const fn start_state(ctm: Matrix) -> State {
         op_stroke: false,
         op_fill: false,
         clip: None,
+        masks: Vec::new(),
     }
 }
 
@@ -1197,10 +1227,25 @@ pub(crate) fn grow(
             && p.line.is_none()
             && !p.clips
             && !p.in_form
-            && p.visible == p.bounds
             && p.fill.as_ref().is_some_and(|f| !matches!(f.ink, Ink::Other(_)))
     };
     if chosen.is_empty() || chosen.len() != wanted.len() || !chosen.iter().all(|p| flat(p)) {
+        return Ok(false);
+    }
+    // Le maschere che li ritagliano si allargano anche loro, altrimenti fermerebbero l'abbondanza.
+    let mut mask_ids: Vec<PathId> = chosen.iter().flat_map(|p| p.masks.iter().copied()).collect();
+    mask_ids.sort_unstable();
+    mask_ids.dedup();
+    let masks: Vec<&PathInfo> = scanned
+        .masks
+        .iter()
+        .filter(|m| mask_ids.contains(&m.id))
+        .collect();
+    if masks.len() != mask_ids.len()
+        || masks
+            .iter()
+            .any(|m| m.id.owner != Owner::Page(page_ref) || m.in_form)
+    {
         return Ok(false);
     }
     let data = page_content(doc, page_ref)?;
@@ -1215,11 +1260,28 @@ pub(crate) fn grow(
         LineJoin::Miter(0.1)
     };
     let n = |v: f64| pdfcraft_content::num(v);
-    for p in &chosen {
+    for p in chosen.iter().chain(&masks) {
         let (Some(sp), Some(paint)) = (spots.get(&p.id.op), ops.get(p.id.op)) else {
             return Ok(false);
         };
-        let rule = if matches!(paint.op.as_slice(), b"f*" | b"B*" | b"b*") {
+        // Come finisce il disegno nuovo: riempito, o (le maschere) di nuovo ritaglio.
+        let tail: Vec<Op> = if p.clips {
+            let Some(w) = ops
+                .get(sp.start..p.id.op)
+                .and_then(|r| r.iter().find(|o| matches!(o.op.as_slice(), b"W" | b"W*")))
+            else {
+                return Ok(false);
+            };
+            vec![w.clone(), paint.clone()]
+        } else {
+            vec![Op::new("f", Vec::new())]
+        };
+        let even_odd = if p.clips {
+            tail.first().is_some_and(|w| w.op.as_slice() == b"W*")
+        } else {
+            matches!(paint.op.as_slice(), b"f*" | b"B*" | b"b*")
+        };
+        let rule = if even_odd {
             FillRule::EvenOdd
         } else {
             FillRule::NonZero
@@ -1264,7 +1326,7 @@ pub(crate) fn grow(
         if new.is_empty() {
             return Ok(false);
         }
-        new.push(Op::new("f", Vec::new()));
+        new.extend(tail);
         swaps.push((sp.start, p.id.op, new));
     }
     // Dal fondo, così gli indici di quelli prima restano buoni.
@@ -1283,6 +1345,30 @@ pub(crate) fn grow(
 /// Una forma chiusa: il contorno esterno e poi i buchi, punti in millimetri della pagina come si
 /// vede.
 pub(crate) type Shape = Vec<Vec<[f64; 2]>>;
+
+/// La parte di `shapes` (la forma del tracciato `p`) che si vede dentro le sue maschere.
+fn visible_shape(scanned: &PageScan, p: &PathInfo, shapes: Vec<Shape>) -> Vec<Shape> {
+    use i_overlay::core::fill_rule::FillRule;
+    use i_overlay::core::overlay_rule::OverlayRule;
+    use i_overlay::float::simplify::SimplifyShape;
+    use i_overlay::float::single::SingleFloatOverlay;
+
+    let mut out = shapes;
+    for id in &p.masks {
+        let Some(mask) = scanned.masks.iter().find(|m| m.id == *id) else {
+            continue;
+        };
+        let own: Vec<Vec<[f64; 2]>> = mask
+            .parts
+            .iter()
+            .filter(|part| part.points.len() >= 3)
+            .map(|part| part.points.clone())
+            .collect();
+        let clip = own.simplify_shape(FillRule::EvenOdd);
+        out = out.overlay(&clip, OverlayRule::Intersect, FillRule::NonZero);
+    }
+    out
+}
 
 /// Il contorno dell'unione dei tracciati `ids`: ogni tracciato si pulisce da solo (pari-dispari:
 /// i buchi restano buchi), poi tutti insieme si uniscono (non-zero: quello che si sovrappone
@@ -1307,7 +1393,7 @@ pub(crate) fn outline(scanned: &PageScan, ids: &[PathId]) -> Result<Vec<Shape>, 
                 "i tracciati scelti sono troppo complessi".into(),
             ));
         }
-        for shape in own.simplify_shape(FillRule::EvenOdd) {
+        for shape in visible_shape(scanned, p, own.simplify_shape(FillRule::EvenOdd)) {
             contours.extend(shape);
         }
     }

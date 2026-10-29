@@ -38,7 +38,10 @@ Quando quello che si allunga è solo uno sfondo scelto in tinta unita (un riempi
 contorno, non in un modulo, non ritagliato), non servono pezzi: la sua forma si allarga di
 `amount` (`i_overlay`, angoli tondi; vivi se il formato finito è il suo rettangolo) e si riscrive
 al suo posto con lo stesso colore, come curve morbide che passano per i punti del contorno
-semplificato a 0,05 mm (`paths::grow`). Resta un tracciato solo, liscio, che si modifica come gli
+semplificato a 0,05 mm (`paths::grow`). Se gli sfondi scelti stanno dentro una maschera (un
+tracciato che ritaglia, come i "gruppi di ritaglio" di Illustrator), si allarga allo stesso modo
+anche la maschera: la lettura della pagina tiene, per ogni tracciato, le maschere che lo
+ritagliano, e il formato finito è la parte che si vede dentro la maschera. Resta un tracciato solo, liscio, che si modifica come gli
 altri in Illustrator; la pagina prende formato finito e abbondanza senza ritagli.
 
 ## Conseguenze
