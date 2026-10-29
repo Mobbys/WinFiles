@@ -2218,9 +2218,9 @@ impl PdfModule {
                     self.paths.select_after_scan(ids);
                 }
             }
-            Some(tracciati::Request::Bleed(spec, die)) => {
+            Some(tracciati::Request::Bleed { spec, die, paper }) => {
                 self.apply(|e| {
-                let left = e.add_bleed(page, &spec, &die)?;
+                let left = e.add_bleed(page, &spec, &die, &paper)?;
                 let mut msg = format!(
                     "Abbondanza di {} mm creata",
                     winfiles_geom::format_number(spec.amount, 1, true)

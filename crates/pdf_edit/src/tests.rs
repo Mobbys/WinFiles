@@ -825,7 +825,7 @@ fn bleed_spec(mode: BleedMode, sides: [bool; 4]) -> BleedSpec {
 fn abbondanza_a_specchio_con_formato_finito() {
     let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, NO_BLEED)]);
     let left = e
-        .add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[])
+        .add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[], &[])
         .unwrap();
     assert_eq!(left, 0);
     assert_eq!(e.undo_label(), Some("Crea abbondanza"));
@@ -834,15 +834,16 @@ fn abbondanza_a_specchio_con_formato_finito() {
     let trim = info[0].trim.unwrap();
     assert!(near(trim.w, pt_to_mm(200.0)) && near(trim.h, pt_to_mm(100.0)));
     let img = render(&reread(&e), 0);
-    // A sinistra del taglio (x = 10) la grafica ribaltata: 2 → 8 dentro (verde), 8 → 2 (rossa).
+    // A sinistra del taglio (x = 10) la grafica ribaltata attorno a x = 11 (un punto dentro, per
+    // non lasciare fili nell'anteprima): 2 → 10 dentro (verde), 7 → 5 (rossa).
     assert_eq!(pixel(&img, 2, 60), [0, 255, 0]);
-    assert_eq!(pixel(&img, 8, 60), [255, 0, 0]);
+    assert_eq!(pixel(&img, 7, 60), [255, 0, 0]);
     // Sopra e sotto la grafica continua; dentro la pagina è com'era.
     assert_eq!(pixel(&img, 100, 3), [0, 255, 0]);
     assert_eq!(pixel(&img, 12, 3), [255, 0, 0]);
     assert_eq!(pixel(&img, 100, 60), [0, 255, 0]);
-    // La fustella finta è ribaltata anche lei (x = 7), perché non è stata tenuta fuori.
-    assert!(pixel(&img, 7, 60)[1] < 100);
+    // La fustella finta è ribaltata anche lei (x = 9), perché non è stata tenuta fuori.
+    assert!(pixel(&img, 8, 60)[1].min(pixel(&img, 9, 60)[1]) < 200);
     // Il formato finito si legge come TrimBox nella pagina riletta.
     let scan = e.scan_page(0).unwrap();
     let t = scan.trim.unwrap();
@@ -854,12 +855,13 @@ fn la_fustella_non_si_ribalta_nell_abbondanza() {
     let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, NO_BLEED)]);
     let die = e.scan_page(0).unwrap().paths[2].id;
     let left = e
-        .add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[die])
+        .add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[die], &[])
         .unwrap();
     assert_eq!(left, 0);
     let img = render(&reread(&e), 0);
     // Nell'abbondanza al posto della linea c'è la grafica sotto (rossa); la linea vera resta.
-    assert_eq!(pixel(&img, 7, 60), [255, 0, 0]);
+    assert_eq!(pixel(&img, 8, 60), [255, 0, 0]);
+    assert_eq!(pixel(&img, 9, 60), [255, 0, 0]);
     assert!(pixel(&img, 13, 60)[1] < 100);
     let scan = e.scan_page(0).unwrap();
     assert!(scan.paths.iter().filter(|p| p.line.is_some()).count() >= 1);
@@ -871,6 +873,7 @@ fn abbondanza_allungata_e_solo_su_un_lato() {
     e.add_bleed(
         0,
         &bleed_spec(BleedMode::Stretch, [false, false, false, true]),
+        &[],
         &[],
     )
     .unwrap();
@@ -887,13 +890,13 @@ fn abbondanza_allungata_e_solo_su_un_lato() {
 fn abbondanza_non_valida() {
     let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, NO_BLEED)]);
     let mut spec = bleed_spec(BleedMode::Mirror, [false; 4]);
-    assert!(e.add_bleed(0, &spec, &[]).is_err());
+    assert!(e.add_bleed(0, &spec, &[], &[]).is_err());
     spec.sides = [true; 4];
     spec.amount = f64::NAN;
-    assert!(e.add_bleed(0, &spec, &[]).is_err());
+    assert!(e.add_bleed(0, &spec, &[], &[]).is_err());
     spec.amount = 3.0;
     spec.finished = [10.0, 10.0, 10.2, 10.2];
-    assert!(e.add_bleed(0, &spec, &[]).is_err());
+    assert!(e.add_bleed(0, &spec, &[], &[]).is_err());
     assert_eq!(e.undo_label(), None);
 }
 
@@ -906,7 +909,7 @@ fn abbondanza_su_una_pagina_ruotata() {
         90,
         "0 1 0 rg 0 0 100 200 re f 1 0 0 rg 0 0 20 20 re f",
     )]);
-    e.add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[])
+    e.add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[], &[])
         .unwrap();
     let info = e.pages();
     assert!(near(info[0].size.w, pt_to_mm(220.0)) && near(info[0].size.h, pt_to_mm(120.0)));
@@ -924,9 +927,70 @@ fn nessun_filo_bianco_tra_abbondanza_e_pagina() {
     // Il bordo del formato finito cade a metà di un pixel (10,5 punti).
     let mut spec = bleed_spec(BleedMode::Mirror, [true; 4]);
     spec.amount = pt_to_mm(10.5);
-    e.add_bleed(0, &spec, &[]).unwrap();
+    e.add_bleed(0, &spec, &[], &[]).unwrap();
     let img = render(&reread(&e), 0);
     for (x, y) in [(10, 60), (210, 60), (100, 10), (100, 110), (10, 10)] {
+        assert_eq!(pixel(&img, x, y), [0, 255, 0], "({x}, {y})");
+    }
+}
+
+#[test]
+fn lavoro_piccolo_su_fondo_bianco_e_fustella_sul_bordo() {
+    // Fondo bianco su tutta la pagina, un rettangolo verde 100 × 50 da (50, 25), una fustella
+    // magenta spessa 4 proprio sul suo bordo e un segno di taglio nero più in là.
+    let mut e = editor(&[page(
+        [0.0, 0.0, 200.0, 100.0],
+        0,
+        "1 1 1 rg 0 0 200 100 re f 0 1 0 rg 50 25 100 50 re f \
+         0 1 0 0 K 4 w 50 25 100 50 re S 0 0 0 1 K 0.5 w 30 25 m 42 25 l S",
+    )]);
+    let die = e.scan_page(0).unwrap().paths[2].id;
+    let spec = BleedSpec {
+        finished: [pt_to_mm(50.0), pt_to_mm(25.0), pt_to_mm(150.0), pt_to_mm(75.0)],
+        amount: pt_to_mm(10.0),
+        sides: [true; 4],
+        mode: BleedMode::Mirror,
+    };
+    e.add_bleed(0, &spec, &[die], &[]).unwrap();
+    let info = e.pages();
+    assert!(near(info[0].size.w, pt_to_mm(120.0)) && near(info[0].size.h, pt_to_mm(70.0)));
+    let img = render(&reread(&e), 0);
+    // L'abbondanza è verde fino al bordo: niente bianco del fondo, niente segno di taglio.
+    for (x, y) in [(3, 35), (6, 35), (60, 3), (116, 66), (2, 2)] {
+        assert_eq!(pixel(&img, x, y), [0, 255, 0], "({x}, {y})");
+    }
+    // La fustella resta intera: anche la metà fuori dal formato finito (x = 9 → 1 punto fuori).
+    assert!(pixel(&img, 9, 35)[1] < 100);
+    assert!(pixel(&img, 11, 35)[1] < 100);
+}
+
+#[test]
+fn nessun_filo_bianco_con_il_fondo_bianco_dietro() {
+    // Il lavoro verde sta su un fondo bianco e il suo bordo cade a metà di un pixel.
+    let mut e = editor(&[page(
+        [0.0, 0.0, 200.0, 100.0],
+        0,
+        "1 1 1 rg 0 0 200 100 re f 0 1 0 rg 50.5 25.5 100 50 re f",
+    )]);
+    let spec = BleedSpec {
+        finished: [pt_to_mm(50.5), pt_to_mm(24.5), pt_to_mm(150.5), pt_to_mm(74.5)],
+        amount: pt_to_mm(10.0),
+        sides: [true; 4],
+        mode: BleedMode::Mirror,
+    };
+    let paper = e.scan_page(0).unwrap().paths[0].id;
+    e.add_bleed(0, &spec, &[], &[paper]).unwrap();
+    let img = render(&reread(&e), 0);
+    for (x, y) in [
+        (10, 35),
+        (11, 35),
+        (110, 35),
+        (60, 10),
+        (60, 11),
+        (60, 60),
+        (10, 10),
+        (110, 60),
+    ] {
         assert_eq!(pixel(&img, x, y), [0, 255, 0], "({x}, {y})");
     }
 }

@@ -425,19 +425,27 @@ pub struct BleedSpec {
 /// Il modulo con la grafica senza fustella: quello ribaltato nell'abbondanza (l'altro, con la
 /// pagina intera, è `FORM_NAME`).
 const FORM_ART: &str = "WFGrafica";
-/// Quanto della pagina vera resta oltre il formato finito sui lati con l'abbondanza nuova: tiene
-/// intero lo spessore della fustella e toglie i segni di taglio, che stanno più in là.
-const KEEP_BEYOND_MM: f64 = 1.0;
+/// Il modulo con la sola fustella, ridisegnata sopra: la pagina vera si ferma al formato finito e
+/// taglierebbe a metà lo spessore della linea.
+const FORM_DIE: &str = "WFFustella";
 /// Di quanto (punti) le fasce dell'abbondanza passano sotto la pagina vera: senza, dove si
 /// toccano i due bordi sfumati dall'antialias dell'anteprima si vedrebbe un filo bianco.
-const SEAM: f64 = 0.25;
+const SEAM: f64 = 1.0;
 /// La striscia di grafica che "Allunga" stira fino al bordo nuovo.
 const STRETCH_MM: f64 = 0.5;
 
 /// Crea l'abbondanza: la pagina diventa formato finito più `amount` sui lati scelti; lì si
-/// disegna `art` (la grafica senza fustella) ribaltata o allungata, sotto la pagina vera.
+/// disegna `art` (la grafica senza fustella) ribaltata o allungata. Sopra, la pagina vera `all` fino al
+/// formato finito (i segni di taglio e il bianco attorno spariscono) e la fustella `die` intera.
 /// TrimBox e BleedBox si scrivono, così il RIP sa dove tagliare.
-pub(crate) fn bleed(doc: &mut Document, index: usize, spec: &BleedSpec, art: &[u8]) -> Result<(), EditError> {
+pub(crate) fn bleed(
+    doc: &mut Document,
+    index: usize,
+    spec: &BleedSpec,
+    all: &[u8],
+    art: &[u8],
+    die: Option<&[u8]>,
+) -> Result<(), EditError> {
     let src = source(doc, index)?;
     let number = src.number;
     let (w, h) = (src.w, src.h);
@@ -454,7 +462,6 @@ pub(crate) fn bleed(doc: &mut Document, index: usize, spec: &BleedSpec, art: &[u
         )));
     }
     let b = mm_to_pt(spec.amount);
-    let keep = mm_to_pt(KEEP_BEYOND_MM.min(spec.amount));
     let [top, right, bottom, left] = spec.sides;
     // La pagina nuova (come si vede): formato finito più l'abbondanza, o la pagina di prima.
     let r = [
@@ -463,18 +470,20 @@ pub(crate) fn bleed(doc: &mut Document, index: usize, spec: &BleedSpec, art: &[u
         if right { fx1 + b } else { w },
         if top { fy1 + b } else { h },
     ];
-    // Fin dove arriva la pagina vera: sui lati nuovi poco oltre il formato finito.
+    // Fin dove arriva la pagina vera: sui lati nuovi il formato finito, meno `SEAM` perché il
+    // suo bordo sfumato cada sopra la fascia piena e non sopra il bordo sfumato della fascia
+    // (il bianco dietro la grafica si vedrebbe come un filo).
     let c = [
-        if left { fx0 - keep } else { r[0] },
-        if bottom { fy0 - keep } else { r[1] },
-        if right { fx1 + keep } else { r[2] },
-        if top { fy1 + keep } else { r[3] },
+        if left { fx0 + SEAM } else { r[0] },
+        if bottom { fy0 + SEAM } else { r[1] },
+        if right { fx1 - SEAM } else { r[2] },
+        if top { fy1 - SEAM } else { r[3] },
     ];
     // Il bordo da cui si ribalta o si allunga: il formato finito.
     let edge = [fx0, fy0, fx1, fy1];
-    let all_body = content(doc, src.page, number)?;
-    let all = page_form(doc, &src, &all_body);
+    let all = page_form(doc, &src, all);
     let art = page_form(doc, &src, art);
+    let die = die.map(|d| page_form(doc, &src, d));
     let mut ops = format!("q 1 0 0 1 {} {} cm\n", num(-r[0]), num(-r[1]));
     // I pezzi attorno: sinistra/centro/destra per sotto/centro/sopra, tranne il centro.
     let xs = [(r[0], edge[0], -1), (edge[0], edge[2], 0), (edge[2], r[2], 1)];
@@ -527,12 +536,20 @@ pub(crate) fn bleed(doc: &mut Document, index: usize, spec: &BleedSpec, art: &[u
         }
     }
     ops.push_str(&format!(
-        "q {} {} {} {} re W n /{FORM_NAME} Do Q\nQ\n",
+        "q {} {} {} {} re W n /{FORM_NAME} Do Q\n",
         num(c[0]),
         num(c[1]),
         num(c[2] - c[0]),
         num(c[3] - c[1])
     ));
+    if die.is_some() {
+        ops.push_str(&format!("/{FORM_DIE} Do\n"));
+    }
+    ops.push_str("Q\n");
+    let mut forms = vec![(FORM_NAME, all), (FORM_ART, art)];
+    if let Some(d) = die {
+        forms.push((FORM_DIE, d));
+    }
     let (width, height) = (r[2] - r[0], r[3] - r[1]);
     let place: Matrix = [1.0, 0.0, 0.0, 1.0, -r[0], -r[1]];
     let total = compose(&place, &src.upright);
@@ -541,7 +558,7 @@ pub(crate) fn bleed(doc: &mut Document, index: usize, spec: &BleedSpec, art: &[u
         doc,
         &src,
         NewPage {
-            forms: &[(FORM_NAME, all), (FORM_ART, art)],
+            forms: &forms,
             ops,
             width,
             height,

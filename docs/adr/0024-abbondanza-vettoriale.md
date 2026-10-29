@@ -23,9 +23,19 @@ taglio. Il controllo della pagina (ADR 0023) misura già l'abbondanza per lato.
 Alternativa 2, in `crates/pdf_edit/src/frame.rs` (`bleed`). La fustella non deve finire ribaltata
 nell'abbondanza: la copia ribaltata usa un secondo modulo con il contenuto della pagina dove i
 tracciati di taglio e cordonatura non si dipingono (`paths::without`, l'operatore che dipinge
-diventa `n`). La pagina vera si ritaglia 1 mm oltre il formato finito sui lati nuovi: lo spessore
-della fustella resta intero e i segni di taglio più in là spariscono. Si scrivono TrimBox (formato
-finito) e BleedBox (la pagina nuova).
+diventa `n`). La pagina vera si ritaglia al formato finito sui lati nuovi (segni di taglio e
+bianco attorno spariscono) e sopra si ridisegna la sola fustella (`paths::only`), così il suo
+spessore resta intero. Si scrivono TrimBox (formato finito) e BleedBox (la pagina nuova).
+
+Il formato finito viene, nell'ordine, da TrimBox, fustella di taglio, filetto sospetto, riquadro
+della grafica (senza fondi bianchi e senza linee aperte corte, cioè i segni di taglio: un lavoro
+piccolo in un A4) o pagina intera; chi usa il pannello può sceglierne un altro.
+
+Anteprima senza fili: dove la fascia ribaltata e la pagina vera si toccano, i due bordi sfumati
+dall'antialias lascerebbero passare il bianco. Le fasce passano 2 punti sotto la pagina vera
+(ribaltate attorno a un asse 1 punto dentro il formato finito) e la pagina vera si ritaglia 1 punto
+dentro; i fondi bianchi sotto tutta la grafica si tolgono, perché anche loro, sfumati dal ritaglio,
+lascerebbero un filo chiaro. Sulla carta un fondo bianco non stampa nulla.
 
 ## Conseguenze
 - Solo abbondanza rettangolare, attorno al rettangolo del formato finito: con una fustella

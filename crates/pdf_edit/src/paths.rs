@@ -1079,3 +1079,35 @@ pub(crate) fn without(doc: &Document, page: usize, ids: &[PathId]) -> Result<(Ve
         .collect();
     Ok((serialize_ops(&out), left))
 }
+
+/// Il contenuto della pagina con soli i tracciati `ids` (per esempio la fustella da sola): gli
+/// altri tracciati non si dipingono e testi, immagini, sfumature e moduli si tolgono.
+pub(crate) fn only(doc: &Document, page: usize, ids: &[PathId]) -> Result<Vec<u8>, EditError> {
+    let page_ref = organize::pages(doc)?
+        .get(page)
+        .map(|p| p.obj)
+        .ok_or(EditError::NoPage(page.saturating_add(1)))?;
+    let data = page_content(doc, page_ref)?;
+    let targets: HashSet<usize> = ids
+        .iter()
+        .filter(|id| id.owner == Owner::Page(page_ref))
+        .map(|id| id.op)
+        .collect();
+    let resources = page_resources(doc, page_ref);
+    let res = read_res(doc, &resources);
+    let ops = parse(&data).ops;
+    let spots = locate(&ops, &res);
+    let out: Vec<Op> = ops
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, op)| match spots.get(&i) {
+            Some(sp) if !targets.contains(&i) && !sp.clips => Some(Op::new("n", Vec::new())),
+            Some(_) => Some(op),
+            None => match op.op.as_slice() {
+                b"Tj" | b"TJ" | b"'" | b"\"" | b"Do" | b"sh" | b"BI" | b"ID" | b"EI" => None,
+                _ => Some(op),
+            },
+        })
+        .collect();
+    Ok(serialize_ops(&out))
+}

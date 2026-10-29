@@ -480,10 +480,18 @@ impl Editor {
     }
 
     /// Crea l'abbondanza che manca attorno al formato finito della pagina (vedi [`BleedSpec`]).
-    /// I tracciati `die` (la fustella) restano fuori dalla grafica ribaltata o allungata.
+    /// I tracciati `die` (la fustella) restano fuori dalla grafica ribaltata o allungata; i fondi
+    /// bianchi `paper` sotto tutta la grafica si tolgono (sulla carta non cambia nulla, e senza di
+    /// loro nell'anteprima non resta un filo chiaro sul bordo del formato finito).
     /// Restituisce quanti tracciati della fustella non si sono potuti tenere fuori (stanno dentro
     /// un modulo del PDF).
-    pub fn add_bleed(&mut self, page: usize, spec: &BleedSpec, die: &[PathId]) -> Result<usize, EditError> {
+    pub fn add_bleed(
+        &mut self,
+        page: usize,
+        spec: &BleedSpec,
+        die: &[PathId],
+        paper: &[PathId],
+    ) -> Result<usize, EditError> {
         let ok = spec.amount.is_finite()
             && (0.1..=100.0).contains(&spec.amount)
             && spec.finished.iter().all(|v| v.is_finite())
@@ -492,8 +500,15 @@ impl Editor {
             return Err(EditError::Invalid("abbondanza non valida".into()));
         }
         self.edit("Crea abbondanza", |d| {
-            let (art, left) = paths::without(d, page, die)?;
-            frame::bleed(d, page, spec, &art)?;
+            let hidden: Vec<PathId> = die.iter().chain(paper).copied().collect();
+            let (art, left) = paths::without(d, page, &hidden)?;
+            let (all, _) = paths::without(d, page, paper)?;
+            let only = if die.is_empty() {
+                None
+            } else {
+                Some(paths::only(d, page, die)?)
+            };
+            frame::bleed(d, page, spec, &all, &art, only.as_deref())?;
             Ok(left)
         })
     }

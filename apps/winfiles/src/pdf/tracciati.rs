@@ -26,6 +26,9 @@ const HIT_TOLERANCE: f32 = 5.0;
 const MIN_BLEED: f64 = 2.0;
 /// Nomi di tinte ricordati al massimo.
 const MAX_INKS: usize = 64;
+/// Una linea aperta, senza riempimento, più corta di così (mm) può essere un segno di taglio: non
+/// conta nel riquadro della grafica.
+const CROP_MARK_MAX: f64 = 25.0;
 /// Un filetto più spesso di così (mm) non sembra una fustella.
 const HAIRLINE_MAX: f64 = 0.5;
 
@@ -220,6 +223,8 @@ pub struct PathTool {
     bleed_mode: BleedMode,
     /// La lettura (versione, pagina) per cui i lati sono stati proposti.
     bleed_for: Option<(u64, usize)>,
+    /// Il formato finito scelto a mano (altrimenti il primo che si trova).
+    finish_choice: Option<Finish>,
 }
 
 impl Default for PathTool {
@@ -248,6 +253,7 @@ impl Default for PathTool {
             bleed_sides: [true; 4],
             bleed_mode: BleedMode::Mirror,
             bleed_for: None,
+            finish_choice: None,
         }
     }
 }
@@ -496,8 +502,12 @@ fn cmyk_fields(ui: &mut egui::Ui, c: &mut [f64; 4]) {
 /// Cosa chiede il pannello al modulo.
 pub enum Request {
     Restyle(Vec<PathId>, Restyle),
-    /// Crea l'abbondanza; i tracciati sono la fustella, da tenere fuori dalla grafica ribaltata.
-    Bleed(BleedSpec, Vec<PathId>),
+    /// Crea l'abbondanza: la fustella, da tenere fuori dalla grafica ribaltata, e i fondi bianchi.
+    Bleed {
+        spec: BleedSpec,
+        die: Vec<PathId>,
+        paper: Vec<PathId>,
+    },
 }
 
 /// Distanza dal punto `p` al segmento `a`–`b`.
@@ -607,6 +617,56 @@ fn union(a: Option<[f64; 4]>, b: [f64; 4]) -> [f64; 4] {
     }
 }
 
+/// Da dove si prende il formato finito.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Finish {
+    /// Il TrimBox del PDF.
+    Trim,
+    /// Il rettangolo attorno alla fustella di taglio.
+    Die,
+    /// Il rettangolo attorno al filetto in quadricromia che sembra una fustella.
+    Hairline,
+    /// Il rettangolo attorno alla grafica, senza il bianco attorno (un lavoro piccolo dentro un A4).
+    Art,
+    /// La pagina intera.
+    Page,
+}
+
+impl Finish {
+    /// Per il menu: "TrimBox", "Fustella"…
+    pub fn label(self) -> &'static str {
+        match self {
+            Finish::Trim => "TrimBox del PDF",
+            Finish::Die => "Fustella",
+            Finish::Hairline => "Filetto",
+            Finish::Art => "Grafica, senza il bianco attorno",
+            Finish::Page => "Pagina intera",
+        }
+    }
+
+    /// Per le frasi: "dal TrimBox", "dalla fustella"…
+    fn origin(self) -> &'static str {
+        match self {
+            Finish::Trim => "dal TrimBox",
+            Finish::Die => "dalla fustella",
+            Finish::Hairline => "dal filetto",
+            Finish::Art => "dalla grafica",
+            Finish::Page => "la pagina intera",
+        }
+    }
+}
+
+/// Un colore che sulla carta non si vede: bianco o nessun inchiostro.
+fn is_paper(ink: &Ink) -> bool {
+    match ink {
+        Ink::Gray(g) => *g >= 0.999,
+        Ink::Rgb(c) => c.iter().all(|v| *v >= 0.999),
+        Ink::Cmyk(c) => c.iter().all(|v| *v <= 0.001),
+        Ink::Spot { tint, .. } => *tint <= 0.001,
+        Ink::Other(_) => false,
+    }
+}
+
 /// Il controllo della pagina.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Check {
@@ -614,10 +674,27 @@ pub struct Check {
     pub dies: Vec<(String, Role, Group)>,
     /// Filetti sottili in quadricromia, chiusi o lunghi: forse una fustella fatta male.
     pub suspects: Vec<Group>,
-    /// Il formato finito: dal TrimBox o dalla fustella.
-    pub finished: Option<([f64; 4], &'static str)>,
+    /// Il formato finito scelto da solo: il primo di `sources`.
+    pub finished: Option<([f64; 4], Finish)>,
+    /// Tutti i formati finiti possibili, dal più affidabile: TrimBox, fustella, filetto, grafica,
+    /// pagina.
+    pub sources: Vec<([f64; 4], Finish)>,
+    /// Il rettangolo della grafica che si vede (senza fustella e senza bianco), in mm.
+    pub content: Option<[f64; 4]>,
+    /// I fondi bianchi sotto tutta la grafica, prima di lei: si tolgono creando l'abbondanza.
+    pub paper: Vec<PathId>,
     /// Abbondanza sopra, destra, sotto, sinistra in mm (None senza formato finito o senza grafica).
     pub bleed: Option<[f64; 4]>,
+}
+
+/// Abbondanza sopra, destra, sotto, sinistra della grafica `content` oltre il formato finito `f`.
+pub fn bleed_beyond(f: [f64; 4], content: [f64; 4]) -> [f64; 4] {
+    [
+        (f[1] - content[1]).max(0.0),
+        (content[2] - f[2]).max(0.0),
+        (content[3] - f[3]).max(0.0),
+        (f[0] - content[0]).max(0.0),
+    ]
 }
 
 /// Controlla la pagina: fustelle in tinta, filetti sospetti, abbondanza.
@@ -669,7 +746,13 @@ pub fn check(scan: &PageScan, inks: &[InkName]) -> Check {
             g.bounds = union(Some(g.bounds), p.bounds);
             continue;
         }
-        if let Some(b) = clip(p.bounds) {
+        // La grafica che si vede: niente ritagli senza colore, niente fondi bianchi e niente
+        // segni di taglio (linee aperte corte senza riempimento).
+        let crop_mark = p.fill.is_none() && !p.closed() && p.length <= CROP_MARK_MAX;
+        let visible = !crop_mark
+            && (p.line.as_ref().is_some_and(|l| !is_paper(&l.ink))
+                || p.fill.as_ref().is_some_and(|f| !is_paper(&f.ink)));
+        if visible && let Some(b) = clip(p.bounds) {
             content = Some(union(content, b));
         }
         if let (Some(l), None) = (&p.line, &p.fill)
@@ -716,27 +799,60 @@ pub fn check(scan: &PageScan, inks: &[InkName]) -> Check {
         .iter()
         .filter(|(_, r, _)| *r == Role::Cut)
         .fold(None, |acc, (_, _, g)| Some(union(acc, g.bounds)));
-    let finished = match (scan.trim, die_bounds, suspects.first()) {
-        (Some(t), _, _) => Some((t, "TrimBox")),
-        (None, Some(d), _) => Some((d, "fustella")),
-        (None, None, Some(g)) => Some((g.bounds, "filetto")),
-        // Senza TrimBox né fustella il formato finito è la pagina: il caso più comune dei file
-        // esportati senza abbondanza.
-        (None, None, None) => Some((page, "pagina")),
+    let mut sources = Vec::new();
+    if let Some(t) = scan.trim {
+        sources.push((t, Finish::Trim));
+    }
+    if let Some(d) = die_bounds {
+        sources.push((d, Finish::Die));
+    }
+    if let Some(g) = suspects.first() {
+        sources.push((g.bounds, Finish::Hairline));
+    }
+    // La grafica conta se lascia del bianco attorno (un lavoro piccolo in un A4); altrimenti è la
+    // pagina, il caso più comune dei file esportati senza abbondanza.
+    let art = content.filter(|c| {
+        [c[1], page[2] - c[2], page[3] - c[3], c[0]]
+            .iter()
+            .any(|v| *v > 1.0)
+    });
+    if let Some(a) = art {
+        sources.push((a, Finish::Art));
+    }
+    sources.push((page, Finish::Page));
+    let finished = sources.first().copied();
+    // I fondi bianchi: riempimenti bianchi all'inizio della pagina che coprono tutta la grafica.
+    let paper = match content {
+        Some(c) => scan
+            .paths
+            .iter()
+            .take_while(|p| {
+                p.line.as_ref().is_none_or(|l| is_paper(&l.ink))
+                    && p.fill.as_ref().is_none_or(|f| is_paper(&f.ink))
+            })
+            .filter(|p| {
+                let b = p.bounds;
+                p.fill.is_some()
+                    && b[0] <= c[0] + 0.5
+                    && b[1] <= c[1] + 0.5
+                    && b[2] >= c[2] - 0.5
+                    && b[3] >= c[3] - 0.5
+            })
+            .map(|p| p.id)
+            .collect(),
+        None => Vec::new(),
     };
     let bleed = match (finished, content) {
-        (Some((f, _)), Some(c)) => Some([
-            (f[1] - c[1]).max(0.0),
-            (c[2] - f[2]).max(0.0),
-            (c[3] - f[3]).max(0.0),
-            (f[0] - c[0]).max(0.0),
-        ]),
+        (Some((f, _)), Some(c)) => Some(bleed_beyond(f, c)),
         _ => None,
     };
     Check {
         dies,
         suspects,
         finished,
+        sources,
+        content,
+        paper,
         bleed,
     }
 }
@@ -1099,7 +1215,7 @@ impl PathTool {
             }
             ui.add_space(4.0);
             match (c.finished, c.bleed) {
-                (Some((_, "pagina")), _) => status(
+                (Some((_, Finish::Page)), _) => status(
                     ui,
                     false,
                     "Formato finito non indicato (niente TrimBox né fustella): si prende la pagina intera, \
@@ -1107,6 +1223,7 @@ impl PathTool {
                         .into(),
                 ),
                 (Some((_, from)), Some(b)) => {
+                    let from = from.origin();
                     let ok = b.iter().all(|v| *v >= MIN_BLEED);
                     let fmt = |v: f64| format_number(v / unit.mm(), unit.decimals(), true);
                     status(
@@ -1142,18 +1259,22 @@ impl PathTool {
     /// Crea l'abbondanza che manca attorno al formato finito.
     fn bleed_card(&mut self, ui: &mut egui::Ui, c: &Check, unit: Unit) -> Option<Request> {
         let t = Tokens::get(ui.ctx());
-        let (finished, from) = c.finished?;
+        let auto = c.finished?;
+        let (finished, from) = self
+            .finish_choice
+            .and_then(|f| c.sources.iter().find(|(_, s)| *s == f).copied())
+            .unwrap_or(auto);
         // I lati si propongono a ogni lettura nuova: quelli con meno abbondanza di quella voluta.
         let key = self.scanned.as_ref().map(|s| s.key);
-        let propose = |amount: f64| -> [bool; 4] {
-            match c.bleed {
-                Some(b) => b.map(|v| v + 0.05 < amount),
+        let propose = |amount: f64, f: [f64; 4]| -> [bool; 4] {
+            match c.content {
+                Some(content) => bleed_beyond(f, content).map(|v| v + 0.05 < amount),
                 None => [true; 4],
             }
         };
         if self.bleed_for != key {
             self.bleed_for = key;
-            self.bleed_sides = propose(self.bleed_amount);
+            self.bleed_sides = propose(self.bleed_amount, finished);
         }
         let mut request = None;
         card_frame(ui, |ui| {
@@ -1167,21 +1288,35 @@ impl PathTool {
                 winfiles_geom::Size::new(finished[2] - finished[0], finished[3] - finished[1]),
                 unit,
             );
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(format!(
-                        "Formato finito {size} ({})",
-                        match from {
-                            "fustella" => "dalla fustella",
-                            "filetto" => "dal filetto",
-                            "pagina" => "la pagina intera",
-                            _ => "dal TrimBox",
+            ui.label(egui::RichText::new("Formato finito").color(t.text_dim));
+            let mut picked = None;
+            egui::ComboBox::from_id_salt("abbondanza-finito")
+                .icon(crate::fluent::combo_icon)
+                .selected_text(format!("{size} · {}", from.origin()))
+                .width(ui.available_width() - 8.0)
+                .show_ui(ui, |ui| {
+                    for (r, f) in &c.sources {
+                        let size = winfiles_geom::format_size(
+                            winfiles_geom::Size::new(r[2] - r[0], r[3] - r[1]),
+                            unit,
+                        );
+                        if ui
+                            .selectable_label(*f == from, format!("{}: {size}", f.label()))
+                            .clicked()
+                        {
+                            picked = Some((*f, *r));
                         }
-                    ))
-                    .color(t.text_dim),
-                )
-                .wrap(),
-            );
+                    }
+                })
+                .response
+                .on_hover_text(
+                    "La misura del lavoro tagliato: l'abbondanza si crea attorno a questo riquadro, \
+                     e il resto della pagina si toglie",
+                );
+            if let Some((f, r)) = picked {
+                self.finish_choice = Some(f);
+                self.bleed_sides = propose(self.bleed_amount, r);
+            }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Abbondanza").color(t.text_dim));
@@ -1198,7 +1333,7 @@ impl PathTool {
                         }),
                 );
                 if resp.changed() {
-                    self.bleed_sides = propose(self.bleed_amount);
+                    self.bleed_sides = propose(self.bleed_amount, finished);
                 }
             });
             ui.add_space(4.0);
@@ -1210,8 +1345,8 @@ impl PathTool {
                     for (i, name) in names.iter().enumerate() {
                         if let Some(side) = self.bleed_sides.get_mut(i) {
                             let have = c
-                                .bleed
-                                .and_then(|b| b.get(i).copied())
+                                .content
+                                .and_then(|content| bleed_beyond(finished, content).get(i).copied())
                                 .map(|v| format!("c'è {} mm", format_number(v, 1, true)))
                                 .unwrap_or_default();
                             ui.add(crate::fluent::checkbox(side, *name)).on_hover_text(have);
@@ -1271,20 +1406,21 @@ impl PathTool {
                     .iter()
                     .flat_map(|(_, _, g)| g.ids.iter().copied())
                     .collect();
-                if from == "filetto"
+                if from == Finish::Hairline
                     && let Some(g) = c.suspects.first()
                 {
                     die.extend(g.ids.iter().copied());
                 }
-                request = Some(Request::Bleed(
-                    BleedSpec {
+                request = Some(Request::Bleed {
+                    spec: BleedSpec {
                         finished,
                         amount: self.bleed_amount,
                         sides: self.bleed_sides,
                         mode: self.bleed_mode,
                     },
                     die,
-                ));
+                    paper: c.paper.clone(),
+                });
             }
         });
         request
