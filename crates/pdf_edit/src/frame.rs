@@ -270,10 +270,20 @@ fn source(doc: &Document, index: usize) -> Result<Source, EditError> {
 
 /// Il modulo: il contenuto `body` della pagina con le sue risorse, così com'è.
 fn page_form(doc: &mut Document, src: &Source, body: &[u8]) -> ObjRef {
+    page_form_padded(doc, src, body, 0.0)
+}
+
+/// Come [`page_form`], con il riquadro del modulo più largo di `pad` punti per lato: quello che
+/// esce dalla pagina di prima (la grafica allargata nell'abbondanza) resta visibile.
+fn page_form_padded(doc: &mut Document, src: &Source, body: &[u8], pad: f64) -> ObjRef {
     let mut form = Dict::new();
     form.set(b"Type".to_vec(), Object::name("XObject"));
     form.set(b"Subtype".to_vec(), Object::name("Form"));
-    form.set(b"BBox".to_vec(), rect_object(src.crop));
+    let c = src.crop;
+    form.set(
+        b"BBox".to_vec(),
+        rect_object([c[0] - pad, c[1] - pad, c[2] + pad, c[3] + pad]),
+    );
     form.set(
         b"Matrix".to_vec(),
         Object::Array(src.upright.iter().map(|v| Object::Real(*v)).collect()),
@@ -1047,7 +1057,7 @@ pub(crate) fn bleed_boxes(
     let b = mm_to_pt(amount);
     let r = [f[0] - b, f[1] - b, f[2] + b, f[3] + b];
     let body = content(doc, src.page, number)?;
-    let form = page_form(doc, &src, &body);
+    let form = page_form_padded(doc, &src, &body, 2.0 * b);
     let ops = format!("q 1 0 0 1 {} {} cm /{FORM_NAME} Do Q\n", num(-r[0]), num(-r[1]));
     let (width, height) = (r[2] - r[0], r[3] - r[1]);
     let place: Matrix = [1.0, 0.0, 0.0, 1.0, -r[0], -r[1]];

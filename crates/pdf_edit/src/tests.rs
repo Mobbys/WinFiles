@@ -1359,6 +1359,31 @@ fn oggetti_mascherati_da_un_cerchio_si_allargano_lungo_il_cerchio() {
     let mid = (size / 2.0) as u32;
     let out = (100.0 + mm_to_pt(2.5)) as u32;
     assert!(is_red(pixel(&img, mid - out, mid)));
-    assert!(is_blue(pixel(&img, mid + out, mid)));
+    assert!(
+        is_blue(pixel(&img, mid + out, mid)),
+        "{:?}",
+        pixel(&img, mid + out, mid)
+    );
     assert!(is_white(pixel(&img, 3, 3)));
+}
+
+#[test]
+fn gli_oggetti_sovrapposti_si_allargano_solo_fuori() {
+    // Due quadrati che si sovrappongono: il blu sopra copre metà del rosso.
+    let mut e = editor(&[page(
+        [0.0, 0.0, 300.0, 200.0],
+        0,
+        "1 0 0 rg 50 50 100 100 re f 0 0 1 rg 100 50 100 100 re f",
+    )]);
+    let scan = e.scan_page(0).unwrap();
+    let ids: Vec<PathId> = scan.paths.iter().map(|p| p.id).collect();
+    e.add_shaped_bleed(0, 3.0, &ids, &[], &[], &ids).unwrap();
+    let img = render(&reread(&e), 0);
+    let b = mm_to_pt(3.0);
+    // Dentro, il bordo tra rosso e blu è dov'era (x = 100 della pagina di prima).
+    let at = |x: f64, y: f64| pixel(&img, (x - 50.0 + b) as u32, (150.0 - y + b) as u32);
+    assert!(is_red(at(98.0, 100.0)) && is_blue(at(102.0, 100.0)));
+    // Fuori: sopra il rosso c'è rosso, sopra il blu c'è blu, divisi dove si dividono dentro.
+    assert!(is_red(at(98.0, 152.0)) && is_blue(at(102.0, 152.0)));
+    assert!(is_red(at(48.0, 100.0)) && is_blue(at(202.0, 100.0)));
 }

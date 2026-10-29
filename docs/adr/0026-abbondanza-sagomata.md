@@ -41,7 +41,11 @@ al suo posto con lo stesso colore, come curve morbide che passano per i punti de
 semplificato a 0,05 mm (`paths::grow`). Se gli sfondi scelti stanno dentro una maschera (un
 tracciato che ritaglia, come i "gruppi di ritaglio" di Illustrator), si allarga allo stesso modo
 anche la maschera: la lettura della pagina tiene, per ogni tracciato, le maschere che lo
-ritagliano, e il formato finito è la parte che si vede dentro la maschera. Resta un tracciato solo, liscio, che si modifica come gli
+ritagliano, e il formato finito è la parte che si vede dentro la maschera. Gli oggetti scelti si allargano solo
+fuori dal formato finito (l'unione di quello che se ne vede), e ognuno solo davanti al pezzo di
+bordo che fa lui: il bordo si divide lato per lato secondo l'oggetto che si vede appena dentro,
+e la fascia fuori da quel lato va a lui, divisa lungo la perpendicolare dove il bordo cambia
+oggetto. Dentro, dove gli oggetti si sovrappongono, il disegno resta com'era. Resta un tracciato solo, liscio, che si modifica come gli
 altri in Illustrator; la pagina prende formato finito e abbondanza senza ritagli.
 
 ## Conseguenze

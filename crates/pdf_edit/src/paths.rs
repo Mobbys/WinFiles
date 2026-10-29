@@ -1151,6 +1151,40 @@ pub(crate) fn only(doc: &Document, page: usize, ids: &[PathId]) -> Result<Vec<u8
     Ok(serialize_ops(&out))
 }
 
+/// Il punto `p` sta dentro le forme (regola pari-dispari su tutti i contorni).
+fn contains(shapes: &[Shape], p: [f64; 2]) -> bool {
+    let mut inside = false;
+    for c in shapes.iter().flatten() {
+        let k = c.len();
+        for i in 0..k {
+            let (Some(a), Some(b)) = (c.get(i), c.get((i + 1) % k)) else {
+                continue;
+            };
+            if (a[1] > p[1]) != (b[1] > p[1]) {
+                let x = a[0] + (p[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0]);
+                if x > p[0] {
+                    inside = !inside;
+                }
+            }
+        }
+    }
+    inside
+}
+
+/// Il contorno girato in senso antiorario, per unirlo ad altri con la regola non-zero.
+fn ccw(mut c: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
+    if signed_area(&c) < 0.0 {
+        c.reverse();
+    }
+    c
+}
+
+/// Di quanto (mm) l'abbondanza di un oggetto entra nella forma, per saldarsi a lui.
+const SEAM_MM: f64 = 0.01;
+
+/// Quanto (mm) dentro il bordo del formato finito si guarda chi lo fa.
+const EDGE_MM: f64 = 0.05;
+
 /// Di quanto (mm) il contorno allargato può scostarsi dai suoi punti quando diventa curve.
 const SMOOTH_TOLERANCE_MM: f64 = 0.05;
 
@@ -1211,7 +1245,9 @@ pub(crate) fn grow(
     round: bool,
 ) -> Result<bool, EditError> {
     use i_overlay::core::fill_rule::FillRule;
+    use i_overlay::core::overlay_rule::OverlayRule;
     use i_overlay::float::simplify::SimplifyShape;
+    use i_overlay::float::single::SingleFloatOverlay;
     use i_overlay::mesh::float::outline::offset::OutlineOffset;
     use i_overlay::mesh::float::style::{LineJoin, OutlineStyle};
 
@@ -1260,7 +1296,223 @@ pub(crate) fn grow(
         LineJoin::Miter(0.1)
     };
     let n = |v: f64| pdfcraft_content::num(v);
-    for p in chosen.iter().chain(&masks) {
+    let style = OutlineStyle::new(amount).line_join(join.clone());
+    // La regola di riempimento (o di ritaglio) di un tracciato e la sua forma, pulita.
+    let shape_of = |p: &PathInfo| -> Option<Vec<Shape>> {
+        let sp = spots.get(&p.id.op)?;
+        let paint = ops.get(p.id.op)?;
+        let even_odd = if p.clips {
+            ops.get(sp.start..p.id.op)?
+                .iter()
+                .any(|o| o.op.as_slice() == b"W*")
+        } else {
+            matches!(paint.op.as_slice(), b"f*" | b"B*" | b"b*")
+        };
+        let own: Vec<Vec<[f64; 2]>> = p
+            .parts
+            .iter()
+            .filter(|part| part.points.len() >= 3)
+            .map(|part| part.points.clone())
+            .collect();
+        Some(own.simplify_shape(if even_odd {
+            FillRule::EvenOdd
+        } else {
+            FillRule::NonZero
+        }))
+    };
+    // Le forme nuove. Le maschere si allargano tutte; ogni oggetto scelto solo fuori dal formato
+    // finito (l'unione di quello che si vede degli scelti) e solo dove è lui a fare il bordo:
+    // dentro, dove gli oggetti si sovrappongono, il disegno resta com'era.
+    let mut planned: Vec<(&PathInfo, Vec<Shape>)> = Vec::new();
+    for m in &masks {
+        let Some(shape) = shape_of(m) else {
+            return Ok(false);
+        };
+        planned.push((m, shape.outline(&style)));
+    }
+    let mut seen: Vec<(&PathInfo, Vec<Shape>, Vec<Shape>)> = Vec::new();
+    for p in &chosen {
+        let Some(shape) = shape_of(p) else {
+            return Ok(false);
+        };
+        let visible = visible_shape(&scanned, p, shape.clone());
+        seen.push((p, shape, visible));
+    }
+    let mut finished: Vec<Shape> = Vec::new();
+    for (_, _, v) in &seen {
+        finished = if finished.is_empty() {
+            v.clone()
+        } else {
+            finished.overlay(v, OverlayRule::Union, FillRule::NonZero)
+        };
+    }
+    // Gli oggetti che si toccano possono lasciare tra loro una fessura di arrotondamento: si chiude.
+    let finished = finished
+        .outline(&OutlineStyle::new(SEAM_MM).line_join(LineJoin::Miter(0.1)))
+        .outline(&OutlineStyle::new(-SEAM_MM).line_join(LineJoin::Miter(0.1)));
+    // Quello che si vede di ogni scelto: senza gli scelti che gli stanno sopra.
+    let mine: Vec<Vec<Shape>> = seen
+        .iter()
+        .map(|(p, _, visible)| {
+            let above: Vec<Vec<[f64; 2]>> = seen
+                .iter()
+                .filter(|(q, _, _)| q.id.op > p.id.op)
+                .flat_map(|(_, _, v)| v.iter().flatten().cloned())
+                .collect();
+            if above.is_empty() {
+                visible.clone()
+            } else {
+                visible.overlay(&above, OverlayRule::Difference, FillRule::NonZero)
+            }
+        })
+        .collect();
+    // Lungo il bordo del formato finito, lato per lato: chi lo fa (quello che si vede appena
+    // dentro) prende la fascia fuori da quel lato, fino all'abbondanza; negli angoli sporgenti
+    // tra due lati dello stesso oggetto anche lo spicchio. Dove il bordo passa da un oggetto
+    // all'altro la fascia si divide lungo la perpendicolare, senza punte.
+    let mut bands: Vec<Vec<Vec<[f64; 2]>>> = vec![Vec::new(); seen.len()];
+    // I settori arrivano oltre l'abbondanza: il bordo fuori lo dà l'allargamento esatto della forma.
+    let reach = amount * 1.5 + 1.0;
+    // La fascia attorno, che entra di un soffio nella forma: così si salda all'oggetto senza fili.
+    let inner = finished.outline(&OutlineStyle::new(-SEAM_MM));
+    let ring = finished
+        .outline(&style)
+        .overlay(&inner, OverlayRule::Difference, FillRule::NonZero);
+    // I punti dove il bordo passa da un oggetto all'altro: i vertici di quello che si vede di ogni
+    // oggetto che cadono sul bordo. Si aggiungono al contorno, così ogni lato ha un solo padrone.
+    let corners: Vec<[f64; 2]> = mine.iter().flatten().flatten().flatten().copied().collect();
+    let split = |c: &Vec<[f64; 2]>| -> Vec<[f64; 2]> {
+        let k = c.len();
+        let mut out = Vec::with_capacity(k);
+        for i in 0..k {
+            let (Some(&a), Some(&b)) = (c.get(i), c.get((i + 1) % k)) else {
+                continue;
+            };
+            out.push(a);
+            let l = dist(a, b);
+            if l < 1e-9 {
+                continue;
+            }
+            let u = [(b[0] - a[0]) / l, (b[1] - a[1]) / l];
+            let (x0, x1) = (a[0].min(b[0]) - 1e-3, a[0].max(b[0]) + 1e-3);
+            let (y0, y1) = (a[1].min(b[1]) - 1e-3, a[1].max(b[1]) + 1e-3);
+            let mut on: Vec<(f64, [f64; 2])> = corners
+                .iter()
+                .filter(|q| q[0] >= x0 && q[0] <= x1 && q[1] >= y0 && q[1] <= y1)
+                .filter_map(|q| {
+                    let t = (q[0] - a[0]) * u[0] + (q[1] - a[1]) * u[1];
+                    let off = ((q[0] - a[0]) * u[1] - (q[1] - a[1]) * u[0]).abs();
+                    (off < 1e-4 && t > 1e-4 && t < l - 1e-4).then_some((t, *q))
+                })
+                .collect();
+            on.sort_by(|x, y| x.0.total_cmp(&y.0));
+            out.extend(on.into_iter().map(|(_, q)| q));
+        }
+        out
+    };
+    for shape in &finished {
+        for c in shape {
+            let c = &split(c);
+            let k = c.len();
+            if k < 3 {
+                continue;
+            }
+            // La normale verso fuori dalla forma (nei buchi, verso dentro il buco): da che parte
+            // sta si guarda sul lato più lungo, con un punto appena fuori.
+            let longest = (0..k)
+                .filter_map(|i| Some((i, dist(*c.get(i)?, *c.get((i + 1) % k)?))))
+                .fold((0, 0.0), |acc, (i, l)| if l > acc.1 { (i, l) } else { acc });
+            let right = match (c.get(longest.0), c.get((longest.0 + 1) % k)) {
+                (Some(a), Some(b)) if longest.1 > 1e-9 => {
+                    let u = [(b[0] - a[0]) / longest.1, (b[1] - a[1]) / longest.1];
+                    let probe = [
+                        (a[0] + b[0]) / 2.0 + u[1] * EDGE_MM,
+                        (a[1] + b[1]) / 2.0 - u[0] * EDGE_MM,
+                    ];
+                    !contains(&finished, probe)
+                }
+                _ => continue,
+            };
+            let edge = |i: usize| -> Option<[[f64; 2]; 4]> {
+                let a = *c.get(i % k)?;
+                let b = *c.get((i + 1) % k)?;
+                let l = dist(a, b);
+                if l < 1e-9 {
+                    return None;
+                }
+                let u = [(b[0] - a[0]) / l, (b[1] - a[1]) / l];
+                let nrm = if right { [u[1], -u[0]] } else { [-u[1], u[0]] };
+                Some([a, b, u, nrm])
+            };
+            let owner = |i: usize| -> Option<usize> {
+                let [a, b, _, nrm] = edge(i)?;
+                let probe = [
+                    (a[0] + b[0]) / 2.0 - nrm[0] * EDGE_MM,
+                    (a[1] + b[1]) / 2.0 - nrm[1] * EDGE_MM,
+                ];
+                mine.iter().position(|m| contains(m, probe))
+            };
+            let owners: Vec<Option<usize>> = (0..k).map(owner).collect();
+            for i in 0..k {
+                let (Some([a, b, u, nrm]), Some(Some(o))) = (edge(i), owners.get(i)) else {
+                    continue;
+                };
+                let Some(list) = bands.get_mut(*o) else {
+                    continue;
+                };
+                // Un soffio oltre i due capi, così tra i pezzi non resta un filo.
+                let e = 0.01;
+                let (a, b) = (
+                    [a[0] - u[0] * e, a[1] - u[1] * e],
+                    [b[0] + u[0] * e, b[1] + u[1] * e],
+                );
+                let (a, b) = (
+                    [a[0] - nrm[0] * SEAM_MM * 2.0, a[1] - nrm[1] * SEAM_MM * 2.0],
+                    [b[0] - nrm[0] * SEAM_MM * 2.0, b[1] - nrm[1] * SEAM_MM * 2.0],
+                );
+                list.push(ccw(vec![
+                    a,
+                    b,
+                    [b[0] + nrm[0] * reach, b[1] + nrm[1] * reach],
+                    [a[0] + nrm[0] * reach, a[1] + nrm[1] * reach],
+                ]));
+                // Lo spicchio con il lato dopo, se è dello stesso oggetto e l'angolo sporge.
+                let next = (i + 1) % k;
+                let (Some([v, _, _, n2]), Some(Some(o2))) = (edge(next), owners.get(next)) else {
+                    continue;
+                };
+                let turn = (n2[0] - nrm[0]) * u[0] + (n2[1] - nrm[1]) * u[1];
+                if o2 != o || turn <= 1e-9 {
+                    continue;
+                }
+                let mut fan = vec![v];
+                let steps = 8;
+                for j in 0..=steps {
+                    let t = f64::from(j) / f64::from(steps);
+                    let d = [nrm[0] * (1.0 - t) + n2[0] * t, nrm[1] * (1.0 - t) + n2[1] * t];
+                    let l = d[0].hypot(d[1]);
+                    if l > 1e-9 {
+                        let r = reach / (std::f64::consts::PI / 16.0).cos();
+                        fan.push([v[0] + d[0] / l * r, v[1] + d[1] / l * r]);
+                    }
+                }
+                list.push(ccw(fan));
+            }
+        }
+    }
+    for ((p, shape, _), band) in seen.iter().zip(bands) {
+        if band.is_empty() {
+            continue;
+        }
+        let out =
+            band.simplify_shape(FillRule::NonZero)
+                .overlay(&ring, OverlayRule::Intersect, FillRule::NonZero);
+        if out.is_empty() {
+            continue;
+        }
+        planned.push((p, shape.overlay(&out, OverlayRule::Union, FillRule::NonZero)));
+    }
+    for (p, grown) in &planned {
         let (Some(sp), Some(paint)) = (spots.get(&p.id.op), ops.get(p.id.op)) else {
             return Ok(false);
         };
@@ -1276,25 +1528,6 @@ pub(crate) fn grow(
         } else {
             vec![Op::new("f", Vec::new())]
         };
-        let even_odd = if p.clips {
-            tail.first().is_some_and(|w| w.op.as_slice() == b"W*")
-        } else {
-            matches!(paint.op.as_slice(), b"f*" | b"B*" | b"b*")
-        };
-        let rule = if even_odd {
-            FillRule::EvenOdd
-        } else {
-            FillRule::NonZero
-        };
-        let own: Vec<Vec<[f64; 2]>> = p
-            .parts
-            .iter()
-            .filter(|part| part.points.len() >= 3)
-            .map(|part| part.points.clone())
-            .collect();
-        let shapes = own.simplify_shape(rule);
-        let style = OutlineStyle::new(amount).line_join(join.clone());
-        let grown = shapes.outline(&style);
         let Some(back) = p.to_mm.invert() else {
             return Ok(false);
         };
