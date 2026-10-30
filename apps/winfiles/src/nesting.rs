@@ -29,7 +29,7 @@ const MAX_PAGES: usize = 200;
 const CELL_MIN: f32 = 76.0;
 const FIELDS_H: f32 = 30.0;
 /// Le scale dei file disegnati in piccolo: 1:N diventa N volte più grande sul foglio.
-const SCALES: [u32; 9] = [1, 2, 4, 5, 10, 20, 25, 50, 100];
+const SCALES: [u32; 10] = [1, 2, 4, 5, 10, 20, 25, 30, 50, 100];
 const BAR_ROW: f32 = 38.0;
 /// Spazio sotto il foglio per la sua misura.
 const CAPTION_H: f32 = 22.0;
