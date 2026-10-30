@@ -6484,7 +6484,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "winfiles"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "arboard",
  "craft-print",
@@ -6511,7 +6511,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-formats"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "hayro-syntax",
  "photocraft-heif",
@@ -6524,7 +6524,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-geom"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "proptest",
  "serde",
@@ -6532,7 +6532,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-image-edit"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "i_overlay",
  "image",
@@ -6549,7 +6549,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-layout"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "proptest",
  "thiserror 2.0.21",
@@ -6559,7 +6559,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-menu11"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "windows",
  "windows-core",
@@ -6568,7 +6568,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-model"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "serde",
  "serde_json",
@@ -6578,7 +6578,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-nest"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "i_overlay",
  "thiserror 2.0.21",
@@ -6586,7 +6586,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-pdf-edit"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "hayro",
  "i_overlay",
@@ -6599,7 +6599,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-pdf-out"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "image",
  "krilla",
@@ -6613,7 +6613,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-photo"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "image",
  "photocraft-cms",
@@ -6624,7 +6624,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-scene"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "winfiles-geom",
  "winfiles-model",
@@ -6632,7 +6632,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-thumbs"
-version = "0.2.20"
+version = "0.2.21"
 dependencies = [
  "hayro",
  "image",
@@ -6886,7 +6886,7 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "xtask"
-version = "0.2.20"
+version = "0.2.21"
 
 [[package]]
 name = "yoke"
