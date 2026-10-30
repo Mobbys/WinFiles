@@ -276,7 +276,7 @@ impl Default for PathTool {
             bleed_follow: true,
             shape_known: None,
             die_name: "Taglio".into(),
-            die_width: 0.1,
+            die_width: 0.5,
             die_cmyk: Role::Cut.cmyk(),
             die_hue: 0.0,
             die_sat: 0.0,

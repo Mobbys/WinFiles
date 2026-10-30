@@ -62,6 +62,9 @@ pub struct DieSettings {
     pub ink_cmyk: Option<[f64; 4]>,
     /// Lo spessore della linea, in mm.
     pub width: f64,
+    /// Per rettangolo e angoli tondi: di quanto la fustella sta fuori dal formato finito
+    /// (negativo: dentro), in mm.
+    pub rect_offset: f64,
 }
 
 impl Default for DieSettings {
@@ -80,7 +83,8 @@ impl Default for DieSettings {
             holes: false,
             ink: String::new(),
             ink_cmyk: None,
-            width: 0.1,
+            width: 0.5,
+            rect_offset: 0.0,
         }
     }
 }
@@ -92,7 +96,12 @@ impl DieSettings {
         self.radius = fix(self.radius, 0.0, 500.0, 5.0);
         self.tolerance = fix(self.tolerance, 0.0, 100.0, 10.0);
         self.smooth = fix(self.smooth, 0.0, 20.0, 0.0);
-        self.width = fix(self.width, 0.0, 5.0, 0.1);
+        // 0,1 mm era lo spessore di partenza fino alla 0.2.23: ora è 0,5 mm.
+        if (self.width - 0.1).abs() < 1e-9 {
+            self.width = 0.5;
+        }
+        self.width = fix(self.width, 0.0, 5.0, 0.5);
+        self.rect_offset = fix(self.rect_offset, -50.0, 50.0, 0.0);
         self.ink = self.ink.trim().chars().take(127).collect();
         if let Some(c) = &mut self.ink_cmyk {
             for v in c.iter_mut() {
@@ -221,8 +230,12 @@ impl DieTool {
         let t = picture.trim_mm();
         match self.settings.shape {
             DieShape::None => None,
-            DieShape::Rect => Some(vec![rounded_rect(t, 0.0)]),
-            DieShape::Rounded => Some(vec![rounded_rect(t, self.settings.radius)]),
+            DieShape::Rect => Some(vec![rounded_rect(grow_rect(t, self.settings.rect_offset)?, 0.0)]),
+            // Il raggio è quello della fustella, anche spostata dal formato finito.
+            DieShape::Rounded => Some(vec![rounded_rect(
+                grow_rect(t, self.settings.rect_offset)?,
+                self.settings.radius,
+            )]),
             DieShape::Contour => picture
                 .cut_mm()
                 .or_else(|| self.traced(owner).and_then(|r| r.as_ref().ok()).cloned()),
@@ -489,15 +502,23 @@ impl DieTool {
                 hint_color(ui, &e, t.warning);
             }
         }
-        if s.shape == DieShape::Rounded {
+        if matches!(s.shape, DieShape::Rect | DieShape::Rounded) {
             ui.add_space(6.0);
             egui::Grid::new("raggio-fustella-immagine")
                 .num_columns(2)
                 .spacing(egui::vec2(10.0, 8.0))
                 .show(ui, |ui| {
-                    let max = (finished.w.min(finished.h) / 2.0).max(0.0);
-                    length_row(ui, "Raggio", &mut s.radius, Unit::Mm, 0.0..=max.max(0.1));
+                    let lim = (finished.w.min(finished.h) / 2.0 - 0.5).max(0.0);
+                    length_row(ui, "Distanza", &mut s.rect_offset, Unit::Mm, -lim..=50.0);
+                    if s.shape == DieShape::Rounded {
+                        let max = (finished.w.min(finished.h) / 2.0).max(0.0);
+                        length_row(ui, "Raggio", &mut s.radius, Unit::Mm, 0.0..=max.max(0.1));
+                    }
                 });
+            hint(
+                ui,
+                "Distanza dal formato finito: positiva fuori, negativa dentro.",
+            );
         }
         if s.shape != DieShape::None {
             ui.add_space(10.0);
@@ -796,6 +817,12 @@ fn write_pdf(
         file.draw_die(0, lines, die).map_err(|e| e.to_string())?;
     }
     file.save(path).map_err(|e| e.to_string())
+}
+
+/// Il rettangolo `r` allargato di `by` mm per lato (stretto se negativo), se resta un rettangolo.
+fn grow_rect(r: [f64; 4], by: f64) -> Option<[f64; 4]> {
+    let g = [r[0] - by, r[1] - by, r[2] + by, r[3] + by];
+    (g[2] - g[0] > 0.1 && g[3] - g[1] > 0.1).then_some(g)
 }
 
 /// Un rettangolo `r` (sinistra, alto, destra, basso) con gli angoli tondi di raggio `radius`,
