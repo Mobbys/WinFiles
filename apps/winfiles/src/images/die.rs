@@ -1,6 +1,7 @@
 //! Fustella e abbondanza sulle immagini (ADR 0028): il pannello a destra di Modifica immagini.
 //! L'abbondanza si fa con i pixel (`Op::Bleed`, che si annulla come le altre modifiche); la
-//! fustella, rettangolare o con gli angoli tondi sul formato finito, si scrive in tinta piatta nel
+//! fustella, rettangolare o con gli angoli tondi sul formato finito, o che segue il contorno del
+//! soggetto (staccato da un colore di sfondo o dalla trasparenza), si scrive in tinta piatta nel
 //! PDF che si salva da qui, con l'immagine alla sua risoluzione, TrimBox e BleedBox.
 
 use std::path::{Path, PathBuf};
@@ -9,7 +10,7 @@ use std::sync::mpsc;
 use egui::{Color32, Pos2, Rect, Stroke, pos2};
 use serde::{Deserialize, Serialize};
 use winfiles_geom::{Unit, format_length, format_size};
-use winfiles_image_edit::{BleedMethod, Format, Op, Picture, SaveOptions};
+use winfiles_image_edit::{Background, BleedMethod, ContourSpec, Format, Op, Picture, SaveOptions};
 use winfiles_pdf_edit::{NewDie, PdfFile};
 
 use crate::app::segmented;
@@ -25,7 +26,11 @@ pub enum DieShape {
     #[default]
     Rect,
     Rounded,
+    /// Il contorno del soggetto, staccato dallo sfondo.
+    Contour,
 }
+
+type Contour = Vec<[f64; 2]>;
 
 /// Le scelte del pannello, ricordate nelle impostazioni.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -37,6 +42,18 @@ pub struct DieSettings {
     pub shape: DieShape,
     /// Raggio degli angoli tondi, in mm.
     pub radius: f64,
+    /// Per il contorno: lo sfondo è la trasparenza invece di un colore.
+    pub transparent: bool,
+    /// Il colore dello sfondo.
+    pub background: [u8; 3],
+    /// Quanto un pixel può scostarsi dal colore dello sfondo, in percento.
+    pub tolerance: f64,
+    /// Di quanto la fustella sta fuori dal soggetto (negativo: dentro), in mm.
+    pub offset: f64,
+    /// Pezzi e fori più piccoli di questa area si ignorano, in mm².
+    pub min_area: f64,
+    /// Taglia anche i fori dentro il soggetto.
+    pub holes: bool,
 }
 
 impl Default for DieSettings {
@@ -46,6 +63,12 @@ impl Default for DieSettings {
             mirror: true,
             shape: DieShape::Rect,
             radius: 5.0,
+            transparent: false,
+            background: [255, 255, 255],
+            tolerance: 10.0,
+            offset: 2.0,
+            min_area: 4.0,
+            holes: false,
         }
     }
 }
@@ -55,7 +78,24 @@ impl DieSettings {
         let fix = |v: f64, lo: f64, hi: f64, def: f64| if v.is_finite() { v.clamp(lo, hi) } else { def };
         self.amount = fix(self.amount, 0.5, 100.0, 3.0);
         self.radius = fix(self.radius, 0.0, 500.0, 5.0);
+        self.tolerance = fix(self.tolerance, 0.0, 100.0, 10.0);
+        self.offset = fix(self.offset, -20.0, 50.0, 2.0);
+        self.min_area = fix(self.min_area, 0.0, 10_000.0, 4.0);
         self
+    }
+
+    fn spec(&self) -> ContourSpec {
+        ContourSpec {
+            background: if self.transparent {
+                Background::Transparent
+            } else {
+                Background::Color(self.background)
+            },
+            tolerance: self.tolerance,
+            offset: self.offset,
+            min_area: self.min_area,
+            holes: self.holes,
+        }
     }
 
     fn method(&self) -> BleedMethod {
@@ -76,11 +116,19 @@ pub enum DieAction {
     Close,
 }
 
+/// Il contorno calcolato: per quale immagine e quali scelte, e com'è venuto.
+type TraceResult = Result<Vec<Contour>, String>;
+type Traced = (String, TraceResult);
+
 #[derive(Default)]
 pub struct DieTool {
     pub open: bool,
     pub settings: DieSettings,
     saving: Option<mpsc::Receiver<Result<PathBuf, String>>>,
+    /// Il contagocce acceso: il prossimo clic sull'immagine sceglie il colore dello sfondo.
+    pub picking: bool,
+    traced: Option<Traced>,
+    tracing: Option<(String, mpsc::Receiver<TraceResult>)>,
 }
 
 impl DieTool {
@@ -98,13 +146,60 @@ impl DieTool {
         })
     }
 
+    /// La chiave del contorno: l'immagine (`owner`, che cambia a ogni modifica) e le scelte.
+    fn key(&self, owner: u64) -> String {
+        format!("{owner}:{:?}", self.settings.spec())
+    }
+
+    /// Tiene aggiornato il contorno del soggetto: lo ricalcola in un thread quando cambiano
+    /// l'immagine o le scelte. `owner` dice quale immagine e quale versione.
+    pub fn update(&mut self, picture: &Picture, owner: u64, wake: &egui::Context) {
+        if let Some((key, rx)) = &self.tracing
+            && let Ok(r) = rx.try_recv()
+        {
+            self.traced = Some((key.clone(), r));
+            self.tracing = None;
+        }
+        if !self.open || self.settings.shape != DieShape::Contour {
+            return;
+        }
+        let key = self.key(owner);
+        let done = self.traced.as_ref().is_some_and(|(k, _)| *k == key);
+        let running = self.tracing.as_ref().is_some_and(|(k, _)| *k == key);
+        if done || running || self.tracing.is_some() {
+            // Uno alla volta: finito questo, al prossimo disegno parte quello giusto.
+            return;
+        }
+        let picture = picture.clone();
+        let spec = self.settings.spec();
+        let (tx, rx) = mpsc::channel();
+        let wake = wake.clone();
+        let spawned = std::thread::Builder::new()
+            .name("contorno-immagine".into())
+            .spawn(move || {
+                let r = winfiles_image_edit::trace(&picture, &spec).map_err(|e| e.to_string());
+                let _ = tx.send(r);
+                wake.request_repaint();
+            });
+        if spawned.is_ok() {
+            self.tracing = Some((key, rx));
+        }
+    }
+
+    /// Il contorno calcolato per `owner` e le scelte di adesso, se è pronto.
+    fn traced(&self, owner: u64) -> Option<&Result<Vec<Contour>, String>> {
+        let key = self.key(owner);
+        self.traced.as_ref().filter(|(k, _)| *k == key).map(|(_, r)| r)
+    }
+
     /// La fustella in mm dell'immagine (dall'angolo in alto a sinistra), se se ne vuole una.
-    pub fn outline(&self, picture: &Picture) -> Option<Vec<[f64; 2]>> {
+    pub fn outline(&self, picture: &Picture, owner: u64) -> Option<Vec<Contour>> {
         let t = picture.trim_mm();
         match self.settings.shape {
             DieShape::None => None,
-            DieShape::Rect => Some(rounded_rect(t, 0.0)),
-            DieShape::Rounded => Some(rounded_rect(t, self.settings.radius)),
+            DieShape::Rect => Some(vec![rounded_rect(t, 0.0)]),
+            DieShape::Rounded => Some(vec![rounded_rect(t, self.settings.radius)]),
+            DieShape::Contour => self.traced(owner).and_then(|r| r.as_ref().ok()).cloned(),
         }
     }
 
@@ -112,6 +207,7 @@ impl DieTool {
         &mut self,
         ui: &mut egui::Ui,
         picture: &Picture,
+        owner: u64,
         inks: &[InkName],
         unit: Unit,
     ) -> Option<DieAction> {
@@ -130,6 +226,16 @@ impl DieTool {
             });
         });
         ui.add_space(8.0);
+        let traced = self.traced(owner).map(|r| {
+            r.as_ref()
+                .map(|c| (c.len(), winfiles_image_edit::contour_area(c) / 1_000_000.0))
+                .map_err(|e| {
+                    let mut c = e.chars();
+                    c.next()
+                        .map(|f| f.to_uppercase().chain(c).collect::<String>() + ".")
+                        .unwrap_or_default()
+                })
+        });
         let s = &mut self.settings;
         let f = picture.trim_mm();
         let finished = winfiles_geom::Size::new(f[2] - f[0], f[3] - f[1]);
@@ -211,10 +317,101 @@ impl DieTool {
             &mut s.shape,
             &[
                 (DieShape::Rect, "Rettangolo"),
-                (DieShape::Rounded, "Angoli tondi"),
+                (DieShape::Rounded, "Tondi"),
+                (DieShape::Contour, "Contorno"),
                 (DieShape::None, "Nessuna"),
             ],
         );
+        if s.shape == DieShape::Contour {
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Sfondo").color(t.text));
+            ui.add_space(2.0);
+            segmented(
+                ui,
+                "sfondo-fustella-immagine",
+                &mut s.transparent,
+                &[(false, "Colore"), (true, "Trasparente")],
+            );
+            if !s.transparent {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let swatch = ui
+                        .color_edit_button_srgb(&mut s.background)
+                        .on_hover_text("Il colore dello sfondo da togliere");
+                    // Un bordo, così anche il bianco sul pannello chiaro si vede.
+                    ui.painter().rect_stroke(
+                        swatch.rect,
+                        2.0,
+                        Stroke::new(1.0, t.field_border),
+                        egui::StrokeKind::Outside,
+                    );
+                    let label = if self.picking {
+                        "Clicca sull'immagine…"
+                    } else {
+                        "Contagocce"
+                    };
+                    if crate::fluent::toggle(ui, self.picking, label)
+                        .on_hover_text("Prendi il colore dello sfondo con un clic sull'immagine")
+                        .clicked()
+                    {
+                        self.picking = !self.picking;
+                    }
+                    if ui
+                        .button("Dall'angolo")
+                        .on_hover_text("Il colore del pixel in alto a sinistra")
+                        .clicked()
+                        && let Some(p) = pixel(picture, 0, 0)
+                    {
+                        s.background = p;
+                    }
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Tolleranza").color(t.text));
+                    ui.add(
+                        crate::fluent::Slider::new(&mut s.tolerance, 0.0..=60.0)
+                            .suffix(" %")
+                            .fixed_decimals(0),
+                    )
+                    .on_hover_text("Più alta, più colori vicini allo sfondo si tolgono (ombre, sfumature)");
+                });
+            }
+            ui.add_space(6.0);
+            egui::Grid::new("contorno-fustella-immagine")
+                .num_columns(2)
+                .spacing(egui::vec2(10.0, 8.0))
+                .show(ui, |ui| {
+                    length_row(ui, "Distanza", &mut s.offset, Unit::Mm, -20.0..=50.0);
+                });
+            ui.add(crate::fluent::checkbox(
+                &mut s.holes,
+                "Taglia anche i fori interni",
+            ))
+            .on_hover_text("Il centro di una O, gli spazi chiusi del colore dello sfondo");
+            let state = match traced {
+                Some(Ok((n, area))) => {
+                    hint(
+                        ui,
+                        &format!(
+                            "{} {} · {} · {} fuori dal soggetto (negativa: dentro).",
+                            n,
+                            if n == 1 { "contorno" } else { "contorni" },
+                            winfiles_geom::format_area(area),
+                            format_length(s.offset, Unit::Mm)
+                        ),
+                    );
+                    None
+                }
+                Some(Err(e)) => Some(e),
+                None => {
+                    hint(ui, "Calcolo del contorno…");
+                    None
+                }
+            };
+            if let Some(e) = state {
+                hint_color(ui, &e, t.warning);
+            }
+        }
         if s.shape == DieShape::Rounded {
             ui.add_space(6.0);
             egui::Grid::new("raggio-fustella-immagine")
@@ -226,16 +423,22 @@ impl DieTool {
                 });
         }
         let ink = cut_ink(inks);
-        if s.shape != DieShape::None {
-            hint(
+        match s.shape {
+            DieShape::None => {}
+            DieShape::Contour => hint(
+                ui,
+                &format!("In tinta piatta «{}» in sovrastampa, linea da 0,1 mm.", ink.name),
+            ),
+            _ => hint(
                 ui,
                 &format!(
                     "Sul formato finito, in tinta piatta «{}» in sovrastampa, linea da 0,1 mm.",
                     ink.name
                 ),
-            );
+            ),
         }
         ui.add_space(14.0);
+        let ready = s.shape != DieShape::Contour || self.outline(picture, owner).is_some();
         let save = egui::Button::image_and_text(
             crate::icons::image("save", 18.0, t.on_primary),
             egui::RichText::new("Salva PDF con fustella…")
@@ -245,7 +448,7 @@ impl DieTool {
         .fill(t.primary)
         .min_size(egui::vec2(0.0, 34.0));
         if ui
-            .add_enabled(!self.busy(), save)
+            .add_enabled(!self.busy() && ready, save)
             .on_hover_text("Un PDF alla misura dell'immagine, con l'immagine a piena risoluzione, la fustella, TrimBox e BleedBox: pronto per Onyx e per il nesting")
             .clicked()
         {
@@ -267,6 +470,7 @@ impl DieTool {
     pub fn save(
         &mut self,
         picture: &Picture,
+        owner: u64,
         source: &Path,
         inks: &[InkName],
         wake: &egui::Context,
@@ -289,7 +493,7 @@ impl DieTool {
             path.as_mut_os_string().push(".pdf");
         }
         let picture = picture.clone();
-        let outline = self.outline(&picture);
+        let outline = self.outline(&picture, owner);
         let ink = cut_ink(inks);
         let die = NewDie {
             name: ink.name.clone(),
@@ -316,7 +520,7 @@ impl DieTool {
 
     /// Sull'anteprima: il formato finito tratteggiato e la fustella. `paper` è l'immagine a
     /// schermo.
-    pub fn paint(&self, ui: &egui::Ui, paper: Rect, picture: &Picture, inks: &[InkName]) {
+    pub fn paint(&self, ui: &egui::Ui, paper: Rect, picture: &Picture, owner: u64, inks: &[InkName]) {
         let full = picture.size_mm();
         if full.w <= 0.0 || full.h <= 0.0 {
             return;
@@ -351,15 +555,50 @@ impl DieTool {
                 }
             }
         }
-        if let Some(line) = self.outline(picture) {
-            let pts: Vec<Pos2> = line.iter().map(|p| to(*p)).collect();
+        if let Some(lines) = self.outline(picture, owner) {
             let c = cut_ink(inks).color();
             let rgb =
                 |v: f64, kk: f64| ((1.0 - v.clamp(0.0, 1.0)) * (1.0 - kk.clamp(0.0, 1.0)) * 255.0) as u8;
             let color = Color32::from_rgb(rgb(c[0], c[3]), rgb(c[1], c[3]), rgb(c[2], c[3]));
-            painter.add(egui::Shape::closed_line(pts, Stroke::new(1.5, color)));
+            for line in lines {
+                let pts: Vec<Pos2> = line.iter().map(|p| to(*p)).collect();
+                // Un filo chiaro sotto, così la linea si vede anche su un fondo dello stesso colore.
+                painter.add(egui::Shape::closed_line(
+                    pts.clone(),
+                    Stroke::new(3.0, Color32::from_white_alpha(170)),
+                ));
+                painter.add(egui::Shape::closed_line(pts, Stroke::new(1.5, color)));
+            }
         }
     }
+
+    /// Il contagocce: un clic sull'immagine a schermo (`paper`) prende il colore dello sfondo.
+    pub fn pick(&mut self, picture: &Picture, paper: Rect, at: Pos2) {
+        if paper.width() <= 0.0 || paper.height() <= 0.0 {
+            return;
+        }
+        let x = ((at.x - paper.left()) / paper.width() * picture.width() as f32).floor();
+        let y = ((at.y - paper.top()) / paper.height() * picture.height() as f32).floor();
+        if x >= 0.0
+            && y >= 0.0
+            && let Some(p) = pixel(picture, x as u32, y as u32)
+        {
+            self.settings.background = p;
+            self.settings.transparent = false;
+        }
+        self.picking = false;
+    }
+}
+
+/// Il colore RGB di un pixel dell'immagine.
+fn pixel(picture: &Picture, x: u32, y: u32) -> Option<[u8; 3]> {
+    use image::GenericImageView;
+    let img = picture.image();
+    if x >= img.width() || y >= img.height() {
+        return None;
+    }
+    let p = img.get_pixel(x, y).0;
+    Some([p[0], p[1], p[2]])
 }
 
 /// La tinta del taglio: la prima con il ruolo Taglio, o «Taglio».
@@ -377,7 +616,7 @@ fn cut_ink(inks: &[InkName]) -> InkName {
 /// Il PDF di una pagina: l'immagine a tutta pagina, il formato finito come TrimBox e la fustella.
 fn write_pdf(
     picture: &Picture,
-    outline: Option<&[[f64; 2]]>,
+    outline: Option<&[Contour]>,
     die: &NewDie,
     jpeg: bool,
     path: &Path,
@@ -400,9 +639,8 @@ fn write_pdf(
     let pdf = winfiles_pdf_out::image_page_bytes(bytes, picture.size_mm()).map_err(|e| e.to_string())?;
     let mut file = PdfFile::from_bytes(pdf).map_err(|e| e.to_string())?;
     file.set_trim(0, picture.trim_mm()).map_err(|e| e.to_string())?;
-    if let Some(line) = outline {
-        file.draw_die(0, &[line.to_vec()], die)
-            .map_err(|e| e.to_string())?;
+    if let Some(lines) = outline.filter(|l| !l.is_empty()) {
+        file.draw_die(0, lines, die).map_err(|e| e.to_string())?;
     }
     file.save(path).map_err(|e| e.to_string())
 }
@@ -485,7 +723,7 @@ mod tests {
             overprint: true,
         };
         let out = dir.join("prova.pdf");
-        write_pdf(pic, Some(&outline), &die, false, &out).unwrap();
+        write_pdf(pic, Some(&[outline]), &die, false, &out).unwrap();
         let probe = winfiles_formats::probe(&out, winfiles_model::FileKind::Pdf).unwrap();
         let page = probe.pages.first().unwrap();
         assert!(

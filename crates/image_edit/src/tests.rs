@@ -712,3 +712,130 @@ fn l_abbondanza_vale_anche_a_16_bit_e_con_la_trasparenza() {
         .is_err()
     );
 }
+
+/// Un cerchio blu di raggio `r` pixel al centro, su fondo bianco, con un buco bianco al centro
+/// (raggio `r / 3`): il bianco dentro il soggetto non è sfondo.
+fn disc(side: u32, r: f64, alpha: bool) -> Picture {
+    let c = f64::from(side) / 2.0;
+    let buf = image::RgbaImage::from_fn(side, side, |x, y| {
+        let d = (f64::from(x) + 0.5 - c).hypot(f64::from(y) + 0.5 - c);
+        if d <= r / 3.0 {
+            image::Rgba([255, 255, 255, 255])
+        } else if d <= r {
+            image::Rgba([20, 60, 200, 255])
+        } else if alpha {
+            image::Rgba([255, 255, 255, 0])
+        } else {
+            image::Rgba([250, 250, 250, 255])
+        }
+    });
+    let mut p = picture(1, 1, 254.0);
+    p.image = std::sync::Arc::new(DynamicImage::ImageRgba8(buf));
+    p
+}
+
+#[test]
+fn la_fustella_segue_il_soggetto_sul_fondo_bianco() {
+    // 600 pixel a 254 DPI: 60 mm; cerchio di raggio 20 mm.
+    let p = disc(600, 200.0, false);
+    let spec = ContourSpec {
+        background: Background::Color([255, 255, 255]),
+        tolerance: 5.0,
+        offset: 0.0,
+        min_area: 1.0,
+        holes: false,
+    };
+    let c = trace(&p, &spec).unwrap();
+    assert_eq!(c.len(), 1, "il buco bianco al centro non si taglia");
+    let pi = std::f64::consts::PI;
+    let a = contour_area(&c);
+    assert!((a - pi * 400.0).abs() < pi * 400.0 * 0.02, "{a}");
+    // Con 3 mm fuori il raggio diventa 23 mm.
+    let grown = trace(&p, &ContourSpec { offset: 3.0, ..spec }).unwrap();
+    let g = contour_area(&grown);
+    assert!((g - pi * 529.0).abs() < pi * 529.0 * 0.02, "{g}");
+    // Con i fori: il centro (raggio 6,67 mm) è tolto.
+    let holed = trace(&p, &ContourSpec { holes: true, ..spec }).unwrap();
+    assert_eq!(holed.len(), 2);
+    let r3 = 20.0_f64 / 3.0;
+    let hval = contour_area(&holed);
+    assert!(
+        (hval - pi * (400.0 - r3 * r3)).abs() < pi * 400.0 * 0.03,
+        "{hval}"
+    );
+}
+
+#[test]
+fn la_fustella_segue_la_trasparenza_e_avvisa_se_manca_lo_sfondo() {
+    let p = disc(400, 120.0, true);
+    let spec = ContourSpec {
+        background: Background::Transparent,
+        tolerance: 0.0,
+        offset: 0.0,
+        min_area: 1.0,
+        holes: false,
+    };
+    let c = trace(&p, &spec).unwrap();
+    let pi = std::f64::consts::PI;
+    let a = contour_area(&c);
+    assert!((a - pi * 144.0).abs() < pi * 144.0 * 0.03, "{a}");
+    // Nessuno sfondo del colore scelto: lo dice invece di tagliare il rettangolo.
+    let red = ContourSpec {
+        background: Background::Color([255, 0, 0]),
+        ..spec
+    };
+    assert!(trace(&disc(100, 30.0, false), &red).is_err());
+}
+
+#[test]
+fn la_fustella_tiene_gli_spigoli_del_triangolo() {
+    // Un triangolo blu su bianco accanto a un anello rosso, come un adesivo vero: la fustella
+    // deve girare attorno a tutti e tre gli spigoli, non tagliarne uno.
+    let (w, h) = (1200u32, 900u32);
+    let inside = |x: f64, y: f64| {
+        let s = |ax: f64, ay: f64, bx: f64, by: f64| (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+        let (a, b, c) = (
+            s(600.0, 700.0, 850.0, 150.0),
+            s(850.0, 150.0, 1100.0, 700.0),
+            s(1100.0, 700.0, 600.0, 700.0),
+        );
+        (a >= 0.0 && b >= 0.0 && c >= 0.0) || (a <= 0.0 && b <= 0.0 && c <= 0.0)
+    };
+    let buf = image::RgbaImage::from_fn(w, h, |x, y| {
+        let (fx, fy) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+        let d = ((fx - 300.0) / 200.0).hypot((fy - 400.0) / 250.0);
+        if inside(fx, fy) {
+            image::Rgba([30, 110, 200, 255])
+        } else if d <= 1.0 && ((fx - 300.0) / 80.0).hypot((fy - 400.0) / 120.0) > 1.0 {
+            image::Rgba([220, 40, 60, 255])
+        } else {
+            image::Rgba([255, 255, 255, 255])
+        }
+    });
+    let mut p = picture(1, 1, 254.0);
+    p.image = std::sync::Arc::new(DynamicImage::ImageRgba8(buf));
+    let spec = ContourSpec {
+        background: Background::Color([255, 255, 255]),
+        tolerance: 10.0,
+        offset: 0.0,
+        min_area: 4.0,
+        holes: false,
+    };
+    let c = trace(&p, &spec).unwrap();
+    assert_eq!(c.len(), 2);
+    // Lo spigolo in basso a destra (x 1100 pixel = 110 mm) resta.
+    let right = c.iter().flatten().map(|q| q[0]).fold(0.0, f64::max);
+    assert!(right > 109.0, "lo spigolo è tagliato: arriva a {right} mm");
+    // Area del triangolo: 500 × 550 / 2 pixel, a 0,1 mm per pixel.
+    let tri = 500.0 * 550.0 / 2.0 * 0.01;
+    let ring = std::f64::consts::PI * (200.0 * 250.0) * 0.01;
+    let a = contour_area(&c);
+    assert!(
+        (a - tri - ring).abs() < (tri + ring) * 0.02,
+        "{a} invece di {}",
+        tri + ring
+    );
+    // Allargata di 2 mm: più grande, mai più piccola (lo spigolo resta dentro).
+    let g = contour_area(&trace(&p, &ContourSpec { offset: 2.0, ..spec }).unwrap());
+    assert!(g > a * 1.1, "{g} contro {a}");
+}

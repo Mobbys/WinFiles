@@ -6534,6 +6534,7 @@ dependencies = [
 name = "winfiles-image-edit"
 version = "0.2.19"
 dependencies = [
+ "i_overlay",
  "image",
  "photocraft-heif",
  "photocraft-psd",

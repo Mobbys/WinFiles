@@ -30,10 +30,23 @@ Alternativa 2.
   fustella dalla selezione). Gli angoli tondi sono archi in segmenti di 3°.
 - Le scelte (abbondanza, metodo, forma, raggio) si ricordano nelle impostazioni.
 
+## Fase 2: il contorno del soggetto
+- Forma "Contorno" (`winfiles_image_edit::trace`): sfondo un colore (scelto col contagocce, con
+  il pixel dell'angolo o a mano, più una tolleranza) o la trasparenza. Senza "fori interni" lo
+  sfondo parte dai bordi e si allarga ai vicini simili, così il bianco dentro il soggetto resta
+  soggetto; con i fori ogni zona del colore di sfondo si taglia.
+- Su un'immagine ridotta a 2000 pixel di lato: file di pixel in rettangoli uniti con i_overlay,
+  pezzi piccoli tolti, Douglas–Peucker a 0,9 pixel, Chaikin due volte con il taglio limitato a
+  1,5 pixel dallo spigolo (un quarto di un lato lungo mangiava la punta di un triangolo), poi
+  l'offset con giunti tondi (positivo fuori, negativo dentro).
+- Si calcola in un thread quando cambiano l'immagine o le scelte; il PDF si salva solo quando il
+  contorno è pronto. Alternativa scartata: tracciare il contorno a vettori (potrace) con una
+  dipendenza nuova; i rettangoli uniti bastano e restano nel codice già usato dal nesting.
+
 ## Conseguenze
 - Il PDF salvato si apre nel nesting con la sua fustella, angoli tondi compresi.
 - L'immagine salvata con "Salva" (JPEG, TIFF…) porta l'abbondanza ma non il formato finito: chi
   la riapre non sa più dove si taglia. Per Onyx si usa il PDF.
 - I CMYK si leggono in RGB come nel resto di Modifica immagini: per un TIFF CMYK il PDF esce in RGB.
-- Le fasi dopo (fustella dal contorno del soggetto, abbondanza "colore più vicino" attorno alle
+- Le fasi dopo (abbondanza "colore più vicino" attorno alle
   forme, le immagini dentro i PDF) useranno lo stesso `Op::Bleed` e la stessa uscita in PDF.

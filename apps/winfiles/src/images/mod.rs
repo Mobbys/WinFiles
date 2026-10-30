@@ -1103,19 +1103,20 @@ impl ImagesModule {
         );
         let unit = self.unit;
         let picture = d.editor.picture().clone();
+        let owner = (self.current as u64).wrapping_shl(40) ^ d.generation;
         let source = d.target.clone().unwrap_or_else(|| d.editor.path().to_path_buf());
         let inks = self.inks.clone();
         let die = &mut self.die;
         let action = egui::ScrollArea::vertical()
             .id_salt("fustella-immagine")
             .auto_shrink([false, false])
-            .show(&mut child, |ui| die.panel(ui, &picture, &inks, unit))
+            .show(&mut child, |ui| die.panel(ui, &picture, owner, &inks, unit))
             .inner;
         match action {
             Some(die::DieAction::Apply(op)) => self.apply(op),
             Some(die::DieAction::Save) => {
                 let ctx = ui.ctx().clone();
-                if let Some(text) = self.die.save(&picture, &source, &self.inks, &ctx) {
+                if let Some(text) = self.die.save(&picture, owner, &source, &self.inks, &ctx) {
                     self.status = text;
                 }
             }
@@ -1601,13 +1602,28 @@ impl ImagesModule {
             self.quotes.paint(ui, paper, iw as f32, unit);
             self.quotes.lens
         } else {
-            if hand.is_none() {
+            let owner = (self.current as u64).wrapping_shl(40) ^ generation;
+            if self.die.open {
+                self.die.update(p, owner, ui.ctx());
+            }
+            let picking = self.die.open && self.die.picking;
+            if picking && hand.is_none() {
+                // Il contagocce: un clic prende il colore dello sfondo, il ritaglio sta fermo.
+                let r = ui
+                    .interact(paper, ui.id().with("contagocce"), egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::Crosshair);
+                if r.clicked()
+                    && let Some(at) = r.interact_pointer_pos()
+                {
+                    self.die.pick(p, paper, at);
+                }
+            } else if hand.is_none() {
                 self.cutter
                     .interact(ui, ui.id().with("ritaglio"), paper, iw as f32, ih as f32);
             }
             self.cutter.paint(ui, paper, iw as f32);
             if self.die.open {
-                self.die.paint(ui, paper, p, &self.inks);
+                self.die.paint(ui, paper, p, owner, &self.inks);
             }
             self.cutter.lens
         };

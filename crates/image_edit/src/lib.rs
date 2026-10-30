@@ -16,11 +16,13 @@ use image::{DynamicImage, ImageDecoder, ImageReader, Limits};
 use winfiles_geom::Size;
 
 mod bleed;
+mod contour;
 mod save;
 #[cfg(test)]
 mod tests;
 
 pub use bleed::BleedMethod;
+pub use contour::{Background, ContourSpec, contour_area, trace};
 pub use save::{Format, SaveOptions, encode};
 
 /// Le estensioni dei file che si aprono, per la finestra di sistema.
