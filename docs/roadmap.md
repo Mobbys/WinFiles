@@ -99,6 +99,25 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Margini negativi: un valore sotto zero toglie dal bordo
 - [x] Pannello "Tinte piatte" a destra, chiudibile: elenco con colore e pagine, rinomina,
   sovrastampa solo sugli oggetti della tinta ([ADR 0018](adr/0018-tinte-piatte.md))
+- [x] Strumento "Tracciati": clic su una linea per vederne colore, spessore, lunghezza; farla
+  diventare una tinta con nome libero (fustella, cordonatura…), cambiare spessore e sovrastampa;
+  controllo della pagina con fustella e abbondanza per lato ([ADR 0023](adr/0023-tracciati-e-fustelle.md))
+- [x] "Crea l'abbondanza": a specchio o allungando il bordo, sui lati scelti, in vettoriale, senza
+  ribaltare la fustella; TrimBox e BleedBox scritti ([ADR 0024](adr/0024-abbondanza-vettoriale.md))
+- [x] Abbondanza solo per i tracciati scelti (lo sfondo), il resto resta com'è
+- [x] "Crea la fustella" dal contorno dei tracciati scelti, uniti se si sovrappongono
+  ([ADR 0025](adr/0025-fustella-dalla-selezione.md))
+- [x] Abbondanza lungo una fustella sagomata (angoli tondi, forme), ADR 0026
+- [x] Scheda "Nesting": copie dei PDF sagomati su lastre o rotolo, sulla fustella di taglio, con
+  l'abbondanza; PDF dei fogli per Onyx ([ADR 0027](adr/0027-nesting.md))
+- [x] Nesting: immagini come rettangoli, scala 1:N per file, "Manda al nesting" dal tasto destro
+- [x] Nesting: linee di taglio comuni (laser), il lato condiviso si taglia una volta sola
+- [x] Fustella e abbondanza sulle immagini, fase 1: abbondanza con i pixel e PDF con fustella
+  rettangolare o ad angoli tondi ([ADR 0028](adr/0028-fustella-e-abbondanza-sulle-immagini.md))
+- [x] Fase 2: fustella dal contorno del soggetto (colore di sfondo con contagocce, o trasparenza)
+- [x] Abbondanza lungo la fustella dal contorno (colore più vicino dentro la fustella) e lisciatura
+- [x] Fase 3: in Modifica PDF fustella dal contorno della grafica e dai tracciati di ritaglio
+- [ ] Abbondanza con i pixel delle foto dentro il PDF (oggi: specchio della pagina o forma allungata)
 - [ ] Provata da Michel su file veri
 
 ## Fase 8 in dettaglio

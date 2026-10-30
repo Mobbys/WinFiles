@@ -21,6 +21,7 @@ mod instance;
 mod legacy;
 mod measure;
 mod menu11;
+mod nesting;
 mod paint;
 mod pan;
 mod panels;
@@ -69,6 +70,8 @@ fn main() -> eframe::Result {
     let mut calibration = None;
     let mut edit_pdf = None;
     let mut edit_images: Vec<std::path::PathBuf> = Vec::new();
+    // `--nesting a.pdf b.pdf` apre il nesting con quei PDF (tutto quello che segue).
+    let mut nest_files: Vec<std::path::PathBuf> = Vec::new();
     // `--aggiungi a.pdf …` (il tasto destro "Apri in WinFiles") manda i file alla finestra già
     // aperta, se c'è, invece di aprirne un'altra.
     let mut add = false;
@@ -87,6 +90,8 @@ fn main() -> eframe::Result {
             add = true;
         } else if arg == "--modifica-immagini" {
             edit_images.extend(args.by_ref().map(Into::into));
+        } else if arg == "--nesting" {
+            nest_files.extend(args.by_ref().map(Into::into));
         } else if arg == "--calibrazione" {
             let paper = match args.next() {
                 Some(p) if p.eq_ignore_ascii_case("a3") => winfiles_geom::Paper::A3,
@@ -120,6 +125,7 @@ fn main() -> eframe::Result {
                     calibration,
                     edit_pdf,
                     edit_images,
+                    nest_files,
                     prefs,
                 )
                 .with_inbox(&cc.egui_ctx, inbox),

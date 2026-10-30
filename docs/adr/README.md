@@ -27,3 +27,9 @@ Una decisione si cambia con un nuovo ADR che sostituisce il precedente, mai risc
 | [0020](0020-copia-di-illustrator.md) | La copia di Illustrator nei PDF: si chiede al salvataggio se toglierla | Accettata |
 | [0021](0021-quote.md) | Quote in proporzione sull'anteprima di Modifica PDF e Modifica immagini | Accettata |
 | [0022](0022-apri-in-winfiles.md) | "Apri in WinFiles" nel tasto destro e una finestra sola | Accettata |
+| [0023](0023-tracciati-e-fustelle.md) | Tracciati e fustelle: scegliere una linea sulla pagina e cambiarne colore, tinta e spessore | Accettata |
+| [0024](0024-abbondanza-vettoriale.md) | Abbondanza creata in vettoriale, ribaltando la pagina attorno al formato finito | Accettata |
+| [0025](0025-fustella-dalla-selezione.md) | Fustella dai tracciati scelti, unendo le forme (`i_overlay`) | Accettata |
+| [0026](0026-abbondanza-sagomata.md) | Abbondanza che segue una fustella sagomata, allungando l'ultima striscia di grafica | Accettata |
+| [0027](0027-nesting.md) | Nesting delle sagome su lastre e rotoli, con il motore del pannello per Illustrator portato in Rust | Accettata |
+| [0028](0028-fustella-e-abbondanza-sulle-immagini.md) | Fustella e abbondanza sulle immagini: abbondanza con i pixel, PDF con fustella e TrimBox | Accettata |

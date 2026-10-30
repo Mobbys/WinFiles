@@ -16,8 +16,19 @@ use winfiles_geom::{Paper, Size, pt_to_mm};
 
 mod frame;
 mod illustrator;
+mod nesting;
+mod paths;
 mod spots;
 
+pub use frame::{BleedMode, BleedSpec};
+pub use nesting::{
+    Contours, MAX_SHEET_MM, NestSheet, SheetPiece, die_shape, grow_shape, nest_document, shape_area,
+    shape_bounds, split_shape,
+};
+pub use paths::{
+    Fill, Ink, Line, NewDie, NewInk, PageScan, Part, PathId, PathInfo, Restyle, Restyled, SubPath,
+    outline_is_rectangle,
+};
 pub use spots::{Overprint, Spot};
 
 #[cfg(test)]
@@ -129,12 +140,38 @@ impl PdfFile {
     pub fn save(&self, path: &Path) -> Result<(), EditError> {
         write_atomic(path, &self.to_bytes()?)
     }
+
+    /// I tracciati della pagina `page` (da 0).
+    pub fn scan_page(&self, page: usize) -> Result<PageScan, EditError> {
+        paths::scan(&self.0, page)
+    }
+    /// Disegna sopra la pagina `page` la fustella `outlines` (contorni chiusi in mm della pagina,
+    /// dall'angolo in alto a sinistra) in tinta piatta.
+    pub fn draw_die(
+        &mut self,
+        page: usize,
+        outlines: &[Vec<[f64; 2]>],
+        die: &NewDie,
+    ) -> Result<usize, EditError> {
+        paths::draw_die(&mut self.0, page, outlines, die)
+    }
+
+    /// Scrive il formato finito della pagina (mm: sinistra, alto, destra, basso) come TrimBox, e la
+    /// pagina intera come BleedBox.
+    pub fn set_trim(&mut self, page: usize, finished: [f64; 4]) -> Result<(), EditError> {
+        paths::set_trim(&mut self.0, page, finished)
+    }
 }
 
 /// Una copia del documento da scrivere in un altro thread, per l'anteprima.
 pub struct Snapshot(Document);
 
 impl Snapshot {
+    /// I tracciati della pagina `page` (da 0), da leggere in un altro thread.
+    pub fn scan_page(&self, page: usize) -> Result<PageScan, EditError> {
+        paths::scan(&self.0, page)
+    }
+
     /// Il PDF da disegnare: senza flussi di oggetti compressi, che qui farebbero solo perdere tempo.
     pub fn preview_bytes(&self) -> Result<Vec<u8>, EditError> {
         let opts = SaveOptions {
@@ -445,6 +482,139 @@ impl Editor {
         self.edit(label, |d| spots::set_overprint(d, name, on))
     }
 
+    /// I tracciati della pagina `page` (da 0), per lo strumento Seleziona tracciato.
+    pub fn scan_page(&self, page: usize) -> Result<PageScan, EditError> {
+        paths::scan(&self.doc, page)
+    }
+
+    /// Cambia colore, spessore o sovrastampa dei tracciati scelti della pagina `page`.
+    pub fn restyle_paths(
+        &mut self,
+        page: usize,
+        ids: &[PathId],
+        change: &Restyle,
+    ) -> Result<Restyled, EditError> {
+        let mut probe = self.doc.clone();
+        let probed = paths::restyle(&mut probe, page, ids, change)?;
+        if probed.done == 0 {
+            return Ok(probed);
+        }
+        let label = match (&change.ink, change.width, change.overprint) {
+            (Some(NewInk::Spot { .. }), _, _) => "Tracciati in tinta",
+            (Some(NewInk::Cmyk(_)), _, _) => "Colore dei tracciati",
+            (None, Some(_), _) => "Spessore dei tracciati",
+            _ => "Sovrastampa dei tracciati",
+        };
+        self.edit(label, |d| paths::restyle(d, page, ids, change))
+    }
+
+    /// Crea l'abbondanza che manca attorno al formato finito della pagina (vedi [`BleedSpec`]).
+    /// I tracciati `die` (la fustella) restano fuori dalla grafica ribaltata o allungata; i fondi
+    /// bianchi `paper` sotto tutta la grafica si tolgono (sulla carta non cambia nulla, e senza di
+    /// loro nell'anteprima non resta un filo chiaro sul bordo del formato finito). Con `only` non
+    /// vuoto si allungano soltanto quei tracciati (lo sfondo scelto) e tutto il resto della pagina
+    /// resta com'è, sopra di loro.
+    /// Restituisce quanti tracciati della fustella non si sono potuti tenere fuori (stanno dentro
+    /// un modulo del PDF).
+    pub fn add_bleed(
+        &mut self,
+        page: usize,
+        spec: &BleedSpec,
+        die: &[PathId],
+        paper: &[PathId],
+        only: &[PathId],
+    ) -> Result<usize, EditError> {
+        let ok = spec.amount.is_finite()
+            && (0.1..=100.0).contains(&spec.amount)
+            && spec.finished.iter().all(|v| v.is_finite())
+            && spec.sides.iter().any(|s| *s);
+        if !ok {
+            return Err(EditError::Invalid("abbondanza non valida".into()));
+        }
+        self.edit("Crea abbondanza", |d| {
+            // Uno sfondo in tinta unita grande quanto il formato finito si allarga e basta: resta
+            // un tracciato solo, con gli angoli vivi.
+            if !only.is_empty()
+                && spec.sides.iter().all(|s| *s)
+                && fills_finished(d, page, only, spec.finished)?
+                && paths::grow(d, page, only, spec.amount, false)?
+            {
+                frame::bleed_boxes(d, page, spec.finished, spec.amount)?;
+                return Ok(0);
+            }
+            let (base, art, over, left) = bleed_layers(d, page, die, paper, only)?;
+            frame::bleed(d, page, spec, &base, &art, over.as_deref())?;
+            Ok(left)
+        })
+    }
+
+    /// Crea l'abbondanza che segue la forma dei tracciati `outline` (una fustella sagomata, o la
+    /// grafica scelta): la pagina diventa il loro rettangolo più `amount` mm per lato, e lungo
+    /// tutto il contorno l'ultimo mezzo millimetro di grafica si allunga verso fuori. `die`,
+    /// `paper` e `only` come per [`Editor::add_bleed`].
+    pub fn add_shaped_bleed(
+        &mut self,
+        page: usize,
+        amount: f64,
+        outline: &[PathId],
+        die: &[PathId],
+        paper: &[PathId],
+        only: &[PathId],
+    ) -> Result<usize, EditError> {
+        if !(amount.is_finite() && (0.1..=100.0).contains(&amount)) || outline.is_empty() {
+            return Err(EditError::Invalid("abbondanza non valida".into()));
+        }
+        self.edit("Crea abbondanza", |d| {
+            let scanned = paths::scan(d, page)?;
+            let shapes = paths::outline(&scanned, outline)?;
+            // La forma è lo sfondo scelto, in tinta unita: si allarga lui, con gli angoli tondi,
+            // e resta un tracciato solo e liscio.
+            let same = {
+                let mut a = only.to_vec();
+                let mut b = outline.to_vec();
+                a.sort_unstable();
+                b.sort_unstable();
+                a == b
+            };
+            if same && paths::grow(d, page, only, amount, true)? {
+                let finished = shapes
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| {
+                        [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]
+                    });
+                frame::bleed_boxes(d, page, finished, amount)?;
+                return Ok(0);
+            }
+            let (base, art, over, left) = bleed_layers(d, page, die, paper, only)?;
+            frame::bleed_shape(d, page, &shapes, amount, &base, &art, over.as_deref())?;
+            Ok(left)
+        })
+    }
+
+    /// Crea una fustella in tinta piatta dal contorno dei tracciati `ids` (uniti se si
+    /// sovrappongono), disegnata sopra la pagina; i tracciati restano com'erano. Restituisce
+    /// quanti contorni ha la fustella.
+    pub fn add_die(&mut self, page: usize, ids: &[PathId], die: &NewDie) -> Result<usize, EditError> {
+        self.edit("Crea fustella", |d| paths::add_die(d, page, ids, die))
+    }
+
+    /// Disegna sopra la pagina la fustella `outlines` (contorni chiusi in mm della pagina come si
+    /// vede, dall'angolo in alto a sinistra), per esempio quella dal contorno della grafica.
+    /// Restituisce quanti contorni ha.
+    pub fn add_die_outline(
+        &mut self,
+        page: usize,
+        outlines: &[Vec<[f64; 2]>],
+        die: &NewDie,
+    ) -> Result<usize, EditError> {
+        if outlines.iter().all(|c| c.len() < 3) {
+            return Err(EditError::Invalid("fustella vuota".into()));
+        }
+        self.edit("Crea fustella", |d| paths::draw_die(d, page, outlines, die))
+    }
+
     /// Il PDF porta la copia del file di Illustrator, quella che Illustrator apre al posto delle
     /// pagine (ADR 0020).
     pub fn has_illustrator_data(&self) -> bool {
@@ -479,6 +649,54 @@ impl Editor {
 }
 
 /// Divide le pagine in gruppi: prima di ognuna delle pagine `before` (da 0) comincia un file.
+/// I tracciati `ids` riempiono il formato finito `f` (mm): il loro rettangolo coincide con lui.
+fn fills_finished(d: &Document, page: usize, ids: &[PathId], f: [f64; 4]) -> Result<bool, EditError> {
+    let scanned = paths::scan(d, page)?;
+    let b = scanned
+        .paths
+        .iter()
+        .filter(|p| ids.contains(&p.id))
+        .fold(None, |acc: Option<[f64; 4]>, p| {
+            let v = p.visible;
+            Some(match acc {
+                Some(a) => [a[0].min(v[0]), a[1].min(v[1]), a[2].max(v[2]), a[3].max(v[3])],
+                None => v,
+            })
+        });
+    Ok(b.is_some_and(|b| b.iter().zip(f).all(|(x, y)| (x - y).abs() < 0.05)))
+}
+
+/// I tre disegni dell'abbondanza: la pagina vera (`base`), la grafica da allungare (`art`) e
+/// quello che resta sopra intero (`over`), più quanti tracciati della fustella non si sono potuti
+/// tenere fuori dalla grafica. Con `only` si allungano solo quei tracciati e tutto il resto della
+/// pagina sta sopra di loro; altrimenti si allunga tutto tranne fustella e fondi bianchi, e sopra
+/// resta la fustella.
+type Layers = (Vec<u8>, Vec<u8>, Option<Vec<u8>>, usize);
+
+fn bleed_layers(
+    d: &Document,
+    page: usize,
+    die: &[PathId],
+    paper: &[PathId],
+    only: &[PathId],
+) -> Result<Layers, EditError> {
+    if !only.is_empty() {
+        let art = paths::only(d, page, only)?;
+        let hidden: Vec<PathId> = only.iter().chain(paper).copied().collect();
+        let (rest, _) = paths::without(d, page, &hidden)?;
+        return Ok((art.clone(), art, Some(rest), 0));
+    }
+    let hidden: Vec<PathId> = die.iter().chain(paper).copied().collect();
+    let (art, left) = paths::without(d, page, &hidden)?;
+    let (all, _) = paths::without(d, page, paper)?;
+    let over = if die.is_empty() {
+        None
+    } else {
+        Some(paths::only(d, page, die)?)
+    };
+    Ok((all, art, over, left))
+}
+
 pub fn split_ranges(page_count: usize, before: &[usize]) -> Vec<std::ops::Range<usize>> {
     organize::split_ranges(page_count, &organize::SplitBy::Before(before.to_vec()))
 }

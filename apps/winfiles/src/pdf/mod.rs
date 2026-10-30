@@ -3,8 +3,10 @@
 //! al centro la pagina corrente in grande, sopra i comandi. Le modifiche le fa
 //! `winfiles-pdf-edit`; qui ci sono solo la finestra, le scelte e le domande.
 
+mod contorno;
 mod dialogs;
 mod render;
+pub mod tracciati;
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -103,6 +105,12 @@ pub struct PdfModule {
     unit: Unit,
     /// La stampa o il PDF con le quote chiesti, che l'app prende e manda avanti.
     pub output: Option<crate::quotes::Output>,
+    /// Lo strumento Seleziona tracciato, con il suo pannello a destra.
+    paths: tracciati::PathTool,
+    /// I nomi delle tinte usati (taglio, cordonatura…), ricordati nelle impostazioni.
+    pub inks: Vec<tracciati::InkName>,
+    /// I file da mandare alla scheda Nesting, che l'app prende e svuota.
+    pub to_nesting: Vec<PathBuf>,
 }
 
 impl PdfModule {
@@ -140,7 +148,21 @@ impl PdfModule {
             illustrator_ask: None,
             unit: Unit::Mm,
             output: None,
+            paths: tracciati::PathTool::default(),
+            inks: tracciati::default_inks(),
+            to_nesting: Vec::new(),
         }
+    }
+
+    /// Manda alla scheda Nesting il PDF aperto, com'è salvato su disco.
+    fn send_to_nesting(&mut self) {
+        let Some(e) = self.editor.as_ref() else { return };
+        let path = self.target.clone().unwrap_or_else(|| e.path().to_path_buf());
+        if e.is_modified() {
+            self.status =
+                "Al nesting va il PDF com'è salvato: le modifiche non salvate restano qui.".to_string();
+        }
+        self.to_nesting.push(path);
     }
 
     pub fn is_modified(&self) -> bool {
@@ -494,9 +516,18 @@ impl PdfModule {
         let path = match (&self.target, ask) {
             (Some(p), false) => Some(p.clone()),
             _ => {
+                // La finestra propone l'ultimo file salvato, o il nome di partenza con "_modificato".
                 let source = e.path();
-                let dir = source.parent().map(Path::to_path_buf).unwrap_or_default();
-                let name = format!("{}_modificato.pdf", file_stem(source));
+                let (dir, name) = match &self.target {
+                    Some(t) => (
+                        t.parent().map(Path::to_path_buf).unwrap_or_default(),
+                        file_name(t),
+                    ),
+                    None => (
+                        source.parent().map(Path::to_path_buf).unwrap_or_default(),
+                        format!("{}_modificato.pdf", file_stem(source)),
+                    ),
+                };
                 pdf_dialog()
                     .set_title("Salva il PDF")
                     .set_directory(dir)
@@ -847,12 +878,16 @@ impl PdfModule {
                     )
                     .fill(fill)
                     .min_size(vec2(108.0, 34.0));
+                    // Il pulsante chiede sempre dove salvare; Ctrl+S riscrive l'ultimo file senza chiedere.
                     let tip = match &self.target {
-                        Some(p) => format!("Salva in {} (Ctrl+S)", file_name(p)),
+                        Some(p) => format!(
+                            "Salva il PDF modificato: propone {} (Ctrl+S lo riscrive senza chiedere)",
+                            file_name(p)
+                        ),
                         None => "Salva il PDF modificato con un nome nuovo (Ctrl+S)".into(),
                     };
                     if ui.add_enabled(enabled, save).on_hover_text(tip).clicked() {
-                        self.save(false);
+                        self.save(true);
                     }
                     let tip = if self.quoting {
                         "Stampa il PDF com'è adesso, con le quote (Ctrl+P)"
@@ -995,6 +1030,7 @@ impl PdfModule {
                         self.spots_open = !self.spots_open;
                         if self.spots_open {
                             self.quoting = false;
+                            self.paths.on = false;
                         }
                     }
                     if text_toggle(ui, "ruler", "Quote", open, self.quoting)
@@ -1006,6 +1042,21 @@ impl PdfModule {
                     {
                         self.quoting = !self.quoting;
                         if self.quoting {
+                            self.cutter.clear();
+                            self.paths.on = false;
+                        }
+                    }
+                    if text_toggle(ui, "mouse-pointer-2", "Tracciati", open, self.paths.on)
+                        .on_hover_text(
+                            "Clicca una linea sulla pagina per vederne colore, spessore e lunghezza, e \
+                             farla diventare una tinta (fustella, cordonatura…). Controlla anche \
+                             fustella e abbondanza della pagina",
+                        )
+                        .clicked()
+                    {
+                        self.paths.on = !self.paths.on;
+                        if self.paths.on {
+                            self.quoting = false;
                             self.cutter.clear();
                         }
                     }
@@ -1261,7 +1312,16 @@ impl PdfModule {
         }
         let list_w = (full.width() * 0.3).clamp(170.0, 460.0);
         let list = Rect::from_min_size(full.min, vec2(list_w, full.height()));
-        let side_w = if self.spots_open || self.quoting {
+        if self.paths.on
+            && let Some(e) = &self.editor
+        {
+            let key = (self.generation, self.current);
+            self.paths.update(ui.ctx(), key, || e.snapshot());
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.paths.selected.clear();
+            }
+        }
+        let side_w = if self.spots_open || self.quoting || self.paths.on {
             SPOTS_W
         } else {
             0.0
@@ -1275,6 +1335,8 @@ impl PdfModule {
         let side = Rect::from_min_max(egui::pos2(view.right() + 10.0, full.top()), full.max);
         if self.quoting {
             self.quotes_panel(ui, side, unit);
+        } else if self.paths.on {
+            self.paths_panel(ui, side, unit);
         } else if self.spots_open {
             self.spots_panel(ui, side);
         }
@@ -1520,6 +1582,14 @@ impl PdfModule {
             if ui.button("Estrai…").clicked() {
                 ui.close();
                 self.dialog = Some(Dialog::Extract { one_per_page: false });
+            }
+            if ui
+                .button("Manda il PDF al nesting")
+                .on_hover_text("Apre la scheda Nesting con questo PDF, com'è salvato")
+                .clicked()
+            {
+                ui.close();
+                self.send_to_nesting();
             }
             ui.separator();
             let can_delete = self.selected.len() < self.infos.len();
@@ -1819,6 +1889,11 @@ impl PdfModule {
                     }
                     self.quotes.paint(ui, paper, w, unit);
                     self.quotes.lens
+                } else if self.paths.on {
+                    if hand.is_none() {
+                        self.paths.interact(ui, ui.id().with("tracciati"), paper, w);
+                    }
+                    None
                 } else {
                     if hand.is_none() {
                         self.cutter.interact(ui, ui.id().with("taglierina"), paper, w, h);
@@ -2097,15 +2172,129 @@ impl PdfModule {
     }
 
     /// Il pannello a destra con le tinte piatte: colore, nome (si rinomina), pagine e sovrastampa.
-    fn spots_panel(&mut self, ui: &mut egui::Ui, rect: Rect) {
-        let t = Tokens::get(ui.ctx());
-        card(ui, rect);
+    /// Le tinte piatte del documento, rilette se il documento è cambiato.
+    fn fresh_spots(&mut self) {
         if self.spots.as_ref().is_none_or(|(g, _)| *g != self.generation)
             && let Some(e) = &self.editor
         {
             let list = e.spots().map_err(|e| e.to_string());
             self.spots = Some((self.generation, list));
         }
+    }
+
+    /// Il pannello dello strumento Seleziona tracciato.
+    fn paths_panel(&mut self, ui: &mut egui::Ui, rect: Rect, unit: Unit) {
+        let t = Tokens::get(ui.ctx());
+        card(ui, rect);
+        self.fresh_spots();
+        let spots = match &self.spots {
+            Some((_, Ok(list))) => list.clone(),
+            _ => Vec::new(),
+        };
+        let inner = rect.shrink2(vec2(14.0, 10.0));
+        let mut ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(inner)
+                .layout(egui::Layout::top_down(Align::Min)),
+        );
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Tracciati")
+                    .font(semibold(14.0))
+                    .color(t.text_strong),
+            );
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if icons::button(ui, "x", "Chiudi lo strumento", false, true, 24.0).clicked() {
+                    self.paths.on = false;
+                }
+            });
+        });
+        ui.add_space(6.0);
+        let page = self.current;
+        match self.paths.panel(&mut ui, unit, &mut self.inks, &spots) {
+            None => {}
+            Some(tracciati::Request::Restyle(ids, change)) => {
+                let mut new_ids = None;
+                self.apply(|e| {
+                    let r = e.restyle_paths(page, &ids, &change)?;
+                    new_ids = Some(r.ids.clone());
+                    let n = |k: usize| {
+                        if k == 1 {
+                            "1 tracciato".to_string()
+                        } else {
+                            format!("{k} tracciati")
+                        }
+                    };
+                    let mut msg = match (&change.ink, r.done) {
+                        (_, 0) => "Niente da cambiare".to_string(),
+                        (Some(winfiles_pdf_edit::NewInk::Spot { name, .. }), k) => {
+                            format!("{} in tinta {}", n(k), name.trim())
+                        }
+                        (_, k) => format!("{} cambiati", n(k)),
+                    };
+                    if r.skipped > 0 {
+                        msg.push_str(&format!(" ({} di ritaglio lasciati com'erano)", r.skipped));
+                    }
+                    Ok(msg)
+                });
+                if let Some(ids) = new_ids.filter(|v| !v.is_empty()) {
+                    self.paths.select_after_scan(ids);
+                }
+            }
+            Some(tracciati::Request::Bleed {
+                spec,
+                die,
+                paper,
+                only,
+                outline,
+            }) => {
+                self.apply(|e| {
+                let left = if outline.is_empty() {
+                    e.add_bleed(page, &spec, &die, &paper, &only)?
+                } else {
+                    e.add_shaped_bleed(page, spec.amount, &outline, &die, &paper, &only)?
+                };
+                let mut msg = format!(
+                    "Abbondanza di {} mm creata",
+                    winfiles_geom::format_number(spec.amount, 1, true)
+                );
+                if left > 0 {
+                    msg.push_str(&format!(
+                        " ({left} tracciati della fustella stanno in un gruppo del PDF e si sono ribaltati anche loro)"
+                    ));
+                }
+                Ok(msg)
+            });
+            }
+            Some(tracciati::Request::DieOutline(lines, die)) => {
+                self.apply(|e| {
+                    let n = e.add_die_outline(page, &lines, &die)?;
+                    Ok(if n == 1 {
+                        format!("Fustella «{}» creata dal contorno", die.name.trim())
+                    } else {
+                        format!("Fustella «{}» creata dal contorno: {n} contorni", die.name.trim())
+                    })
+                });
+                self.paths.outline.on = false;
+            }
+            Some(tracciati::Request::Die(ids, die)) => {
+                self.apply(|e| {
+                    let n = e.add_die(page, &ids, &die)?;
+                    Ok(if n == 1 {
+                        format!("Fustella «{}» creata", die.name.trim())
+                    } else {
+                        format!("Fustella «{}» creata: {n} contorni", die.name.trim())
+                    })
+                });
+                self.paths.selected.clear();
+            }
+        }
+    }
+
+    fn spots_panel(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let t = Tokens::get(ui.ctx());
+        card(ui, rect);
+        self.fresh_spots();
         let inner = rect.shrink2(vec2(14.0, 10.0));
         let mut ui = ui.new_child(
             egui::UiBuilder::new()

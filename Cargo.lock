@@ -2241,6 +2241,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "i_float"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ecaff1ce29bcacd72cdf581ba6fce636ef4c4e0b2da7e7846dd0137d98141e2"
+dependencies = [
+ "libm",
+]
+
+[[package]]
+name = "i_key_sort"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14269ee362009550495e20650ff3c2bca14a8147fe251e216760381ffed90b6f"
+
+[[package]]
+name = "i_overlay"
+version = "9.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "913fd692c02408adc76cead636f8e7e07c705f8b995a8b54b454b995e8e197d5"
+dependencies = [
+ "i_float",
+ "i_key_sort",
+ "i_shape",
+ "i_tree",
+]
+
+[[package]]
+name = "i_shape"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa1878f91ef7921feaf1b2346253ebc5e661878b22d5715195c1d5dcf0f20ae5"
+dependencies = [
+ "i_float",
+]
+
+[[package]]
+name = "i_tree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "048af31de955890c62a8506fec511335a5089e91e1c516537add16f96c507d84"
+
+[[package]]
 name = "iana-time-zone"
 version = "0.1.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5133,7 +5175,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
@@ -6442,7 +6484,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "winfiles"
-version = "0.2.17"
+version = "0.2.23"
 dependencies = [
  "arboard",
  "craft-print",
@@ -6459,6 +6501,7 @@ dependencies = [
  "winfiles-image-edit",
  "winfiles-layout",
  "winfiles-model",
+ "winfiles-nest",
  "winfiles-pdf-edit",
  "winfiles-pdf-out",
  "winfiles-scene",
@@ -6468,7 +6511,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-formats"
-version = "0.2.17"
+version = "0.2.23"
 dependencies = [
  "hayro-syntax",
  "photocraft-heif",
@@ -6481,7 +6524,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-geom"
-version = "0.2.17"
+version = "0.2.23"
 dependencies = [
  "proptest",
  "serde",
@@ -6489,8 +6532,9 @@ dependencies = [
 
 [[package]]
 name = "winfiles-image-edit"
-version = "0.2.17"
+version = "0.2.23"
 dependencies = [
+ "i_overlay",
  "image",
  "photocraft-heif",
  "photocraft-psd",
@@ -6505,7 +6549,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-layout"
-version = "0.2.17"
+version = "0.2.23"
 dependencies = [
  "proptest",
  "thiserror 2.0.21",
@@ -6515,7 +6559,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-menu11"
-version = "0.2.17"
+version = "0.2.23"
 dependencies = [
  "windows",
  "windows-core",
@@ -6524,7 +6568,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-model"
-version = "0.2.17"
+version = "0.2.23"
 dependencies = [
  "serde",
  "serde_json",
@@ -6533,10 +6577,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "winfiles-nest"
+version = "0.2.23"
+dependencies = [
+ "i_overlay",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "winfiles-pdf-edit"
-version = "0.2.17"
+version = "0.2.23"
 dependencies = [
  "hayro",
+ "i_overlay",
  "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-organize",
@@ -6546,7 +6599,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-pdf-out"
-version = "0.2.17"
+version = "0.2.23"
 dependencies = [
  "image",
  "krilla",
@@ -6560,7 +6613,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-photo"
-version = "0.2.17"
+version = "0.2.23"
 dependencies = [
  "image",
  "photocraft-cms",
@@ -6571,7 +6624,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-scene"
-version = "0.2.17"
+version = "0.2.23"
 dependencies = [
  "winfiles-geom",
  "winfiles-model",
@@ -6579,7 +6632,7 @@ dependencies = [
 
 [[package]]
 name = "winfiles-thumbs"
-version = "0.2.17"
+version = "0.2.23"
 dependencies = [
  "hayro",
  "image",
@@ -6833,7 +6886,7 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "xtask"
-version = "0.2.17"
+version = "0.2.23"
 
 [[package]]
 name = "yoke"

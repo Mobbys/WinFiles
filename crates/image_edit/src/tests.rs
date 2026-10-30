@@ -44,6 +44,8 @@ fn picture(width: u32, height: u32, dpi: f64) -> Picture {
         color: ColorMode::Rgb,
         bits: 8,
         origin: None,
+        trim: None,
+        cut: None,
         icc_name: None,
     }
 }
@@ -318,6 +320,8 @@ fn il_jpeg_appiattisce_la_trasparenza_sul_bianco() {
         color: ColorMode::Rgba,
         bits: 8,
         origin: None,
+        trim: None,
+        cut: None,
         icc_name: None,
     };
     let path = dir.join("alfa.jpg");
@@ -522,4 +526,427 @@ fn apre_un_psd_con_risoluzione_e_propone_il_tiff() {
     assert!((p.dpi() - 150.0).abs() < 0.01);
     assert_eq!(default_format(&path), Format::Tiff);
     assert!(extensions().contains(&"psd") && extensions().contains(&"nef"));
+}
+
+#[test]
+fn l_abbondanza_a_specchio_ribalta_l_immagine_sul_bordo() {
+    let p = picture(30, 20, 254.0);
+    let sides = [3, 2, 4, 1];
+    let out = apply_one(
+        &p,
+        Op::Bleed {
+            sides,
+            method: BleedMethod::Mirror,
+        },
+    )
+    .unwrap();
+    assert_eq!((out.width(), out.height()), (37, 23));
+    let px = |pic: &Picture, x: u32, y: u32| pic.image().to_rgb8().get_pixel(x, y).0;
+    // Dentro, l'immagine di prima spostata; fuori a sinistra la colonna 0 è ribaltata.
+    assert_eq!(px(&out, 3, 2), px(&p, 0, 0));
+    assert_eq!(px(&out, 2, 2), px(&p, 0, 0));
+    assert_eq!(px(&out, 0, 2), px(&p, 2, 0));
+    // A destra e in basso.
+    assert_eq!(px(&out, 33, 21), px(&p, 29, 19));
+    assert_eq!(px(&out, 36, 22), px(&p, 26, 19));
+    assert_eq!(
+        out.trim(),
+        Some(CropPx {
+            x: 3,
+            y: 2,
+            width: 30,
+            height: 20
+        })
+    );
+    // 254 DPI: 10 pixel al millimetro.
+    let t = out.trim_mm();
+    assert!((t[0] - 0.3).abs() < 1e-9 && (t[2] - 3.3).abs() < 1e-9, "{t:?}");
+}
+
+#[test]
+fn l_abbondanza_allungata_ripete_l_ultima_riga() {
+    let p = picture(10, 10, 100.0);
+    let out = apply_one(
+        &p,
+        Op::Bleed {
+            sides: [5, 5, 5, 5],
+            method: BleedMethod::Stretch,
+        },
+    )
+    .unwrap();
+    let px = |pic: &Picture, x: u32, y: u32| pic.image().to_rgb8().get_pixel(x, y).0;
+    assert_eq!(px(&out, 0, 0), px(&p, 0, 0));
+    assert_eq!(px(&out, 19, 7), px(&p, 9, 2));
+}
+
+#[test]
+fn una_fascia_piu_larga_dell_immagine_si_ribalta_ancora() {
+    let p = picture(4, 4, 100.0);
+    let out = apply_one(
+        &p,
+        Op::Bleed {
+            sides: [10, 0, 0, 0],
+            method: BleedMethod::Mirror,
+        },
+    )
+    .unwrap();
+    assert_eq!(out.width(), 14);
+    let px = |pic: &Picture, x: u32, y: u32| pic.image().to_rgb8().get_pixel(x, y).0;
+    // Le colonne nuove prendono 1 0 0 1 2 3 3 2 1 0, poi l'immagine 0 1 2 3.
+    assert_eq!(px(&out, 9, 0), px(&p, 0, 0));
+    assert_eq!(px(&out, 6, 0), px(&p, 3, 0));
+    assert_eq!(px(&out, 2, 0), px(&p, 0, 0));
+    assert_eq!(px(&out, 0, 0), px(&p, 1, 0));
+}
+
+#[test]
+fn il_formato_finito_segue_rotazioni_specchi_e_ritagli() {
+    let p = picture(30, 20, 100.0);
+    let b = apply_one(
+        &p,
+        Op::Bleed {
+            sides: [3, 2, 4, 1],
+            method: BleedMethod::Mirror,
+        },
+    )
+    .unwrap();
+    // 37 × 23 con il formato finito a (3, 2) di 30 × 20.
+    let r = apply_one(&b, Op::Rotate(1)).unwrap();
+    assert_eq!(
+        r.trim(),
+        Some(CropPx {
+            x: 1,
+            y: 3,
+            width: 20,
+            height: 30
+        })
+    );
+    let back = apply_one(&r, Op::Rotate(-1)).unwrap();
+    assert_eq!(back.trim(), b.trim());
+    let f = apply_one(&b, Op::Flip(Axis::Horizontal)).unwrap();
+    assert_eq!(
+        f.trim(),
+        Some(CropPx {
+            x: 4,
+            y: 2,
+            width: 30,
+            height: 20
+        })
+    );
+    let c = apply_one(
+        &b,
+        Op::Crop(CropPx {
+            x: 5,
+            y: 0,
+            width: 10,
+            height: 23,
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        c.trim(),
+        Some(CropPx {
+            x: 0,
+            y: 2,
+            width: 10,
+            height: 20
+        })
+    );
+    let z = apply_one(
+        &b,
+        Op::Resize {
+            width: 74,
+            height: 46,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        z.trim(),
+        Some(CropPx {
+            x: 6,
+            y: 4,
+            width: 60,
+            height: 40
+        })
+    );
+    // Una seconda abbondanza allarga ancora: il formato finito resta quello.
+    let again = apply_one(
+        &b,
+        Op::Bleed {
+            sides: [1, 1, 1, 1],
+            method: BleedMethod::Stretch,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        again.trim(),
+        Some(CropPx {
+            x: 4,
+            y: 3,
+            width: 30,
+            height: 20
+        })
+    );
+}
+
+#[test]
+fn l_abbondanza_vale_anche_a_16_bit_e_con_la_trasparenza() {
+    let mut p = picture(8, 8, 100.0);
+    p.image = std::sync::Arc::new(DynamicImage::ImageRgba16(p.image().to_rgba16()));
+    let out = apply_one(
+        &p,
+        Op::Bleed {
+            sides: [2, 2, 2, 2],
+            method: BleedMethod::Mirror,
+        },
+    )
+    .unwrap();
+    assert!(matches!(out.image(), DynamicImage::ImageRgba16(_)));
+    assert_eq!(out.width(), 12);
+    assert!(
+        apply_one(
+            &p,
+            Op::Bleed {
+                sides: [0, 0, 0, 0],
+                method: BleedMethod::Mirror
+            }
+        )
+        .is_err()
+    );
+}
+
+/// Un cerchio blu di raggio `r` pixel al centro, su fondo bianco, con un buco bianco al centro
+/// (raggio `r / 3`): il bianco dentro il soggetto non è sfondo.
+fn disc(side: u32, r: f64, alpha: bool) -> Picture {
+    let c = f64::from(side) / 2.0;
+    let buf = image::RgbaImage::from_fn(side, side, |x, y| {
+        let d = (f64::from(x) + 0.5 - c).hypot(f64::from(y) + 0.5 - c);
+        if d <= r / 3.0 {
+            image::Rgba([255, 255, 255, 255])
+        } else if d <= r {
+            image::Rgba([20, 60, 200, 255])
+        } else if alpha {
+            image::Rgba([255, 255, 255, 0])
+        } else {
+            image::Rgba([250, 250, 250, 255])
+        }
+    });
+    let mut p = picture(1, 1, 254.0);
+    p.image = std::sync::Arc::new(DynamicImage::ImageRgba8(buf));
+    p
+}
+
+#[test]
+fn la_fustella_segue_il_soggetto_sul_fondo_bianco() {
+    // 600 pixel a 254 DPI: 60 mm; cerchio di raggio 20 mm.
+    let p = disc(600, 200.0, false);
+    let spec = ContourSpec {
+        background: Background::Color([255, 255, 255]),
+        tolerance: 5.0,
+        offset: 0.0,
+        smooth: 0.0,
+        min_area: 1.0,
+        holes: false,
+    };
+    let c = trace(&p, &spec).unwrap();
+    assert_eq!(c.len(), 1, "il buco bianco al centro non si taglia");
+    let pi = std::f64::consts::PI;
+    let a = contour_area(&c);
+    assert!((a - pi * 400.0).abs() < pi * 400.0 * 0.02, "{a}");
+    // Con 3 mm fuori il raggio diventa 23 mm.
+    let grown = trace(&p, &ContourSpec { offset: 3.0, ..spec }).unwrap();
+    let g = contour_area(&grown);
+    assert!((g - pi * 529.0).abs() < pi * 529.0 * 0.02, "{g}");
+    // Con i fori: il centro (raggio 6,67 mm) è tolto.
+    let holed = trace(&p, &ContourSpec { holes: true, ..spec }).unwrap();
+    assert_eq!(holed.len(), 2);
+    let r3 = 20.0_f64 / 3.0;
+    let hval = contour_area(&holed);
+    assert!(
+        (hval - pi * (400.0 - r3 * r3)).abs() < pi * 400.0 * 0.03,
+        "{hval}"
+    );
+}
+
+#[test]
+fn la_fustella_segue_la_trasparenza_e_avvisa_se_manca_lo_sfondo() {
+    let p = disc(400, 120.0, true);
+    let spec = ContourSpec {
+        background: Background::Transparent,
+        tolerance: 0.0,
+        offset: 0.0,
+        smooth: 0.0,
+        min_area: 1.0,
+        holes: false,
+    };
+    let c = trace(&p, &spec).unwrap();
+    let pi = std::f64::consts::PI;
+    let a = contour_area(&c);
+    assert!((a - pi * 144.0).abs() < pi * 144.0 * 0.03, "{a}");
+    // Nessuno sfondo del colore scelto: lo dice invece di tagliare il rettangolo.
+    let red = ContourSpec {
+        background: Background::Color([255, 0, 0]),
+        ..spec
+    };
+    assert!(trace(&disc(100, 30.0, false), &red).is_err());
+}
+
+#[test]
+fn la_fustella_tiene_gli_spigoli_del_triangolo() {
+    // Un triangolo blu su bianco accanto a un anello rosso, come un adesivo vero: la fustella
+    // deve girare attorno a tutti e tre gli spigoli, non tagliarne uno.
+    let (w, h) = (1200u32, 900u32);
+    let inside = |x: f64, y: f64| {
+        let s = |ax: f64, ay: f64, bx: f64, by: f64| (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+        let (a, b, c) = (
+            s(600.0, 700.0, 850.0, 150.0),
+            s(850.0, 150.0, 1100.0, 700.0),
+            s(1100.0, 700.0, 600.0, 700.0),
+        );
+        (a >= 0.0 && b >= 0.0 && c >= 0.0) || (a <= 0.0 && b <= 0.0 && c <= 0.0)
+    };
+    let buf = image::RgbaImage::from_fn(w, h, |x, y| {
+        let (fx, fy) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+        let d = ((fx - 300.0) / 200.0).hypot((fy - 400.0) / 250.0);
+        if inside(fx, fy) {
+            image::Rgba([30, 110, 200, 255])
+        } else if d <= 1.0 && ((fx - 300.0) / 80.0).hypot((fy - 400.0) / 120.0) > 1.0 {
+            image::Rgba([220, 40, 60, 255])
+        } else {
+            image::Rgba([255, 255, 255, 255])
+        }
+    });
+    let mut p = picture(1, 1, 254.0);
+    p.image = std::sync::Arc::new(DynamicImage::ImageRgba8(buf));
+    let spec = ContourSpec {
+        background: Background::Color([255, 255, 255]),
+        tolerance: 10.0,
+        offset: 0.0,
+        smooth: 0.0,
+        min_area: 4.0,
+        holes: false,
+    };
+    let c = trace(&p, &spec).unwrap();
+    assert_eq!(c.len(), 2);
+    // Lo spigolo in basso a destra (x 1100 pixel = 110 mm) resta.
+    let right = c.iter().flatten().map(|q| q[0]).fold(0.0, f64::max);
+    assert!(right > 109.0, "lo spigolo è tagliato: arriva a {right} mm");
+    // Area del triangolo: 500 × 550 / 2 pixel, a 0,1 mm per pixel.
+    let tri = 500.0 * 550.0 / 2.0 * 0.01;
+    let ring = std::f64::consts::PI * (200.0 * 250.0) * 0.01;
+    let a = contour_area(&c);
+    assert!(
+        (a - tri - ring).abs() < (tri + ring) * 0.02,
+        "{a} invece di {}",
+        tri + ring
+    );
+    // Allargata di 2 mm: più grande, mai più piccola (lo spigolo resta dentro).
+    let g = contour_area(&trace(&p, &ContourSpec { offset: 2.0, ..spec }).unwrap());
+    assert!(g > a * 1.1, "{g} contro {a}");
+}
+
+#[test]
+fn la_lisciatura_arrotonda_le_rientranze_strette() {
+    // Un pettine: una barra con denti di 1 mm e fessure di 1 mm. Lisciato di 2 mm le fessure
+    // si riempiono (l'area cresce verso il rettangolo pieno) e i contorni restano uno.
+    let buf = image::RgbaImage::from_fn(600, 400, |x, y| {
+        let comb = (100..300).contains(&y) && (100..500).contains(&x);
+        let tooth = y < 200 || (x / 10) % 2 == 0;
+        if comb && tooth {
+            image::Rgba([0, 0, 0, 255])
+        } else {
+            image::Rgba([255, 255, 255, 255])
+        }
+    });
+    let mut p = picture(1, 1, 254.0);
+    p.image = std::sync::Arc::new(DynamicImage::ImageRgba8(buf));
+    let spec = ContourSpec {
+        background: Background::Color([255, 255, 255]),
+        tolerance: 10.0,
+        offset: 0.0,
+        smooth: 0.0,
+        min_area: 1.0,
+        holes: false,
+    };
+    let rough = contour_area(&trace(&p, &spec).unwrap());
+    let smooth = trace(&p, &ContourSpec { smooth: 2.0, ..spec }).unwrap();
+    assert_eq!(smooth.len(), 1);
+    let s = contour_area(&smooth);
+    // 40 × 20 mm pieno = 800 mm²; il pettine ne copre circa 600.
+    assert!(rough < 640.0, "{rough}");
+    assert!(s > 740.0 && s < 805.0, "{s}");
+    // Con la distanza la lisciatura arrotonda gli spigoli ma non entra nel soggetto: gli angoli
+    // del pettine (10, 10), (50, 30) e (10, 30) mm restano dentro.
+    let grown = trace(
+        &p,
+        &ContourSpec {
+            smooth: 4.0,
+            offset: 1.0,
+            ..spec
+        },
+    )
+    .unwrap();
+    for q in [[10.2, 10.2], [49.8, 29.8], [10.2, 29.8]] {
+        assert!(inside(&grown, q), "{q:?} fuori dalla fustella");
+    }
+}
+
+fn inside(contours: &[Vec<[f64; 2]>], q: [f64; 2]) -> bool {
+    let mut odd = false;
+    for c in contours {
+        for (i, a) in c.iter().enumerate() {
+            let b = c[(i + 1) % c.len()];
+            if (a[1] > q[1]) != (b[1] > q[1]) && q[0] < a[0] + (q[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0]) {
+                odd = !odd;
+            }
+        }
+    }
+    odd
+}
+
+#[test]
+fn l_abbondanza_lungo_il_contorno_allunga_i_colori_del_soggetto() {
+    // Disco blu di raggio 20 mm (200 pixel a 254 DPI) su quasi bianco, centro bianco.
+    let p = disc(600, 200.0, false);
+    let spec = ContourSpec {
+        background: Background::Color([255, 255, 255]),
+        tolerance: 5.0,
+        offset: 0.0,
+        smooth: 0.0,
+        min_area: 1.0,
+        holes: false,
+    };
+    let out = apply_one(&p, Op::ContourBleed { spec, band: 3.0 }).unwrap();
+    let img = out.image.to_rgba8();
+    let at = |r: f64| img.get_pixel((300.0 + r) as u32, 300).0;
+    // Fustella sul bordo del disco (20 mm): blu fino a 3 mm oltre, poi lo sfondo di prima.
+    let blue = [20, 60, 200, 255];
+    assert_eq!(at(190.0), blue);
+    assert_eq!(at(205.0), blue);
+    assert_eq!(at(225.0), blue);
+    assert_eq!(at(245.0), [250, 250, 250, 255]);
+    // Con la fustella 2 mm fuori (il bordo bianco dell'adesivo) l'abbondanza è bianca: dentro
+    // la fustella non cambia nulla.
+    let white = apply_one(
+        &p,
+        Op::ContourBleed {
+            spec: ContourSpec { offset: 2.0, ..spec },
+            band: 3.0,
+        },
+    )
+    .unwrap();
+    let wimg = white.image.to_rgba8();
+    assert_eq!(wimg.get_pixel(510, 300).0, [250, 250, 250, 255]);
+    assert_eq!(wimg.get_pixel(495, 300).0, blue);
+    // Il centro bianco del soggetto resta bianco, e la misura non cambia.
+    assert_eq!(at(0.0), [255, 255, 255, 255]);
+    assert_eq!(out.image.width(), 600);
+    assert_eq!(out.trim, None);
+    // La fustella resta quella di prima dell'abbondanza (20 mm di raggio), non si allarga.
+    let cut = out.cut_mm().unwrap();
+    let a = contour_area(&cut);
+    let pi = std::f64::consts::PI;
+    assert!((a - pi * 400.0).abs() < pi * 400.0 * 0.03, "{a}");
+    // Ruotata, la fustella fissata si toglie.
+    assert!(apply_one(&out, Op::Rotate(1)).unwrap().cut.is_none());
 }

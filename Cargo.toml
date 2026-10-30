@@ -6,7 +6,7 @@ default-members = ["crates/*", "apps/winfiles", "xtask"]
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.2.17"
+version = "0.2.23"
 edition = "2024"
 license = "LicenseRef-WinFiles-Proprietary"
 rust-version = "1.95"
@@ -24,6 +24,7 @@ winfiles-pdf-out = { path = "crates/pdf_out", version = "0.2.3" }
 winfiles-pdf-edit = { path = "crates/pdf_edit", version = "0.2.3" }
 winfiles-image-edit = { path = "crates/image_edit", version = "0.2.3" }
 winfiles-photo = { path = "crates/photo", version = "0.2.3" }
+winfiles-nest = { path = "crates/nest", version = "0.2.3" }
 
 # base
 serde = { version = "1", features = ["derive"] }
@@ -40,6 +41,9 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 # risoluzione né il profilo ICC, e un TIFF senza risoluzione in tipografia si stampa alla misura
 # sbagliata. È la stessa libreria che `image` usa per i TIFF, quindi nessuna copia in più. MIT.
 tiff = "0.11"
+# Fustella dalla selezione (ADR 0025): unione dei contorni di più tracciati in uno solo. Rust
+# puro, MIT/Apache, senza dipendenze oltre le sue (i_float, i_shape, i_key_sort, i_tree).
+i_overlay = { version = "9.1", default-features = false }
 
 
 # Foto HEIC/HEIF (iPhone, Mac): il lettore di PhotoCraft, Rust puro senza unsafe, che avvolge

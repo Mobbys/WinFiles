@@ -610,3 +610,987 @@ fn names_in(o: &pdfcraft_cos::Object) -> Vec<Vec<u8>> {
         _ => Vec::new(),
     }
 }
+
+/// Un filetto magenta chiuso sopra un fondo blu: la fustella fatta in quadricromia.
+const HAIRLINE: &str = "0 0 1 rg 0 0 200 100 re f 0 1 0 0 K 4 w 10 10 m 50 10 l 50 50 l 10 50 l h S";
+
+#[test]
+fn legge_i_tracciati_con_colore_spessore_e_posizione() {
+    let e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, HAIRLINE)]);
+    let scan = e.scan_page(0).unwrap();
+    assert_eq!(scan.paths.len(), 2);
+    assert!(near(scan.width, pt_to_mm(200.0)) && near(scan.height, pt_to_mm(100.0)));
+    let fondo = &scan.paths[0];
+    assert!(fondo.line.is_none());
+    assert_eq!(fondo.fill.as_ref().unwrap().ink, Ink::Rgb([0.0, 0.0, 1.0]));
+    let filetto = &scan.paths[1];
+    assert!(filetto.fill.is_none() && filetto.closed() && !filetto.in_form);
+    let line = filetto.line.as_ref().unwrap();
+    assert_eq!(line.ink, Ink::Cmyk([0.0, 1.0, 0.0, 0.0]));
+    assert!(near(line.width, pt_to_mm(4.0)));
+    // In millimetri dall'alto a sinistra: y del PDF 10..50 su una pagina alta 100.
+    let b = filetto.bounds;
+    assert!(near(b[0], pt_to_mm(10.0)) && near(b[1], pt_to_mm(50.0)));
+    assert!(near(b[2], pt_to_mm(50.0)) && near(b[3], pt_to_mm(90.0)));
+    assert!(near(filetto.length, pt_to_mm(160.0)));
+}
+
+#[test]
+fn le_pagine_ruotate_si_leggono_come_si_vedono() {
+    let e = editor(&[page([0.0, 0.0, 200.0, 100.0], 90, "0 0 0 1 k 0 80 20 20 re f")]);
+    let scan = e.scan_page(0).unwrap();
+    assert!(near(scan.width, pt_to_mm(100.0)) && near(scan.height, pt_to_mm(200.0)));
+    // Ruotata di 90° in senso orario, l'angolo in alto a sinistra va in alto a destra.
+    let b = scan.paths[0].bounds;
+    assert!(near(b[0], pt_to_mm(80.0)) && near(b[1], 0.0));
+    assert!(near(b[2], pt_to_mm(100.0)) && near(b[3], pt_to_mm(20.0)));
+}
+
+#[test]
+fn il_filetto_diventa_una_fustella_in_tinta() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, HAIRLINE)]);
+    let before = render(&reread(&e), 0);
+    let id = e.scan_page(0).unwrap().paths[1].id;
+    let change = Restyle {
+        part: Part::Line,
+        ink: Some(NewInk::Spot {
+            name: "CutContour".into(),
+            cmyk: [0.0, 1.0, 0.0, 0.0],
+        }),
+        width: None,
+        overprint: Some(true),
+    };
+    let r = e.restyle_paths(0, &[id], &change).unwrap();
+    assert_eq!((r.done, r.skipped), (1, 0));
+    assert_eq!(r.ids, [e.scan_page(0).unwrap().paths[1].id]);
+    assert_eq!(e.undo_label(), Some("Tracciati in tinta"));
+    let spots = e.spots().unwrap();
+    assert_eq!(spots.len(), 1);
+    assert_eq!(spots[0].name, "CutContour");
+    assert_eq!(spots[0].overprint, Overprint::All);
+    let scan = e.scan_page(0).unwrap();
+    let line = scan.paths[1].line.as_ref().unwrap();
+    assert_eq!(
+        line.ink,
+        Ink::Spot {
+            name: "CutContour".into(),
+            tint: 1.0
+        }
+    );
+    assert!(line.overprint && near(line.width, pt_to_mm(4.0)));
+    // Il fondo dopo la linea resta senza sovrastampa e com'era.
+    assert!(!scan.paths[0].fill.as_ref().unwrap().overprint);
+    let img = render(&reread(&e), 0);
+    assert_eq!(pixel(&img, 120, 50), pixel(&before, 120, 50));
+    // Lo spessore si cambia a parte.
+    let thin = Restyle {
+        part: Part::Line,
+        ink: None,
+        width: Some(0.1),
+        overprint: None,
+    };
+    let id = e.scan_page(0).unwrap().paths[1].id;
+    assert_eq!(e.restyle_paths(0, &[id], &thin).unwrap().done, 1);
+    let line = e.scan_page(0).unwrap().paths[1].line.clone().unwrap();
+    assert!(near(line.width, 0.1));
+    assert_eq!(
+        line.ink,
+        Ink::Spot {
+            name: "CutContour".into(),
+            tint: 1.0
+        }
+    );
+}
+
+#[test]
+fn un_tracciato_che_ritaglia_non_si_cambia() {
+    let mut e = editor(&[page(
+        [0.0, 0.0, 200.0, 100.0],
+        0,
+        "0 1 0 0 K 10 10 50 50 re W S 0 0 1 rg 0 0 200 100 re f",
+    )]);
+    let scan = e.scan_page(0).unwrap();
+    assert!(scan.paths[0].clips);
+    let change = Restyle {
+        part: Part::Line,
+        ink: Some(NewInk::Cmyk([0.0, 0.0, 0.0, 1.0])),
+        width: None,
+        overprint: None,
+    };
+    let r = e.restyle_paths(0, &[scan.paths[0].id], &change).unwrap();
+    assert_eq!((r.done, r.skipped), (0, 1));
+    assert!(e.undo_label().is_none());
+    // Il fondo blu, ritagliato, sta dentro il ritaglio.
+    let b = scan.paths[1].bounds;
+    assert!(near(b[2] - b[0], 200.0 * 25.4 / 72.0));
+    assert!(scan.others.is_empty());
+}
+
+#[test]
+fn i_tracciati_dei_moduli_si_trovano_e_si_cambiano() {
+    let mut p = page([0.0, 0.0, 200.0, 100.0], 0, "q 1 0 0 1 100 0 cm /F Do Q");
+    p.resources = "<< /XObject << /F 5 0 R >> >>";
+    let form_content = "0 1 0 0 K 1 w 0 0 m 50 50 l S";
+    let form = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 200 100] /Length {} >>\nstream\n{form_content}\nendstream",
+        form_content.len() + 1
+    );
+    let mut e = Editor::new(
+        PdfFile::from_bytes(pdf_extra(&[p], &[&form])).unwrap(),
+        PathBuf::from("prova.pdf"),
+    );
+    let scan = e.scan_page(0).unwrap();
+    let path = &scan.paths[0];
+    assert!(path.in_form && !path.closed());
+    assert!(near(path.bounds[0], pt_to_mm(100.0)));
+    let change = Restyle {
+        part: Part::Line,
+        ink: Some(NewInk::Spot {
+            name: "Cordonatura".into(),
+            cmyk: [0.0, 1.0, 0.0, 0.0],
+        }),
+        width: None,
+        overprint: None,
+    };
+    assert_eq!(e.restyle_paths(0, &[path.id], &change).unwrap().done, 1);
+    assert_eq!(e.spots().unwrap()[0].name, "Cordonatura");
+    let img = render(&reread(&e), 0);
+    assert_eq!((img.1, img.2), (200, 100));
+}
+
+#[test]
+fn immagini_e_formato_finito() {
+    let mut p = page([0.0, 0.0, 200.0, 100.0], 0, "q 100 0 0 50 0 0 cm /Im Do Q");
+    p.trim = Some([10.0, 10.0, 190.0, 90.0]);
+    p.resources = "<< /XObject << /Im 5 0 R >> >>";
+    let img = "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream";
+    let e = Editor::new(
+        PdfFile::from_bytes(pdf_extra(&[p], &[img])).unwrap(),
+        PathBuf::from("prova.pdf"),
+    );
+    let scan = e.scan_page(0).unwrap();
+    let t = scan.trim.unwrap();
+    assert!(near(t[0], pt_to_mm(10.0)) && near(t[1], pt_to_mm(10.0)));
+    assert_eq!(scan.others.len(), 1);
+    let o = scan.others[0];
+    assert!(
+        near(o[0], 0.0)
+            && near(o[1], pt_to_mm(50.0))
+            && near(o[2], pt_to_mm(100.0))
+            && near(o[3], pt_to_mm(100.0))
+    );
+}
+
+#[test]
+fn colore_in_quadricromia_sul_riempimento() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, HAIRLINE)]);
+    let id = e.scan_page(0).unwrap().paths[0].id;
+    let change = Restyle {
+        part: Part::Fill,
+        ink: Some(NewInk::Cmyk([0.0, 0.0, 0.0, 1.0])),
+        width: None,
+        overprint: None,
+    };
+    assert_eq!(e.restyle_paths(0, &[id], &change).unwrap().done, 1);
+    assert_eq!(e.undo_label(), Some("Colore dei tracciati"));
+    let scan = e.scan_page(0).unwrap();
+    assert_eq!(
+        scan.paths[0].fill.as_ref().unwrap().ink,
+        Ink::Cmyk([0.0, 0.0, 0.0, 1.0])
+    );
+    // Il filetto dopo il fondo resta magenta.
+    assert_eq!(
+        scan.paths[1].line.as_ref().unwrap().ink,
+        Ink::Cmyk([0.0, 1.0, 0.0, 0.0])
+    );
+    let img = render(&reread(&e), 0);
+    // Il nero in quadricromia a schermo è un grigio molto scuro (conversione CMYK).
+    assert!(pixel(&img, 120, 50).iter().all(|v| *v < 60));
+}
+
+/// Striscia rossa larga 5 punti a sinistra, il resto verde, e una linea magenta (la fustella
+/// finta) 3 punti dentro il bordo sinistro, su una pagina 200 × 100 senza abbondanza.
+const NO_BLEED: &str = "0 1 0 rg 0 0 200 100 re f 1 0 0 rg 0 0 5 100 re f 0 1 0 0 K 1 w 3 20 m 3 80 l S";
+
+fn bleed_spec(mode: BleedMode, sides: [bool; 4]) -> BleedSpec {
+    BleedSpec {
+        finished: [0.0, 0.0, pt_to_mm(200.0), pt_to_mm(100.0)],
+        amount: pt_to_mm(10.0),
+        sides,
+        mode,
+    }
+}
+
+#[test]
+fn abbondanza_a_specchio_con_formato_finito() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, NO_BLEED)]);
+    let left = e
+        .add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[], &[], &[])
+        .unwrap();
+    assert_eq!(left, 0);
+    assert_eq!(e.undo_label(), Some("Crea abbondanza"));
+    let info = e.pages();
+    assert!(near(info[0].size.w, pt_to_mm(220.0)) && near(info[0].size.h, pt_to_mm(120.0)));
+    let trim = info[0].trim.unwrap();
+    assert!(near(trim.w, pt_to_mm(200.0)) && near(trim.h, pt_to_mm(100.0)));
+    let img = render(&reread(&e), 0);
+    // A sinistra del taglio (x = 10) la grafica ribaltata attorno a x = 11 (un punto dentro, per
+    // non lasciare fili nell'anteprima): 2 → 10 dentro (verde), 7 → 5 (rossa).
+    assert_eq!(pixel(&img, 2, 60), [0, 255, 0]);
+    assert_eq!(pixel(&img, 7, 60), [255, 0, 0]);
+    // Sopra e sotto la grafica continua; dentro la pagina è com'era.
+    assert_eq!(pixel(&img, 100, 3), [0, 255, 0]);
+    assert_eq!(pixel(&img, 12, 3), [255, 0, 0]);
+    assert_eq!(pixel(&img, 100, 60), [0, 255, 0]);
+    // La fustella finta è ribaltata anche lei (x = 9), perché non è stata tenuta fuori.
+    assert!(pixel(&img, 8, 60)[1].min(pixel(&img, 9, 60)[1]) < 200);
+    // Il formato finito si legge come TrimBox nella pagina riletta.
+    let scan = e.scan_page(0).unwrap();
+    let t = scan.trim.unwrap();
+    assert!(near(t[0], pt_to_mm(10.0)) && near(t[2], pt_to_mm(210.0)));
+}
+
+#[test]
+fn la_fustella_non_si_ribalta_nell_abbondanza() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, NO_BLEED)]);
+    let die = e.scan_page(0).unwrap().paths[2].id;
+    let left = e
+        .add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[die], &[], &[])
+        .unwrap();
+    assert_eq!(left, 0);
+    let img = render(&reread(&e), 0);
+    // Nell'abbondanza al posto della linea c'è la grafica sotto (rossa); la linea vera resta.
+    assert_eq!(pixel(&img, 8, 60), [255, 0, 0]);
+    assert_eq!(pixel(&img, 9, 60), [255, 0, 0]);
+    assert!(pixel(&img, 13, 60)[1] < 100);
+    let scan = e.scan_page(0).unwrap();
+    assert!(scan.paths.iter().filter(|p| p.line.is_some()).count() >= 1);
+}
+
+#[test]
+fn abbondanza_allungata_e_solo_su_un_lato() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, NO_BLEED)]);
+    e.add_bleed(
+        0,
+        &bleed_spec(BleedMode::Stretch, [false, false, false, true]),
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    let info = e.pages();
+    assert!(near(info[0].size.w, pt_to_mm(210.0)) && near(info[0].size.h, pt_to_mm(100.0)));
+    let img = render(&reread(&e), 0);
+    // Il bordo rosso si allunga per tutta l'abbondanza.
+    assert_eq!(pixel(&img, 1, 50), [255, 0, 0]);
+    assert_eq!(pixel(&img, 8, 50), [255, 0, 0]);
+    assert_eq!(pixel(&img, 150, 50), [0, 255, 0]);
+}
+
+#[test]
+fn abbondanza_non_valida() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, NO_BLEED)]);
+    let mut spec = bleed_spec(BleedMode::Mirror, [false; 4]);
+    assert!(e.add_bleed(0, &spec, &[], &[], &[]).is_err());
+    spec.sides = [true; 4];
+    spec.amount = f64::NAN;
+    assert!(e.add_bleed(0, &spec, &[], &[], &[]).is_err());
+    spec.amount = 3.0;
+    spec.finished = [10.0, 10.0, 10.2, 10.2];
+    assert!(e.add_bleed(0, &spec, &[], &[], &[]).is_err());
+    assert_eq!(e.undo_label(), None);
+}
+
+#[test]
+fn abbondanza_su_una_pagina_ruotata() {
+    // 100 × 200 ruotata di 90°: si vede 200 × 100. Il quadrato rosso in basso a sinistra del
+    // file finisce in alto a sinistra come si vede.
+    let mut e = editor(&[page(
+        [0.0, 0.0, 100.0, 200.0],
+        90,
+        "0 1 0 rg 0 0 100 200 re f 1 0 0 rg 0 0 20 20 re f",
+    )]);
+    e.add_bleed(0, &bleed_spec(BleedMode::Mirror, [true; 4]), &[], &[], &[])
+        .unwrap();
+    let info = e.pages();
+    assert!(near(info[0].size.w, pt_to_mm(220.0)) && near(info[0].size.h, pt_to_mm(120.0)));
+    assert_eq!(info[0].rotation, 0);
+    let img = render(&reread(&e), 0);
+    // Il rosso in alto a sinistra si ribalta anche nell'angolo dell'abbondanza.
+    assert_eq!(pixel(&img, 15, 15), [255, 0, 0]);
+    assert_eq!(pixel(&img, 5, 5), [255, 0, 0]);
+    assert_eq!(pixel(&img, 215, 115), [0, 255, 0]);
+}
+
+#[test]
+fn nessun_filo_bianco_tra_abbondanza_e_pagina() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, "0 1 0 rg 0 0 200 100 re f")]);
+    // Il bordo del formato finito cade a metà di un pixel (10,5 punti).
+    let mut spec = bleed_spec(BleedMode::Mirror, [true; 4]);
+    spec.amount = pt_to_mm(10.5);
+    e.add_bleed(0, &spec, &[], &[], &[]).unwrap();
+    let img = render(&reread(&e), 0);
+    for (x, y) in [(10, 60), (210, 60), (100, 10), (100, 110), (10, 10)] {
+        assert_eq!(pixel(&img, x, y), [0, 255, 0], "({x}, {y})");
+    }
+}
+
+#[test]
+fn lavoro_piccolo_su_fondo_bianco_e_fustella_sul_bordo() {
+    // Fondo bianco su tutta la pagina, un rettangolo verde 100 × 50 da (50, 25), una fustella
+    // magenta spessa 4 proprio sul suo bordo e un segno di taglio nero più in là.
+    let mut e = editor(&[page(
+        [0.0, 0.0, 200.0, 100.0],
+        0,
+        "1 1 1 rg 0 0 200 100 re f 0 1 0 rg 50 25 100 50 re f \
+         0 1 0 0 K 4 w 50 25 100 50 re S 0 0 0 1 K 0.5 w 30 25 m 42 25 l S",
+    )]);
+    let die = e.scan_page(0).unwrap().paths[2].id;
+    let spec = BleedSpec {
+        finished: [pt_to_mm(50.0), pt_to_mm(25.0), pt_to_mm(150.0), pt_to_mm(75.0)],
+        amount: pt_to_mm(10.0),
+        sides: [true; 4],
+        mode: BleedMode::Mirror,
+    };
+    e.add_bleed(0, &spec, &[die], &[], &[]).unwrap();
+    let info = e.pages();
+    assert!(near(info[0].size.w, pt_to_mm(120.0)) && near(info[0].size.h, pt_to_mm(70.0)));
+    let img = render(&reread(&e), 0);
+    // L'abbondanza è verde fino al bordo: niente bianco del fondo, niente segno di taglio.
+    for (x, y) in [(3, 35), (6, 35), (60, 3), (116, 66), (2, 2)] {
+        assert_eq!(pixel(&img, x, y), [0, 255, 0], "({x}, {y})");
+    }
+    // La fustella resta intera: anche la metà fuori dal formato finito (x = 9 → 1 punto fuori).
+    assert!(pixel(&img, 9, 35)[1] < 100);
+    assert!(pixel(&img, 11, 35)[1] < 100);
+}
+
+#[test]
+fn nessun_filo_bianco_con_il_fondo_bianco_dietro() {
+    // Il lavoro verde sta su un fondo bianco e il suo bordo cade a metà di un pixel.
+    let mut e = editor(&[page(
+        [0.0, 0.0, 200.0, 100.0],
+        0,
+        "1 1 1 rg 0 0 200 100 re f 0 1 0 rg 50.5 25.5 100 50 re f",
+    )]);
+    let spec = BleedSpec {
+        finished: [pt_to_mm(50.5), pt_to_mm(24.5), pt_to_mm(150.5), pt_to_mm(74.5)],
+        amount: pt_to_mm(10.0),
+        sides: [true; 4],
+        mode: BleedMode::Mirror,
+    };
+    let paper = e.scan_page(0).unwrap().paths[0].id;
+    e.add_bleed(0, &spec, &[], &[paper], &[]).unwrap();
+    let img = render(&reread(&e), 0);
+    for (x, y) in [
+        (10, 35),
+        (11, 35),
+        (110, 35),
+        (60, 10),
+        (60, 11),
+        (60, 60),
+        (10, 10),
+        (110, 60),
+    ] {
+        assert_eq!(pixel(&img, x, y), [0, 255, 0], "({x}, {y})");
+    }
+}
+
+/// Come il file di prova di Michel: un fondo rosso, una cornice ciano spessa sul suo bordo (la
+/// fustella fatta a mano) e una stella gialla, su una pagina 200 × 100.
+const BACKGROUND_AND_FRAME: &str = "0 1 1 0 k 10 10 180 80 re f 1 0 0 0 K 4 w 10 10 180 80 re S \
+     0 0 1 0 K 1 w 90 30 m 110 30 l 100 70 l h S";
+
+#[test]
+fn abbondanza_solo_dello_sfondo_scelto() {
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, BACKGROUND_AND_FRAME)]);
+    let red = e.scan_page(0).unwrap().paths[0].id;
+    let spec = BleedSpec {
+        finished: [pt_to_mm(10.0), pt_to_mm(10.0), pt_to_mm(190.0), pt_to_mm(90.0)],
+        amount: pt_to_mm(8.0),
+        sides: [true; 4],
+        mode: BleedMode::Mirror,
+    };
+    e.add_bleed(0, &spec, &[], &[], &[red]).unwrap();
+    let info = e.pages();
+    assert!(near(info[0].size.w, pt_to_mm(196.0)) && near(info[0].size.h, pt_to_mm(96.0)));
+    let img = render(&reread(&e), 0);
+    // Il rosso arriva al bordo nuovo; la cornice ciano resta una sola, al suo posto (x = 8 → 6..10).
+    let red_px = pixel(&img, 1, 48);
+    assert!(red_px[0] > 200 && red_px[1] < 80, "{red_px:?}");
+    let frame_px = pixel(&img, 8, 48);
+    assert!(frame_px[0] < 80 && frame_px[2] > 150, "{frame_px:?}");
+    // Nessuna seconda cornice ribaltata nell'abbondanza.
+    let inside_bleed = pixel(&img, 3, 48);
+    assert!(inside_bleed[0] > 200 && inside_bleed[2] < 80, "{inside_bleed:?}");
+    // La stella e la cornice sono ancora tracciati che si possono scegliere.
+    let scan = e.scan_page(0).unwrap();
+    assert!(scan.paths.iter().any(|p| {
+        p.line
+            .as_ref()
+            .is_some_and(|l| l.ink == Ink::Cmyk([0.0, 0.0, 1.0, 0.0]))
+    }));
+}
+
+#[test]
+fn fustella_dall_unione_dei_tracciati_scelti() {
+    // Due rettangoli che si sovrappongono e uno staccato.
+    let mut e = editor(&[page(
+        [0.0, 0.0, 200.0, 100.0],
+        0,
+        "0 0 1 rg 10 10 50 50 re f 40 40 50 50 re f 150 10 20 20 re f",
+    )]);
+    let ids: Vec<PathId> = e.scan_page(0).unwrap().paths.iter().map(|p| p.id).collect();
+    let die = NewDie {
+        name: "Taglio".into(),
+        cmyk: [0.0, 1.0, 0.0, 0.0],
+        width: 0.1,
+        overprint: true,
+    };
+    assert_eq!(e.add_die(0, &ids, &die).unwrap(), 2);
+    assert_eq!(e.undo_label(), Some("Crea fustella"));
+    let scan = e.scan_page(0).unwrap();
+    assert_eq!(scan.paths.len(), 4);
+    let cut = &scan.paths[3];
+    let line = cut.line.as_ref().unwrap();
+    assert_eq!(
+        line.ink,
+        Ink::Spot {
+            name: "Taglio".into(),
+            tint: 1.0
+        }
+    );
+    assert!(line.overprint && near(line.width, 0.1) && cut.fill.is_none());
+    assert_eq!(cut.parts.len(), 2);
+    // L'unione dei primi due: da (10, 10) a (90, 90) punti, cioè in mm dall'alto.
+    let b = cut.bounds;
+    assert!(near(b[0], pt_to_mm(10.0)) && near(b[2], pt_to_mm(170.0)));
+    assert!(near(b[1], pt_to_mm(10.0)) && near(b[3], pt_to_mm(90.0)));
+    // Il contorno unito ha 8 vertici (una L doppia), non due quadrati sovrapposti.
+    let big = cut.parts.iter().max_by_key(|p| p.points.len()).unwrap();
+    assert_eq!(big.points.len(), 8);
+    assert!(e.spots().unwrap().iter().any(|s| s.name == "Taglio"));
+    // Niente area chiusa: errore e nessuna modifica.
+    let mut e = editor(&[page([0.0, 0.0, 200.0, 100.0], 0, "0 0 0 1 K 10 10 m 50 50 l S")]);
+    let ids: Vec<PathId> = e.scan_page(0).unwrap().paths.iter().map(|p| p.id).collect();
+    assert!(e.add_die(0, &ids, &die).is_err());
+    assert_eq!(e.undo_label(), None);
+}
+
+#[test]
+fn fustella_su_una_pagina_ruotata() {
+    let mut e = editor(&[page([0.0, 0.0, 100.0, 200.0], 90, "0 0 1 rg 10 20 30 40 re f")]);
+    let before = e.scan_page(0).unwrap().paths[0].bounds;
+    let ids = [e.scan_page(0).unwrap().paths[0].id];
+    let die = NewDie {
+        name: "Taglio".into(),
+        cmyk: [0.0, 1.0, 0.0, 0.0],
+        width: 0.1,
+        overprint: true,
+    };
+    e.add_die(0, &ids, &die).unwrap();
+    let after = e.scan_page(0).unwrap().paths[1].bounds;
+    for (a, b) in after.iter().zip(before) {
+        assert!(near(*a, b), "{after:?} {before:?}");
+    }
+}
+
+/// Un cerchio (quattro curve) di centro (cx, cy) e raggio r, in punti.
+fn circle(cx: f64, cy: f64, r: f64) -> String {
+    let k = r * 0.552_284_75;
+    format!(
+        "{} {cy} m {} {} {} {} {cx} {} c {} {} {} {} {} {cy} c {} {} {} {} {cx} {} c {} {} {} {} {} {cy} c h",
+        cx + r,
+        cx + r,
+        cy + k,
+        cx + k,
+        cy + r,
+        cy + r,
+        cx - k,
+        cy + r,
+        cx - r,
+        cy + k,
+        cx - r,
+        cx - r,
+        cy - k,
+        cx - k,
+        cy - r,
+        cy - r,
+        cx + k,
+        cy - r,
+        cx + r,
+        cy - k,
+        cx + r,
+    )
+}
+
+fn leak(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+fn is_red(p: [u8; 3]) -> bool {
+    p[0] > 200 && p[1] < 60 && p[2] < 60
+}
+
+fn is_blue(p: [u8; 3]) -> bool {
+    p[2] > 200 && p[0] < 60 && p[1] < 60
+}
+
+fn is_white(p: [u8; 3]) -> bool {
+    p.iter().all(|v| *v > 240)
+}
+
+#[test]
+fn abbondanza_che_segue_un_cerchio() {
+    // Grafica rossa a sinistra e blu a destra, ritagliata sul cerchio; sopra la fustella nera.
+    let c = circle(150.0, 150.0, 100.0);
+    let content = leak(format!(
+        "q {c} W n 1 0 0 rg 0 0 150 300 re f 0 0 1 rg 150 0 150 300 re f Q 0 0 0 1 K 0.5 w {c} S"
+    ));
+    let mut e = editor(&[page([0.0, 0.0, 400.0, 300.0], 0, content)]);
+    let scan = e.scan_page(0).unwrap();
+    let die: Vec<PathId> = scan
+        .paths
+        .iter()
+        .filter(|p| p.line.is_some())
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(outline_is_rectangle(&scan, &die), Some(false));
+    e.add_shaped_bleed(0, 5.0, &die, &die, &[], &[]).unwrap();
+    assert_eq!(e.undo_label(), Some("Crea abbondanza"));
+    let b = mm_to_pt(5.0);
+    let size = 200.0 + 2.0 * b;
+    let info = &e.pages()[0];
+    assert!(near(info.size.w, pt_to_mm(size)) && near(info.size.h, pt_to_mm(size)));
+    let img = render(&reread(&e), 0);
+    let mid = (size / 2.0) as u32;
+    // Fuori dal cerchio, a 2,5 mm: a sinistra il rosso, a destra il blu.
+    let out = (100.0 + mm_to_pt(2.5)) as u32;
+    assert!(
+        is_red(pixel(&img, mid - out, mid)),
+        "{:?}",
+        pixel(&img, mid - out, mid)
+    );
+    assert!(
+        is_blue(pixel(&img, mid + out, mid)),
+        "{:?}",
+        pixel(&img, mid + out, mid)
+    );
+    // Anche in diagonale (dentro un ventaglio o tra due lati).
+    let d = ((100.0 + mm_to_pt(2.5)) / 2f64.sqrt()) as u32;
+    assert!(is_red(pixel(&img, mid - d, mid - d)));
+    assert!(is_blue(pixel(&img, mid + d, mid + d)));
+    // Nell'angolo della pagina, oltre l'abbondanza, resta il bianco.
+    assert!(is_white(pixel(&img, 3, 3)));
+    assert!(is_white(pixel(&img, size as u32 - 3, size as u32 - 3)));
+    // La fustella resta: un pixel scuro sul cerchio, in alto.
+    let top = (size / 2.0 - 100.0) as u32;
+    let dark = (top - 1..=top + 1).any(|y| pixel(&img, mid, y).iter().all(|v| *v < 120));
+    assert!(dark, "{:?}", pixel(&img, mid, top));
+    // Il formato finito è il rettangolo del cerchio.
+    let trim = e.pages()[0].trim.unwrap();
+    assert!(
+        near(trim.w, pt_to_mm(200.0)) && near(trim.h, pt_to_mm(200.0)),
+        "{trim:?}"
+    );
+}
+
+#[test]
+fn abbondanza_che_segue_una_stella() {
+    // Una stella a cinque punte rossa: sulle punte (angoli stretti) e negli incavi.
+    let (cx, cy) = (150.0, 150.0);
+    let mut d = String::from("1 0 0 rg ");
+    let mut tips = Vec::new();
+    let mut notches = Vec::new();
+    for i in 0..10 {
+        let a = std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::PI / 5.0;
+        let r = if i % 2 == 0 { 120.0 } else { 50.0 };
+        let (x, y) = (cx + r * a.cos(), cy + r * a.sin());
+        if i % 2 == 0 {
+            tips.push(a);
+        } else {
+            notches.push(a);
+        }
+        d.push_str(&format!("{x} {y} {} ", if i == 0 { "m" } else { "l" }));
+    }
+    d.push_str("h f");
+    let mut e = editor(&[page([0.0, 0.0, 300.0, 300.0], 0, leak(d))]);
+    let id = e.scan_page(0).unwrap().paths[0].id;
+    let before = e.scan_page(0).unwrap().paths[0].bounds;
+    e.add_shaped_bleed(0, 3.0, &[id], &[], &[], &[]).unwrap();
+    let img = render(&reread(&e), 0);
+    let b = mm_to_pt(3.0);
+    // Il centro della stella sulla pagina nuova (asse y in giù, come i pixel).
+    let x0 = mm_to_pt(before[0]) - b;
+    let y0 = mm_to_pt(before[1]) - b;
+    let (ccx, ccy) = (cx - x0, (300.0 - cy) - y0);
+    let at = |a: f64, r: f64| pixel(&img, (ccx + r * a.cos()) as u32, (ccy - r * a.sin()) as u32);
+    for a in &tips {
+        // Oltre la punta di 1,5 mm.
+        let p = at(*a, 120.0 + mm_to_pt(1.5));
+        assert!(is_red(p), "punta {a}: {p:?}");
+    }
+    for a in &notches {
+        // Nell'incavo, 1,5 mm fuori.
+        let p = at(*a, 50.0 + mm_to_pt(1.5));
+        assert!(is_red(p), "incavo {a}: {p:?}");
+        // A metà tra due punte, lontano dalla stella: bianco.
+        let p = at(*a, 95.0);
+        assert!(is_white(p), "fuori {a}: {p:?}");
+    }
+}
+
+#[test]
+fn il_rettangolo_si_riconosce() {
+    let c = leak(format!(
+        "0 0 1 rg 10 10 100 50 re f {} f 0 0 m 100 0 l 50 80 l h f",
+        circle(200.0, 50.0, 30.0)
+    ));
+    let e = editor(&[page([0.0, 0.0, 300.0, 100.0], 0, c)]);
+    let scan = e.scan_page(0).unwrap();
+    let id = |i: usize| [scan.paths[i].id];
+    assert_eq!(outline_is_rectangle(&scan, &id(0)), Some(true));
+    assert_eq!(outline_is_rectangle(&scan, &id(1)), Some(false));
+    assert_eq!(outline_is_rectangle(&scan, &id(2)), Some(false));
+    assert_eq!(outline_is_rectangle(&scan, &[]), None);
+}
+
+#[test]
+fn lo_sfondo_sagomato_scelto_si_allarga_in_un_tracciato_solo() {
+    // Un cerchio rosso con sopra un testo finto (quadratino blu): si sceglie il cerchio.
+    let content = leak(format!(
+        "1 0 0 rg {} f 0 0 1 rg 140 140 20 20 re f",
+        circle(150.0, 150.0, 100.0)
+    ));
+    let mut e = editor(&[page([0.0, 0.0, 300.0, 300.0], 0, content)]);
+    let before = e.scan_page(0).unwrap();
+    let id = before.paths[0].id;
+    e.add_shaped_bleed(0, 3.0, &[id], &[], &[], &[id]).unwrap();
+    let after = e.scan_page(0).unwrap();
+    // Sempre due tracciati: il cerchio, ora più grande di 3 mm per lato, e il quadratino.
+    assert_eq!(after.paths.len(), 2);
+    let (b0, b1) = (before.paths[0].bounds, after.paths[0].bounds);
+    let page_w = pt_to_mm(200.0) + 6.0;
+    assert!(near(b1[0], 0.0) && near(b1[1], 0.0), "{b1:?}");
+    assert!(
+        (b1[2] - page_w).abs() < 0.05 && (b1[3] - page_w).abs() < 0.05,
+        "{b1:?} {b0:?}"
+    );
+    assert_eq!(after.paths[0].parts.len(), 1);
+    let info = &e.pages()[0];
+    assert!(near(info.size.w, page_w) && near(info.trim.unwrap().w, pt_to_mm(200.0)));
+    // Il quadratino è rimasto al suo posto, al centro.
+    let q = after.paths[1].bounds;
+    assert!(near((q[0] + q[2]) / 2.0, page_w / 2.0));
+}
+
+#[test]
+fn lo_sfondo_rettangolare_scelto_si_allarga_con_gli_angoli_vivi() {
+    let mut e = editor(&[page(
+        [0.0, 0.0, 300.0, 200.0],
+        0,
+        "1 0 0 rg 50 50 200 100 re f 0 0 1 rg 140 90 20 20 re f",
+    )]);
+    let scan = e.scan_page(0).unwrap();
+    let id = scan.paths[0].id;
+    let spec = BleedSpec {
+        finished: scan.paths[0].bounds,
+        amount: 3.0,
+        sides: [true; 4],
+        mode: BleedMode::Mirror,
+    };
+    e.add_bleed(0, &spec, &[], &[], &[id]).unwrap();
+    let after = e.scan_page(0).unwrap();
+    assert_eq!(after.paths.len(), 2);
+    let img = render(&reread(&e), 0);
+    // Gli angoli della pagina sono rossi: niente angoli tondi.
+    assert!(is_red(pixel(&img, 1, 1)) && is_red(pixel(&img, img.1 - 2, img.2 - 2)));
+    assert_eq!(after.paths[0].parts[0].points.len(), 4);
+}
+
+#[test]
+fn gli_oggetti_mascherati_scelti_si_allargano_con_la_maschera() {
+    // Una maschera quadrata; dentro, il rosso esce dalla maschera e il blu si ferma sul bordo.
+    let mut e = editor(&[page(
+        [0.0, 0.0, 300.0, 300.0],
+        0,
+        "q 50 50 100 100 re W n 1 0 0 rg 0 0 100 300 re f 0 0 1 rg 100 50 50 100 re f Q",
+    )]);
+    let scan = e.scan_page(0).unwrap();
+    assert_eq!(scan.paths.len(), 2);
+    let ids: Vec<PathId> = scan.paths.iter().map(|p| p.id).collect();
+    // Il formato finito dei due scelti è quello che si vede: la maschera.
+    let v = scan.paths[0].visible;
+    assert!(near(v[0], pt_to_mm(50.0)) && near(v[2], pt_to_mm(100.0)), "{v:?}");
+    let finished = [pt_to_mm(50.0), pt_to_mm(150.0), pt_to_mm(150.0), pt_to_mm(250.0)];
+    let spec = BleedSpec {
+        finished,
+        amount: 3.0,
+        sides: [true; 4],
+        mode: BleedMode::Mirror,
+    };
+    e.add_bleed(0, &spec, &[], &[], &ids).unwrap();
+    // Sempre due tracciati, senza copie.
+    assert_eq!(e.scan_page(0).unwrap().paths.len(), 2);
+    let img = render(&reread(&e), 0);
+    let (w, h) = (img.1, img.2);
+    assert!((f64::from(w) - (100.0 + 2.0 * mm_to_pt(3.0))).abs() < 1.5);
+    for y in [1, h / 2, h - 2] {
+        assert!(is_red(pixel(&img, 1, y)), "{y}: {:?}", pixel(&img, 1, y));
+        assert!(is_blue(pixel(&img, w - 2, y)), "{y}: {:?}", pixel(&img, w - 2, y));
+    }
+}
+
+#[test]
+fn oggetti_mascherati_da_un_cerchio_si_allargano_lungo_il_cerchio() {
+    let c = circle(150.0, 150.0, 100.0);
+    let content = leak(format!(
+        "q {c} W n 1 0 0 rg 0 0 150 300 re f 0 0 1 rg 150 50 100 200 re f Q"
+    ));
+    let mut e = editor(&[page([0.0, 0.0, 300.0, 300.0], 0, content)]);
+    let ids: Vec<PathId> = e.scan_page(0).unwrap().paths.iter().map(|p| p.id).collect();
+    assert_eq!(ids.len(), 2);
+    e.add_shaped_bleed(0, 5.0, &ids, &[], &[], &ids).unwrap();
+    assert_eq!(e.scan_page(0).unwrap().paths.len(), 2);
+    let size = 200.0 + 2.0 * mm_to_pt(5.0);
+    let info = &e.pages()[0];
+    assert!(near(info.size.w, pt_to_mm(size)), "{:?}", info.size);
+    let img = render(&reread(&e), 0);
+    let mid = (size / 2.0) as u32;
+    let out = (100.0 + mm_to_pt(2.5)) as u32;
+    assert!(is_red(pixel(&img, mid - out, mid)));
+    assert!(
+        is_blue(pixel(&img, mid + out, mid)),
+        "{:?}",
+        pixel(&img, mid + out, mid)
+    );
+    assert!(is_white(pixel(&img, 3, 3)));
+}
+
+#[test]
+fn gli_oggetti_sovrapposti_si_allargano_solo_fuori() {
+    // Due quadrati che si sovrappongono: il blu sopra copre metà del rosso.
+    let mut e = editor(&[page(
+        [0.0, 0.0, 300.0, 200.0],
+        0,
+        "1 0 0 rg 50 50 100 100 re f 0 0 1 rg 100 50 100 100 re f",
+    )]);
+    let scan = e.scan_page(0).unwrap();
+    let ids: Vec<PathId> = scan.paths.iter().map(|p| p.id).collect();
+    e.add_shaped_bleed(0, 3.0, &ids, &[], &[], &ids).unwrap();
+    let img = render(&reread(&e), 0);
+    let b = mm_to_pt(3.0);
+    // Dentro, il bordo tra rosso e blu è dov'era (x = 100 della pagina di prima).
+    let at = |x: f64, y: f64| pixel(&img, (x - 50.0 + b) as u32, (150.0 - y + b) as u32);
+    assert!(is_red(at(98.0, 100.0)) && is_blue(at(102.0, 100.0)));
+    // Fuori: sopra il rosso c'è rosso, sopra il blu c'è blu, divisi dove si dividono dentro.
+    assert!(is_red(at(98.0, 152.0)) && is_blue(at(102.0, 152.0)));
+    assert!(is_red(at(48.0, 100.0)) && is_blue(at(202.0, 100.0)));
+}
+
+#[test]
+fn la_fustella_aperta_diventa_una_sagoma() {
+    // Un quadrato disegnato con quattro tratti aperti che si toccano.
+    let content =
+        "0 0 0 1 K 0.5 w 50 50 m 250 50 l S 250 50 m 250 250 l S 250 250 m 50 250 l S 50 250 m 50 50 l S";
+    let e = editor(&[page([0.0, 0.0, 300.0, 300.0], 0, content)]);
+    let scan = e.scan_page(0).unwrap();
+    let die: Vec<PathId> = scan.paths.iter().map(|p| p.id).collect();
+    assert_eq!(die.len(), 4);
+    let shape = die_shape(&scan, &die).unwrap();
+    let side = pt_to_mm(200.0);
+    let area = shape_area(&shape);
+    assert!(
+        (area - side * side).abs() < side * 4.0 * 0.2,
+        "{area} contro {}",
+        side * side
+    );
+}
+
+#[test]
+fn la_o_fatta_di_due_cerchi_ha_il_foro_e_resta_un_pezzo() {
+    // Una O (due cerchi, tracciati separati) e un quadratino a parte: due pezzi.
+    let outer = circle(100.0, 100.0, 80.0);
+    let inner = circle(100.0, 100.0, 40.0);
+    let content = leak(format!(
+        "0 0 0 1 K 0.5 w {outer} S {inner} S 220 80 m 260 80 l 260 120 l 220 120 l h S"
+    ));
+    let e = editor(&[page([0.0, 0.0, 300.0, 300.0], 0, content)]);
+    let scan = e.scan_page(0).unwrap();
+    let die: Vec<PathId> = scan.paths.iter().map(|p| p.id).collect();
+    assert_eq!(die.len(), 3);
+    let shape = die_shape(&scan, &die).unwrap();
+    let (r1, r2, q) = (pt_to_mm(80.0), pt_to_mm(40.0), pt_to_mm(40.0));
+    let pi = std::f64::consts::PI;
+    let want = pi * (r1 * r1 - r2 * r2) + q * q;
+    assert!(
+        (shape_area(&shape) - want).abs() < want * 0.02,
+        "{} contro {want}",
+        shape_area(&shape)
+    );
+    let pieces = split_shape(&shape);
+    assert_eq!(pieces.len(), 2);
+    // La O porta con sé il suo foro.
+    let o = pieces.iter().find(|p| p.len() == 2).unwrap();
+    let o_area = shape_area(o);
+    assert!((o_area - pi * (r1 * r1 - r2 * r2)).abs() < o_area * 0.02);
+}
+
+#[test]
+fn i_fogli_del_nesting_ritagliano_le_copie_sulla_sagoma() {
+    // Pagina tutta rossa con una fustella tonda: sul foglio resta il cerchio più l'abbondanza.
+    let c = circle(150.0, 150.0, 100.0);
+    let content = leak(format!("1 0 0 rg 0 0 300 300 re f 0 0 0 1 K 0.5 w {c} S"));
+    let file = PdfFile::from_bytes(pdf(&[page([0.0, 0.0, 300.0, 300.0], 0, content)])).unwrap();
+    let scan = file.scan_page(0).unwrap();
+    let die: Vec<PathId> = scan
+        .paths
+        .iter()
+        .filter(|p| p.line.is_some())
+        .map(|p| p.id)
+        .collect();
+    let shape = die_shape(&scan, &die).unwrap();
+    let r = pt_to_mm(100.0);
+    assert!((shape_area(&shape) - std::f64::consts::PI * r * r).abs() < r * r * 0.02);
+    let clip = grow_shape(&shape, 3.0);
+    let page_mm = pt_to_mm(300.0);
+    // Due copie affiancate su un foglio largo due pagine; la seconda girata di 90°.
+    let sheet = NestSheet {
+        width: 2.0 * page_mm,
+        height: page_mm,
+        pieces: vec![
+            SheetPiece {
+                source: 0,
+                page: 0,
+                matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                clip: clip.clone(),
+                hide: Vec::new(),
+            },
+            SheetPiece {
+                source: 0,
+                page: 0,
+                // (x, y) → (page_mm - y, x) spostato a destra: 90° in senso orario.
+                matrix: [0.0, 1.0, -1.0, 0.0, 2.0 * page_mm, 0.0],
+                clip,
+                hide: Vec::new(),
+            },
+        ],
+        lines: Vec::new(),
+    };
+    let out = nest_document(&[&file], &[sheet], None).unwrap();
+    let pdf = Pdf::new(out.to_bytes().unwrap()).unwrap();
+    let img = render(&pdf, 0);
+    assert_eq!((img.1, img.2), (600, 300));
+    for cx in [150, 450] {
+        // Il centro del cerchio è rosso, l'angolo della pagina (fuori dalla sagoma) bianco.
+        assert!(is_red(pixel(&img, cx, 150)));
+        assert!(
+            is_white(pixel(&img, cx - 140, 10)),
+            "{:?}",
+            pixel(&img, cx - 140, 10)
+        );
+        // A 2 mm fuori dal cerchio c'è ancora il rosso dell'abbondanza; a 5 mm no.
+        let two = (100.0 + mm_to_pt(2.0)) as u32;
+        let five = (100.0 + mm_to_pt(5.0)) as u32;
+        assert!(
+            is_red(pixel(&img, cx, 150 + two)),
+            "{:?}",
+            pixel(&img, cx, 150 + two)
+        );
+        assert!(is_white(pixel(&img, cx, 150 + five)));
+    }
+}
+
+#[test]
+fn con_le_linee_comuni_la_fustella_dei_pezzi_sparisce() {
+    // Un quadrato rosso con la fustella nera spessa sul bordo: due copie affiancate senza
+    // distanza. Le fustelle dei pezzi non si disegnano; sopra c'è una linea sola in tinta Taglio.
+    let content = leak("1 0 0 rg 0 0 100 100 re f 0 0 0 1 K 6 w 0 0 100 100 re S".to_string());
+    let file = PdfFile::from_bytes(pdf(&[page([0.0, 0.0, 100.0, 100.0], 0, content)])).unwrap();
+    let scan = file.scan_page(0).unwrap();
+    let die: Vec<PathId> = scan
+        .paths
+        .iter()
+        .filter(|p| p.line.is_some())
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(die.len(), 1);
+    let side = pt_to_mm(100.0);
+    let piece = |x: f64| SheetPiece {
+        source: 0,
+        page: 0,
+        matrix: [1.0, 0.0, 0.0, 1.0, x, 0.0],
+        clip: Vec::new(),
+        hide: die.clone(),
+    };
+    // La linea comune: il lato in mezzo, in verticale.
+    let sheet = NestSheet {
+        width: 2.0 * side,
+        height: side,
+        pieces: vec![piece(0.0), piece(side)],
+        lines: vec![vec![[side, 0.0], [side, side]]],
+    };
+    let ink = NewDie {
+        name: "Taglio".into(),
+        cmyk: [0.0, 1.0, 0.0, 0.0],
+        width: 2.0,
+        // Senza sovrastampa: sul rosso il magenta in sovrastampa resterebbe rosso.
+        overprint: false,
+    };
+    let out = nest_document(&[&file], &[sheet], Some(&ink)).unwrap();
+    let bytes = out.to_bytes().unwrap();
+    let pdf = Pdf::new(bytes.clone()).unwrap();
+    let img = render(&pdf, 0);
+    // Dove c'era la fustella nera (il bordo in alto) ora c'è il rosso della grafica.
+    assert!(is_red(pixel(&img, 50, 1)), "{:?}", pixel(&img, 50, 1));
+    assert!(is_red(pixel(&img, 150, 1)), "{:?}", pixel(&img, 150, 1));
+    // Sul lato comune c'è la linea magenta della tinta, non il nero.
+    let p = pixel(&img, 100, 50);
+    assert!(p[1] < 120 && p[0] > 150 && p[2] > 60, "{p:?}");
+    // La tinta si chiama come deve.
+    let scan = out.scan_page(0).unwrap();
+    assert!(scan.paths.iter().any(|q| matches!(
+        q.line.as_ref().map(|l| &l.ink),
+        Some(Ink::Spot { name, .. }) if name == "Taglio"
+    )));
+    // Senza togliere le fustelle il nero resta.
+    let sheet = NestSheet {
+        width: side,
+        height: side,
+        pieces: vec![SheetPiece {
+            hide: Vec::new(),
+            ..piece(0.0)
+        }],
+        lines: Vec::new(),
+    };
+    let out = nest_document(&[&file], &[sheet], None).unwrap();
+    let img = render(&Pdf::new(out.to_bytes().unwrap()).unwrap(), 0);
+    let p = pixel(&img, 50, 1);
+    assert!(p.iter().all(|v| *v < 60), "{p:?}");
+}
+
+#[test]
+fn i_tracciati_di_ritaglio_sagomati_diventano_fustella() {
+    // Un rettangolo di pagina che ritaglia tutto, poi un cerchio che ritaglia la grafica: solo
+    // il cerchio conta.
+    let c = circle(150.0, 150.0, 100.0);
+    let content = leak(format!(
+        "q 0 0 400 300 re W n q {c} W n 1 0 0 rg 0 0 400 300 re f Q Q"
+    ));
+    let mut e = editor(&[page([0.0, 0.0, 400.0, 300.0], 0, content)]);
+    let scan = e.scan_page(0).unwrap();
+    let clips = scan.clip_outlines();
+    assert_eq!(clips.len(), 1, "{clips:?}");
+    let die = NewDie {
+        name: "Taglio".into(),
+        cmyk: [0.0, 1.0, 0.0, 0.0],
+        width: 0.1,
+        overprint: true,
+    };
+    assert_eq!(e.add_die_outline(0, &clips, &die).unwrap(), 1);
+    let after = e.scan_page(0).unwrap();
+    let line = after.paths.iter().find(|p| p.line.is_some()).unwrap();
+    // Il cerchio ha raggio 100 punti: 70,6 mm di diametro.
+    let w = line.bounds[2] - line.bounds[0];
+    assert!((w - 70.56).abs() < 0.3, "{w}");
+}
