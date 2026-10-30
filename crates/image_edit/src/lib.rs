@@ -139,6 +139,12 @@ pub enum Op {
         sides: [u32; 4],
         method: BleedMethod,
     },
+    /// L'abbondanza lungo il contorno del soggetto: oltre la fustella dal contorno, per `band`
+    /// mm, ogni pixel prende il colore più vicino dentro la fustella. La misura non cambia.
+    ContourBleed {
+        spec: ContourSpec,
+        band: f64,
+    },
 }
 
 impl Op {
@@ -154,6 +160,7 @@ impl Op {
             Op::Resize { .. } => "Ridimensiona".into(),
             Op::Dpi(_) => "Cambia risoluzione".into(),
             Op::Bleed { .. } => "Aggiungi abbondanza".into(),
+            Op::ContourBleed { .. } => "Abbondanza lungo il contorno".into(),
         }
     }
 }
@@ -199,6 +206,10 @@ pub struct Picture {
     icc_name: Option<String>,
     /// Il formato finito in pixel, quando l'immagine ha l'abbondanza aggiunta qui.
     trim: Option<CropPx>,
+    /// La fustella dal contorno fissata dall'abbondanza lungo il contorno, in pixel: dopo,
+    /// lo sfondo attorno al soggetto è pieno e ricalcolarla la allargherebbe. Le operazioni che
+    /// spostano i pixel la tolgono (si torna a cercare il contorno).
+    cut: Option<Arc<Vec<Vec<[f64; 2]>>>>,
 }
 
 impl Picture {
@@ -240,6 +251,16 @@ impl Picture {
 
     /// Il formato finito in mm dall'angolo in alto a sinistra: `[sinistra, alto, destra, basso]`;
     /// senza abbondanza aggiunta, l'immagine intera.
+    /// La fustella fissata dall'abbondanza lungo il contorno, in mm, se c'è.
+    pub fn cut_mm(&self) -> Option<Vec<Vec<[f64; 2]>>> {
+        let k = 25.4 / self.dpi;
+        self.cut.as_ref().map(|c| {
+            c.iter()
+                .map(|line| line.iter().map(|p| [p[0] * k, p[1] * k]).collect())
+                .collect()
+        })
+    }
+
     pub fn trim_mm(&self) -> [f64; 4] {
         let t = self.trim.unwrap_or(CropPx {
             x: 0,
@@ -473,13 +494,19 @@ fn apply_one(picture: &Picture, op: Op) -> Result<Picture, ImageEditError> {
         }),
         Op::Crop(c) => bleed::crop_trim(t, c),
         Op::Resize { width, height } => bleed::resize_trim(t, (w, h), (width, height)),
-        Op::Dpi(_) => Some(t),
+        Op::Dpi(_) | Op::ContourBleed { .. } => Some(t),
         Op::Bleed { sides, .. } => Some(CropPx {
             x: t.x.saturating_add(sides[0]),
             y: t.y.saturating_add(sides[1]),
             ..t
         }),
     });
+    // La fustella fissata resta solo se i pixel non si spostano.
+    next.cut = match op {
+        Op::Dpi(_) => picture.cut.clone(),
+        Op::ContourBleed { .. } => next.cut,
+        _ => None,
+    };
     if let (None, Op::Bleed { sides, .. }) = (picture.trim, op) {
         next.trim = Some(CropPx {
             x: sides[0],
@@ -509,6 +536,20 @@ fn apply_pixels(picture: &Picture, op: Op) -> Result<Picture, ImageEditError> {
                 return Err(ImageEditError::BadSize);
             }
             next.image = Arc::new(bleed::add(&picture.image, sides, method));
+        }
+        Op::ContourBleed { spec, band } => {
+            // La fustella prima: dopo, lo sfondo attorno al soggetto non c'è più.
+            let cut = match picture.cut_mm() {
+                Some(c) => c,
+                None => contour::trace(picture, &spec)?,
+            };
+            let k = picture.dpi / 25.4;
+            let px = cut
+                .iter()
+                .map(|line| line.iter().map(|p| [p[0] * k, p[1] * k]).collect())
+                .collect();
+            next.image = Arc::new(contour::bleed_around(&picture.image, picture.dpi, &cut, band)?);
+            next.cut = Some(Arc::new(px));
         }
         Op::Rotate(quarters) => {
             next.image = Arc::new(match quarters.rem_euclid(4) {
@@ -615,6 +656,7 @@ fn load(path: &Path) -> Result<Picture, ImageEditError> {
         icc,
         origin: None,
         trim: None,
+        cut: None,
     })
 }
 
@@ -645,6 +687,7 @@ fn photo(data: &[u8], path: &Path) -> Result<Picture, ImageEditError> {
         icc: photo.icc,
         origin: Some(photo.origin),
         trim: None,
+        cut: None,
     })
 }
 
@@ -746,5 +789,6 @@ fn heif(data: &[u8]) -> Result<Picture, ImageEditError> {
         origin: None,
         icc_name: None,
         trim: None,
+        cut: None,
     })
 }

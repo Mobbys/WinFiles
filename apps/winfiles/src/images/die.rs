@@ -50,6 +50,8 @@ pub struct DieSettings {
     pub tolerance: f64,
     /// Di quanto la fustella sta fuori dal soggetto (negativo: dentro), in mm.
     pub offset: f64,
+    /// Lisciatura della fustella dal contorno, in mm.
+    pub smooth: f64,
     /// Pezzi e fori più piccoli di questa area si ignorano, in mm².
     pub min_area: f64,
     /// Taglia anche i fori dentro il soggetto.
@@ -67,6 +69,7 @@ impl Default for DieSettings {
             background: [255, 255, 255],
             tolerance: 10.0,
             offset: 2.0,
+            smooth: 0.0,
             min_area: 4.0,
             holes: false,
         }
@@ -79,6 +82,7 @@ impl DieSettings {
         self.amount = fix(self.amount, 0.5, 100.0, 3.0);
         self.radius = fix(self.radius, 0.0, 500.0, 5.0);
         self.tolerance = fix(self.tolerance, 0.0, 100.0, 10.0);
+        self.smooth = fix(self.smooth, 0.0, 20.0, 0.0);
         self.offset = fix(self.offset, -20.0, 50.0, 2.0);
         self.min_area = fix(self.min_area, 0.0, 10_000.0, 4.0);
         self
@@ -95,6 +99,7 @@ impl DieSettings {
             offset: self.offset,
             min_area: self.min_area,
             holes: self.holes,
+            smooth: self.smooth,
         }
     }
 
@@ -160,7 +165,7 @@ impl DieTool {
             self.traced = Some((key.clone(), r));
             self.tracing = None;
         }
-        if !self.open || self.settings.shape != DieShape::Contour {
+        if !self.open || self.settings.shape != DieShape::Contour || picture.cut_mm().is_some() {
             return;
         }
         let key = self.key(owner);
@@ -199,7 +204,9 @@ impl DieTool {
             DieShape::None => None,
             DieShape::Rect => Some(vec![rounded_rect(t, 0.0)]),
             DieShape::Rounded => Some(vec![rounded_rect(t, self.settings.radius)]),
-            DieShape::Contour => self.traced(owner).and_then(|r| r.as_ref().ok()).cloned(),
+            DieShape::Contour => picture
+                .cut_mm()
+                .or_else(|| self.traced(owner).and_then(|r| r.as_ref().ok()).cloned()),
         }
     }
 
@@ -226,16 +233,20 @@ impl DieTool {
             });
         });
         ui.add_space(8.0);
-        let traced = self.traced(owner).map(|r| {
-            r.as_ref()
-                .map(|c| (c.len(), winfiles_image_edit::contour_area(c) / 1_000_000.0))
-                .map_err(|e| {
-                    let mut c = e.chars();
-                    c.next()
-                        .map(|f| f.to_uppercase().chain(c).collect::<String>() + ".")
-                        .unwrap_or_default()
-                })
-        });
+        let pinned = picture.cut_mm();
+        let traced = pinned
+            .as_ref()
+            .map(Ok)
+            .or_else(|| self.traced(owner).map(|r| r.as_ref()))
+            .map(|r: Result<&Vec<Contour>, &String>| {
+                r.map(|c| (c.len(), winfiles_image_edit::contour_area(c) / 1_000_000.0))
+                    .map_err(|e| {
+                        let mut c = e.chars();
+                        c.next()
+                            .map(|f| f.to_uppercase().chain(c).collect::<String>() + ".")
+                            .unwrap_or_default()
+                    })
+            });
         let s = &mut self.settings;
         let f = picture.trim_mm();
         let finished = winfiles_geom::Size::new(f[2] - f[0], f[3] - f[1]);
@@ -308,6 +319,29 @@ impl DieTool {
                 "Allunga il bordo ripete l'ultima fila di pixel: meglio sui fondi uniti."
             },
         );
+        if s.shape == DieShape::Contour {
+            ui.add_space(8.0);
+            let label = format!("Aggiungi {} lungo la fustella", format_length(s.amount, Unit::Mm));
+            let ok = matches!(traced, Some(Ok(_)));
+            if ui
+                .add_enabled(ok, egui::Button::new(label).min_size(egui::vec2(0.0, 32.0)))
+                .on_hover_text(
+                    "Oltre la fustella, per questa misura, ogni pixel prende il colore più vicino \
+                     dentro la fustella; dentro non cambia nulla (Ctrl+Z annulla)",
+                )
+                .clicked()
+            {
+                action = Some(DieAction::Apply(Op::ContourBleed {
+                    spec: s.spec(),
+                    band: s.amount,
+                }));
+            }
+            hint(
+                ui,
+                "Lungo il contorno: la fustella resta dov'è e oltre la linea continua quello che c'è \
+                 dentro (con la distanza a 0 il soggetto, con un bordo il bordo).",
+            );
+        }
         ui.add_space(12.0);
 
         heading(ui, "Fustella");
@@ -383,6 +417,30 @@ impl DieTool {
                 .show(ui, |ui| {
                     length_row(ui, "Distanza", &mut s.offset, Unit::Mm, -20.0..=50.0);
                 });
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Lisciatura").color(t.text));
+                ui.add(
+                    crate::fluent::Slider::new(&mut s.smooth, 0.0..=20.0)
+                        .step_by(0.5)
+                        .custom_formatter(|v| format!("{} mm", winfiles_geom::format_number(v, 1, true)))
+                        .custom_parser(|text| {
+                            let clean = text.trim().trim_end_matches("mm").trim().replace(',', ".");
+                            clean.parse::<f64>().ok()
+                        }),
+                )
+                .on_hover_text(
+                    "Arrotonda le rientranze strette e le punte: la lama segue una linea \
+                     morbida invece di ogni dettaglio, senza mai entrare nel soggetto",
+                );
+            });
+            ui.add_space(4.0);
+            if pinned.is_some() {
+                hint_color(
+                    ui,
+                    "Fustella fissata dall'abbondanza lungo il contorno: per cambiarla, Ctrl+Z.",
+                    t.text,
+                );
+            }
             ui.add(crate::fluent::checkbox(
                 &mut s.holes,
                 "Taglia anche i fori interni",

@@ -115,7 +115,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Fustella e abbondanza sulle immagini, fase 1: abbondanza con i pixel e PDF con fustella
   rettangolare o ad angoli tondi ([ADR 0028](adr/0028-fustella-e-abbondanza-sulle-immagini.md))
 - [x] Fase 2: fustella dal contorno del soggetto (colore di sfondo con contagocce, o trasparenza)
-- [ ] Abbondanza "colore più vicino" attorno alle forme
+- [x] Abbondanza lungo la fustella dal contorno (colore più vicino dentro la fustella) e lisciatura
 - [ ] Fase 3: in Modifica PDF fustella dal contorno della grafica e dai tracciati di ritaglio,
   abbondanza con i pixel delle foto dentro il PDF
 - [ ] Provata da Michel su file veri

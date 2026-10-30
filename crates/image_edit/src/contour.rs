@@ -34,6 +34,9 @@ pub struct ContourSpec {
     /// Di quanto la fustella si allontana dal soggetto, in mm: positivo fuori (il bordo bianco
     /// dell'adesivo), negativo dentro.
     pub offset: f64,
+    /// Lisciatura, in mm: le rientranze e le punte più strette di questo raggio si arrotondano
+    /// (0: il contorno segue il soggetto da vicino).
+    pub smooth: f64,
     /// I pezzi (e i fori) più piccoli di questa area si ignorano, in mm².
     pub min_area: f64,
     /// Taglia anche i fori dentro il soggetto (il centro di una O): ogni zona del colore di
@@ -132,12 +135,32 @@ pub fn trace(picture: &Picture, spec: &ContourSpec) -> Result<Vec<Contour>, Imag
     } else {
         0.0
     };
-    let result: Vec<Contour> = if offset.abs() < 0.01 {
-        tidy.into_iter().flatten().collect()
-    } else {
-        let style = OutlineStyle::new(offset).line_join(LineJoin::Round(0.1));
-        tidy.outline(&style).into_iter().flatten().collect()
+    let grow = |shapes: Vec<Vec<Contour>>, d: f64| {
+        let style = OutlineStyle::new(d).line_join(LineJoin::Round(0.1));
+        shapes.outline(&style)
     };
+    let mut shapes = if offset.abs() < 0.01 {
+        tidy
+    } else {
+        grow(tidy, offset)
+    };
+    // Lisciatura, come una moneta di raggio `r` fatta girare attorno: prima la chiusura (fuori e
+    // dentro: riempie le rientranze strette), poi l'apertura (dentro e fuori: arrotonda le
+    // punte) con un raggio non più grande della distanza, così la lama non entra mai nel
+    // soggetto: ogni suo punto ha attorno un cerchio di quel raggio tutto dentro la fustella.
+    let r = if spec.smooth.is_finite() {
+        spec.smooth.clamp(0.0, 50.0)
+    } else {
+        0.0
+    };
+    if r >= 0.05 {
+        shapes = grow(grow(shapes, r), -r);
+        let open = r.min(offset);
+        if open >= 0.05 {
+            shapes = grow(grow(shapes, -open), open);
+        }
+    }
+    let result: Vec<Contour> = shapes.into_iter().flatten().collect();
     let result: Vec<Contour> = result.into_iter().filter(|c| c.len() >= 3).collect();
     if result.is_empty() {
         return Err(ImageEditError::Unsupported(
@@ -323,4 +346,158 @@ pub fn contour_area(contours: &[Contour]) -> f64 {
         .map(|c| area(c))
         .sum::<f64>()
         .abs()
+}
+
+/// Pixel rifatti appena dentro la linea di taglio prima di allungarne i colori: lì il soggetto
+/// si mescola con lo sfondo (l'antialias) e l'abbondanza ne verrebbe un alone chiaro.
+const EDGE_PX: f64 = 2.0;
+
+/// Strati massimi con cui i colori si allungano oltre la fustella.
+const MAX_LAYERS: usize = 16_000;
+
+/// L'abbondanza lungo il contorno: fuori dalla fustella `cut` (in mm), fino a `band_mm` oltre,
+/// ogni pixel prende il colore del pixel più vicino dentro la fustella. Dentro resta tutto
+/// com'è (il bordo bianco di un adesivo resta bianco, e la sua abbondanza è bianca), salvo i
+/// due pixel appena dentro la linea, rifatti col colore di poco più dentro.
+pub(crate) fn bleed_around(
+    img: &DynamicImage,
+    dpi: f64,
+    cut: &[Contour],
+    band_mm: f64,
+) -> Result<DynamicImage, ImageEditError> {
+    let band = if band_mm.is_finite() {
+        band_mm.clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+    if band < 0.05 || !dpi.is_finite() || dpi <= 0.0 {
+        return Err(ImageEditError::BadSize);
+    }
+    let k = dpi / 25.4;
+    let shapes = cut.to_vec().simplify_shape(FillRule::EvenOdd);
+    let grown = |d: f64| -> Vec<Contour> {
+        let style = OutlineStyle::new(d).line_join(LineJoin::Round(0.1));
+        shapes
+            .outline(&style)
+            .into_iter()
+            .flatten()
+            .map(|c| c.iter().map(|p| [p[0] * k, p[1] * k]).collect())
+            .collect()
+    };
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let outer = rasterize(&grown(band), w, h);
+    let seeds = rasterize(&grown(-EDGE_PX / k), w, h);
+    if !seeds.iter().any(|v| *v) {
+        return Err(ImageEditError::Unsupported("la fustella è troppo piccola"));
+    }
+    // Restano come sono i pixel ben dentro la fustella e quelli oltre l'abbondanza.
+    let filled: Vec<bool> = seeds.iter().zip(&outer).map(|(s, o)| *s || !*o).collect();
+    let layers = w.saturating_add(h).min(MAX_LAYERS);
+    let seeds = &seeds;
+    Ok(match img {
+        DynamicImage::ImageLuma8(b) => DynamicImage::ImageLuma8(spread(b, seeds, filled, layers)),
+        DynamicImage::ImageLumaA8(b) => DynamicImage::ImageLumaA8(spread(b, seeds, filled, layers)),
+        DynamicImage::ImageRgb8(b) => DynamicImage::ImageRgb8(spread(b, seeds, filled, layers)),
+        DynamicImage::ImageRgba8(b) => DynamicImage::ImageRgba8(spread(b, seeds, filled, layers)),
+        DynamicImage::ImageLuma16(b) => DynamicImage::ImageLuma16(spread(b, seeds, filled, layers)),
+        DynamicImage::ImageLumaA16(b) => DynamicImage::ImageLumaA16(spread(b, seeds, filled, layers)),
+        DynamicImage::ImageRgb16(b) => DynamicImage::ImageRgb16(spread(b, seeds, filled, layers)),
+        DynamicImage::ImageRgba16(b) => DynamicImage::ImageRgba16(spread(b, seeds, filled, layers)),
+        DynamicImage::ImageRgb32F(b) => DynamicImage::ImageRgb32F(spread(b, seeds, filled, layers)),
+        DynamicImage::ImageRgba32F(b) => DynamicImage::ImageRgba32F(spread(b, seeds, filled, layers)),
+        other => DynamicImage::ImageRgba16(spread(&other.to_rgba16(), seeds, filled, layers)),
+    })
+}
+
+/// I pixel il cui centro sta dentro i contorni (pari-dispari), riga per riga.
+fn rasterize(contours: &[Contour], w: usize, h: usize) -> Vec<bool> {
+    let mut out = vec![false; w * h];
+    let mut xs: Vec<f64> = Vec::new();
+    for y in 0..h {
+        let cy = y as f64 + 0.5;
+        xs.clear();
+        for c in contours {
+            let n = c.len();
+            for i in 0..n {
+                let (Some(a), Some(b)) = (c.get(i), c.get((i + 1) % n)) else {
+                    continue;
+                };
+                if (a[1] > cy) != (b[1] > cy) {
+                    xs.push(a[0] + (cy - a[1]) / (b[1] - a[1]) * (b[0] - a[0]));
+                }
+            }
+        }
+        xs.sort_by(f64::total_cmp);
+        for pair in xs.chunks_exact(2) {
+            let (Some(x0), Some(x1)) = (pair.first(), pair.get(1)) else {
+                continue;
+            };
+            let from = (x0 - 0.5).ceil().max(0.0) as usize;
+            let to = ((x1 - 0.5).floor() + 1.0).clamp(0.0, w as f64) as usize;
+            for x in from..to {
+                if let Some(v) = out.get_mut(y * w + x) {
+                    *v = true;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// I vicini di un pixel (gli otto attorno), come indici.
+fn neighbours(i: usize, w: usize, h: usize) -> impl Iterator<Item = usize> {
+    let (x, y) = ((i % w) as i64, (i / w) as i64);
+    [
+        (-1, -1),
+        (0, -1),
+        (1, -1),
+        (-1, 0),
+        (1, 0),
+        (-1, 1),
+        (0, 1),
+        (1, 1),
+    ]
+    .into_iter()
+    .filter_map(move |(dx, dy)| {
+        let (nx, ny) = (x + dx, y + dy);
+        (nx >= 0 && ny >= 0 && nx < w as i64 && ny < h as i64).then(|| ny as usize * w + nx as usize)
+    })
+}
+
+/// Allunga i colori dei pixel `seeds` sui vicini non ancora `filled`, uno strato alla volta,
+/// per al più `band` strati.
+fn spread<P: image::Pixel>(
+    img: &image::ImageBuffer<P, Vec<P::Subpixel>>,
+    seeds: &[bool],
+    mut filled: Vec<bool>,
+    band: usize,
+) -> image::ImageBuffer<P, Vec<P::Subpixel>> {
+    let mut out = img.clone();
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let mut front: Vec<usize> = (0..seeds.len())
+        .filter(|&i| {
+            seeds.get(i).copied().unwrap_or(false)
+                && neighbours(i, w, h).any(|n| !filled.get(n).copied().unwrap_or(true))
+        })
+        .collect();
+    for _ in 0..band {
+        let mut next = Vec::new();
+        for &i in &front {
+            let from = *out.get_pixel((i % w) as u32, (i / w) as u32);
+            for n in neighbours(i, w, h) {
+                if let Some(v) = filled.get_mut(n)
+                    && !*v
+                {
+                    *v = true;
+                    out.put_pixel((n % w) as u32, (n / w) as u32, from);
+                    next.push(n);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        front = next;
+    }
+    out
 }

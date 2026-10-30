@@ -43,6 +43,19 @@ Alternativa 2.
   contorno è pronto. Alternativa scartata: tracciare il contorno a vettori (potrace) con una
   dipendenza nuova; i rettangoli uniti bastano e restano nel codice già usato dal nesting.
 
+## Lisciatura e abbondanza lungo il contorno
+- "Lisciatura" (raggio in mm): dopo la distanza, chiusura morfologica (fuori e dentro di r:
+  riempie le rientranze strette) e apertura (dentro e fuori) con raggio al più la distanza, così
+  la lama non entra mai nel soggetto.
+- `Op::ContourBleed`: fuori dalla fustella, per la misura scelta, ogni pixel prende il colore più
+  vicino dentro la fustella (strati di vicini a 8, dai pixel 2 px dentro la linea per evitare
+  l'alone dell'antialias). Dentro non cambia nulla: con un bordo bianco l'abbondanza è bianca,
+  con la distanza a 0 continua il soggetto. Scartato "colore del soggetto più vicino" su tutta
+  la fascia: riempiva anche il bianco fra le lettere dentro la fustella, cambiando la grafica.
+- Dopo l'abbondanza lo sfondo attorno è pieno e un nuovo contorno verrebbe più largo: la
+  fustella usata si fissa nella `Picture` (`cut`, in pixel) e la seguono Dpi; le operazioni che
+  spostano i pixel la tolgono, Ctrl+Z la riporta indietro.
+
 ## Conseguenze
 - Il PDF salvato si apre nel nesting con la sua fustella, angoli tondi compresi.
 - L'immagine salvata con "Salva" (JPEG, TIFF…) porta l'abbondanza ma non il formato finito: chi
