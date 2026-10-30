@@ -1497,3 +1497,29 @@ fn i_fogli_del_nesting_ritagliano_le_copie_sulla_sagoma() {
         assert!(is_white(pixel(&img, cx, 150 + five)));
     }
 }
+
+#[test]
+fn i_tracciati_di_ritaglio_sagomati_diventano_fustella() {
+    // Un rettangolo di pagina che ritaglia tutto, poi un cerchio che ritaglia la grafica: solo
+    // il cerchio conta.
+    let c = circle(150.0, 150.0, 100.0);
+    let content = leak(format!(
+        "q 0 0 400 300 re W n q {c} W n 1 0 0 rg 0 0 400 300 re f Q Q"
+    ));
+    let mut e = editor(&[page([0.0, 0.0, 400.0, 300.0], 0, content)]);
+    let scan = e.scan_page(0).unwrap();
+    let clips = scan.clip_outlines();
+    assert_eq!(clips.len(), 1, "{clips:?}");
+    let die = NewDie {
+        name: "Taglio".into(),
+        cmyk: [0.0, 1.0, 0.0, 0.0],
+        width: 0.1,
+        overprint: true,
+    };
+    assert_eq!(e.add_die_outline(0, &clips, &die).unwrap(), 1);
+    let after = e.scan_page(0).unwrap();
+    let line = after.paths.iter().find(|p| p.line.is_some()).unwrap();
+    // Il cerchio ha raggio 100 punti: 70,6 mm di diametro.
+    let w = line.bounds[2] - line.bounds[0];
+    assert!((w - 70.56).abs() < 0.3, "{w}");
+}

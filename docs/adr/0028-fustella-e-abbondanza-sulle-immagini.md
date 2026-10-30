@@ -56,6 +56,17 @@ Alternativa 2.
   fustella usata si fissa nella `Picture` (`cut`, in pixel) e la seguono Dpi; le operazioni che
   spostano i pixel la tolgono, Ctrl+Z la riporta indietro.
 
+## Fase 3: Modifica PDF
+- "Fustella dal contorno della grafica" nello strumento Tracciati: la pagina si disegna con hayro
+  a 2000 pixel sul lato lungo (la misura su cui lavora comunque il motore) e passa da
+  `trace_image` con le stesse scelte delle immagini; il contorno si vede sulla pagina prima di
+  crearlo e diventa la fustella con `Editor::add_die_outline` (lo stesso `draw_die`).
+- "Fustella dal tracciato di ritaglio": `PageScan::clip_outlines` dà i ritagli con una forma vera
+  (almeno 8 punti, non rettangoli diritti), cioè gli scontorni di Photoshop e i gruppi di
+  ritaglio. Non si propongono più quando la pagina ha già una fustella.
+- L'abbondanza resta quella dello strumento Tracciati (specchio della pagina, o la forma
+  allungata dalla fustella); quella "con i pixel" per le foto ritagliate è rimandata.
+
 ## Conseguenze
 - Il PDF salvato si apre nel nesting con la sua fustella, angoli tondi compresi.
 - L'immagine salvata con "Salva" (JPEG, TIFF…) porta l'abbondanza ma non il formato finito: chi

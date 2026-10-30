@@ -3,6 +3,7 @@
 //! al centro la pagina corrente in grande, sopra i comandi. Le modifiche le fa
 //! `winfiles-pdf-edit`; qui ci sono solo la finestra, le scelte e le domande.
 
+mod contorno;
 mod dialogs;
 mod render;
 pub mod tracciati;
@@ -2264,6 +2265,17 @@ impl PdfModule {
                 }
                 Ok(msg)
             });
+            }
+            Some(tracciati::Request::DieOutline(lines, die)) => {
+                self.apply(|e| {
+                    let n = e.add_die_outline(page, &lines, &die)?;
+                    Ok(if n == 1 {
+                        format!("Fustella «{}» creata dal contorno", die.name.trim())
+                    } else {
+                        format!("Fustella «{}» creata dal contorno: {n} contorni", die.name.trim())
+                    })
+                });
+                self.paths.outline.on = false;
             }
             Some(tracciati::Request::Die(ids, die)) => {
                 self.apply(|e| {

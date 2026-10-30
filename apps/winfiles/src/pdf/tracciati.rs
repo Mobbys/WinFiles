@@ -241,6 +241,8 @@ pub struct PathTool {
     die_cmyk: [f64; 4],
     die_hue: f64,
     die_sat: f64,
+    /// La fustella dal contorno della grafica.
+    pub outline: super::contorno::OutlineDie,
 }
 
 impl Default for PathTool {
@@ -278,6 +280,7 @@ impl Default for PathTool {
             die_cmyk: Role::Cut.cmyk(),
             die_hue: 0.0,
             die_sat: 0.0,
+            outline: Default::default(),
         }
     }
 }
@@ -538,6 +541,8 @@ pub enum Request {
     },
     /// Crea una fustella dal contorno dei tracciati.
     Die(Vec<PathId>, NewDie),
+    /// Crea la fustella dai contorni della grafica (mm della pagina come si vede).
+    DieOutline(Vec<Vec<[f64; 2]>>, NewDie),
 }
 
 /// Distanza dal punto `p` al segmento `a`–`b`.
@@ -950,7 +955,17 @@ impl PathTool {
     }
 
     /// Chiede la lettura della pagina se serve e raccoglie quella finita.
-    pub fn update(&mut self, ctx: &egui::Context, key: (u64, usize), doc: impl FnOnce() -> Snapshot) {
+    pub fn update(&mut self, ctx: &egui::Context, key: (u64, usize), doc: impl Fn() -> Snapshot) {
+        // Il contorno della grafica, con la larghezza della pagina letta per questa versione.
+        let width = self
+            .scanned
+            .as_ref()
+            .filter(|s| s.key == key)
+            .and_then(|s| s.result.as_ref().ok())
+            .map(|s| s.width);
+        if let Some(width) = width {
+            self.outline.update(ctx, key, width, &doc);
+        }
         if let Some((k, rx)) = &self.pending
             && let Ok(result) = rx.try_recv()
         {
@@ -1096,6 +1111,7 @@ impl PathTool {
         if !resp.dragged() && !resp.drag_stopped() {
             self.marquee = None;
         }
+        self.outline.paint(ui, paper, w, rgb32(cmyk_rgb(self.die_cmyk)));
     }
 
     /// Il pannello a destra: controllo della pagina, tracciati scelti, cambi.
@@ -1138,7 +1154,12 @@ impl PathTool {
                 if c.finished.is_some() {
                     ui.add_space(8.0);
                 }
-                request = self.selection_card(ui, &scan, inks, unit, spots).or(bleed);
+                let outline = self.outline_card(ui, &scan, !c.dies.is_empty(), inks);
+                ui.add_space(8.0);
+                request = self
+                    .selection_card(ui, &scan, inks, unit, spots)
+                    .or(bleed)
+                    .or(outline);
                 if !busy {
                     self.content_height = ui.cursor().top() - top;
                 }
@@ -1568,6 +1589,157 @@ impl PathTool {
                     },
                     outline: if follow { outline_ids.clone() } else { Vec::new() },
                 });
+            }
+        });
+        request
+    }
+
+    /// La scheda della fustella dal contorno della grafica.
+    fn outline_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        scan: &PageScan,
+        has_die: bool,
+        inks: &mut Vec<InkName>,
+    ) -> Option<Request> {
+        let t = Tokens::get(ui.ctx());
+        let mut request = None;
+        // Con una fustella già sulla pagina gli scontorni non si propongono più (dopo
+        // l'abbondanza ci sono anche i suoi ritagli).
+        let clips = if has_die { Vec::new() } else { scan.clip_outlines() };
+        card_frame(ui, |ui| {
+            ui.horizontal(|ui| {
+                super::contorno::title(ui, "Fustella dal contorno della grafica");
+            });
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(
+                        "Segue il bordo di quello che è stampato (foto, scritte, disegni) sullo \
+                         sfondo bianco, alla distanza scelta.",
+                    )
+                    .size(12.0)
+                    .color(t.text_dim),
+                )
+                .wrap(),
+            );
+            ui.add_space(4.0);
+            if !clips.is_empty() {
+                let n = clips.len();
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(if n == 1 {
+                            "La pagina ha un tracciato di ritaglio sagomato (uno scontorno).".to_string()
+                        } else {
+                            format!("La pagina ha {n} tracciati di ritaglio sagomati (scontorni).")
+                        })
+                        .color(t.text),
+                    )
+                    .wrap(),
+                );
+                let name = self.die_name.trim().to_string();
+                if ui
+                    .add_enabled(
+                        !name.is_empty(),
+                        egui::Button::new("Fustella dal tracciato di ritaglio").min_size(vec2(0.0, 30.0)),
+                    )
+                    .on_hover_text(format!(
+                        "La fustella «{name}» esattamente sullo scontorno, senza distanza"
+                    ))
+                    .clicked()
+                {
+                    let role = match role_of(inks, &name) {
+                        Role::Other => Role::Cut,
+                        r => r,
+                    };
+                    let cmyk = self.die_cmyk;
+                    remember(inks, &name, role, cmyk);
+                    request = Some(Request::DieOutline(
+                        clips.clone(),
+                        NewDie {
+                            name,
+                            cmyk,
+                            width: self.die_width,
+                            overprint: true,
+                        },
+                    ));
+                }
+                ui.add_space(6.0);
+            }
+            let label = if self.outline.on {
+                "Contorno visibile"
+            } else {
+                "Mostra il contorno"
+            };
+            if crate::fluent::toggle(ui, self.outline.on, label)
+                .on_hover_text("Calcola il contorno della pagina e lo mostra sopra, prima di crearlo")
+                .clicked()
+            {
+                self.outline.on = !self.outline.on;
+            }
+            if !self.outline.on {
+                return;
+            }
+            ui.add_space(6.0);
+            self.outline.controls(ui);
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Tinta").color(t.text_dim));
+                let edit = egui::TextEdit::singleline(&mut self.die_name)
+                    .hint_text("Nome della tinta")
+                    .desired_width((ui.available_width() - 48.0).max(80.0));
+                crate::fluent::text_field(ui, edit);
+                egui::ComboBox::from_id_salt("fustella-contorno-nomi")
+                    .icon(crate::fluent::combo_icon)
+                    .selected_text("")
+                    .width(28.0)
+                    .show_ui(ui, |ui| {
+                        for i in inks.iter() {
+                            let text = format!("{}  ·  {}", i.name, i.role.label());
+                            if ui.selectable_label(self.die_name == i.name, text).clicked() {
+                                self.die_name = i.name.clone();
+                                self.die_cmyk = i.color();
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("I nomi usati di recente");
+            });
+            ui.add_space(6.0);
+            let name = self.die_name.trim().to_string();
+            let lines = self.outline.outlines().map(<[_]>::to_vec);
+            let ok = !name.is_empty() && lines.is_some();
+            let go = egui::Button::new(
+                egui::RichText::new("Crea fustella dal contorno")
+                    .font(semibold(13.5))
+                    .color(if ok { t.on_primary } else { t.text_disabled }),
+            )
+            .fill(if ok { t.primary } else { t.button })
+            .min_size(vec2(ui.available_width(), 32.0));
+            if ui
+                .add_enabled(ok, go)
+                .on_hover_text(format!(
+                    "Disegna sopra la pagina la fustella «{name}» in sovrastampa, linea da {} mm",
+                    format_number(self.die_width, 2, true)
+                ))
+                .on_disabled_hover_text("Aspetta il contorno e scrivi il nome della tinta")
+                .clicked()
+                && let Some(lines) = lines
+            {
+                let role = match role_of(inks, &name) {
+                    Role::Other => Role::Cut,
+                    r => r,
+                };
+                let cmyk = self.die_cmyk;
+                remember(inks, &name, role, cmyk);
+                request = Some(Request::DieOutline(
+                    lines,
+                    NewDie {
+                        name,
+                        cmyk,
+                        width: self.die_width,
+                        overprint: true,
+                    },
+                ));
             }
         });
         request

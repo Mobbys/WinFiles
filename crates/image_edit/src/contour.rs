@@ -48,7 +48,19 @@ type Contour = Vec<[f64; 2]>;
 
 /// I contorni della fustella in mm, o un errore se non c'è un soggetto.
 pub fn trace(picture: &Picture, spec: &ContourSpec) -> Result<Vec<Contour>, ImageEditError> {
-    let img = picture.image();
+    trace_image(picture.image(), 25.4 / picture.dpi(), spec)
+}
+
+/// Come [`trace`] su un'immagine qualunque (una pagina di PDF disegnata, per esempio) di cui
+/// un pixel misura `mm_per_px` millimetri.
+pub fn trace_image(
+    img: &DynamicImage,
+    mm_per_px: f64,
+    spec: &ContourSpec,
+) -> Result<Vec<Contour>, ImageEditError> {
+    if !(mm_per_px.is_finite() && mm_per_px > 0.0) {
+        return Err(ImageEditError::BadSize);
+    }
     let (w, h) = img.dimensions();
     if w == 0 || h == 0 {
         return Err(ImageEditError::BadSize);
@@ -63,7 +75,7 @@ pub fn trace(picture: &Picture, spec: &ContourSpec) -> Result<Vec<Contour>, Imag
         img.clone()
     };
     let (sw, sh) = small.dimensions();
-    let mm_per_px = 25.4 / picture.dpi() * f64::from(w) / f64::from(sw);
+    let mm_per_px = mm_per_px * f64::from(w) / f64::from(sw);
     let subject = mask(&small, spec);
     if !subject.iter().any(|v| *v) {
         return Err(ImageEditError::Unsupported(

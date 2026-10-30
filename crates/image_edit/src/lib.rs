@@ -22,7 +22,7 @@ mod save;
 mod tests;
 
 pub use bleed::BleedMethod;
-pub use contour::{Background, ContourSpec, contour_area, trace};
+pub use contour::{Background, ContourSpec, contour_area, trace, trace_image};
 pub use save::{Format, SaveOptions, encode};
 
 /// Le estensioni dei file che si aprono, per la finestra di sistema.

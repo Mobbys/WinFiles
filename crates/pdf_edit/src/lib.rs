@@ -600,6 +600,21 @@ impl Editor {
         self.edit("Crea fustella", |d| paths::add_die(d, page, ids, die))
     }
 
+    /// Disegna sopra la pagina la fustella `outlines` (contorni chiusi in mm della pagina come si
+    /// vede, dall'angolo in alto a sinistra), per esempio quella dal contorno della grafica.
+    /// Restituisce quanti contorni ha.
+    pub fn add_die_outline(
+        &mut self,
+        page: usize,
+        outlines: &[Vec<[f64; 2]>],
+        die: &NewDie,
+    ) -> Result<usize, EditError> {
+        if outlines.iter().all(|c| c.len() < 3) {
+            return Err(EditError::Invalid("fustella vuota".into()));
+        }
+        self.edit("Crea fustella", |d| paths::draw_die(d, page, outlines, die))
+    }
+
     /// Il PDF porta la copia del file di Illustrator, quella che Illustrator apre al posto delle
     /// pagine (ADR 0020).
     pub fn has_illustrator_data(&self) -> bool {

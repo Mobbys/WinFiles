@@ -186,6 +186,49 @@ pub struct PageScan {
     masks: Vec<PathInfo>,
 }
 
+impl PageScan {
+    /// I tracciati di ritaglio con una forma vera (lo scontorno di Photoshop, i gruppi di
+    /// ritaglio di Illustrator): i loro pezzi chiusi, in mm della pagina come si vede. I
+    /// rettangoli (la pagina, la tavola da disegno, una foto squadrata) e i ritagli di pochi
+    /// punti si lasciano fuori.
+    pub fn clip_outlines(&self) -> Vec<Vec<[f64; 2]>> {
+        let mut out: Vec<Vec<[f64; 2]>> = Vec::new();
+        for part in self.masks.iter().flat_map(|m| m.parts.iter()) {
+            // Uno scontorno ha delle curve: i ritagli di pochi punti (i triangoli e i quadrilateri
+            // con cui si costruisce un'abbondanza) non lo sono.
+            if part.points.len() < 8 || is_rectangle(&part.points) {
+                continue;
+            }
+            let same = |c: &Vec<[f64; 2]>| {
+                c.len() == part.points.len()
+                    && c.iter()
+                        .zip(&part.points)
+                        .all(|(a, b)| (a[0] - b[0]).abs() < 0.01 && (a[1] - b[1]).abs() < 0.01)
+            };
+            if !out.iter().any(same) {
+                out.push(part.points.clone());
+            }
+        }
+        out
+    }
+}
+
+/// Il pezzo è un rettangolo diritto: tutti i punti sui lati del rettangolo che li contiene.
+fn is_rectangle(points: &[[f64; 2]]) -> bool {
+    if points.len() > 5 {
+        return false;
+    }
+    let b = points
+        .iter()
+        .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| {
+            [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]
+        });
+    let on = |v: f64, a: f64, z: f64| (v - a).abs() < 0.05 || (v - z).abs() < 0.05;
+    points
+        .iter()
+        .all(|p| on(p[0], b[0], b[2]) && on(p[1], b[1], b[3]))
+}
+
 /// Lo spazio colore in uso.
 #[derive(Clone, Debug, PartialEq)]
 enum Space {
