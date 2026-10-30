@@ -13,8 +13,10 @@
 //! Misure in millimetri, y verso il basso. Un punto p della sagoma finisce in R(rot)·F·p + (x, y)
 //! sul foglio (rot in gradi, senso orario a schermo; F specchia in orizzontale, x → -x).
 
+pub mod cutlines;
 mod geometry;
 
+pub use cutlines::{CutLines, common_lines};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -229,6 +231,126 @@ fn offset(shapes: &[Vec<Poly>], delta: i32) -> Vec<Vec<Poly>> {
     shapes.outline(&style).unwrap_or_default()
 }
 
+/// Una forma semplice che contiene il pezzetto `sliver` fra una curva e la sua corda. Se il
+/// pezzetto è convesso, il triangolo fra la corda e i due lati che partono dai suoi estremi (non
+/// esce oltre la tangente, quindi oltre un lato dritto che continua la curva); altrimenti il
+/// rettangolo più stretto lungo la corda.
+fn sliver_cover(sliver: &Poly) -> Poly {
+    let pts: Vec<[f64; 2]> = sliver.iter().map(|q| [f64::from(q.x), f64::from(q.y)]).collect();
+    let n = pts.len();
+    let Some(&start) = pts.first() else {
+        return Vec::new();
+    };
+    let d2 = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2);
+    let far = |from: [f64; 2]| {
+        (0..n)
+            .max_by(|&i, &j| {
+                let (pi, pj) = (
+                    pts.get(i).copied().unwrap_or(from),
+                    pts.get(j).copied().unwrap_or(from),
+                );
+                d2(pi, from).total_cmp(&d2(pj, from))
+            })
+            .unwrap_or(0)
+    };
+    let ia = far(start);
+    let a = pts.get(ia).copied().unwrap_or(start);
+    let ib = far(a);
+    let b = pts.get(ib).copied().unwrap_or(start);
+    let len = d2(a, b).sqrt();
+    if len <= 0.0 {
+        return Vec::new();
+    }
+    let u = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
+    let v = [-u[1], u[0]];
+    let side = |p: [f64; 2]| (p[0] - a[0]) * v[0] + (p[1] - a[1]) * v[1];
+    let at = |i: usize| pts.get(i % n).copied().unwrap_or(start);
+    // Il triangolo: il pezzetto è convesso e la curva sta tutta da una parte della corda.
+    let turn = |i: usize| {
+        let (p, q, r) = (at(i + n - 1), at(i), at(i + 1));
+        (q[0] - p[0]) * (r[1] - q[1]) - (q[1] - p[1]) * (r[0] - q[0])
+    };
+    let turns: Vec<f64> = (0..n).map(turn).collect();
+    let convex = turns.iter().all(|t| *t >= -1.0) || turns.iter().all(|t| *t <= 1.0);
+    if convex {
+        // Il vicino di a e quello di b sul lato della curva (il più lontano dalla corda).
+        let (na, pa) = (at(ia + 1), at(ia + n - 1));
+        let a_next = if side(na).abs() >= side(pa).abs() { na } else { pa };
+        let (nb, pb) = (at(ib + 1), at(ib + n - 1));
+        let b_next = if side(nb).abs() >= side(pb).abs() { nb } else { pb };
+        let (da, db) = (
+            [a_next[0] - a[0], a_next[1] - a[1]],
+            [b_next[0] - b[0], b_next[1] - b[1]],
+        );
+        let den = da[0] * db[1] - da[1] * db[0];
+        if den.abs() > 1e-9 {
+            let k = ((b[0] - a[0]) * db[1] - (b[1] - a[1]) * db[0]) / den;
+            let x = [a[0] + da[0] * k, a[1] + da[1] * k];
+            let depth = side(x).abs();
+            let deepest = pts.iter().map(|p| side(*p).abs()).fold(0.0, f64::max);
+            if k > 0.0 && depth >= deepest && depth <= 4.0 * deepest + 2.0 {
+                // La punta un po' più in fuori, lontano dalla corda, contro gli arrotondamenti.
+                let m = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+                let out = d2(x, m).sqrt().max(1e-9);
+                let x = [x[0] + (x[0] - m[0]) / out * 2.0, x[1] + (x[1] - m[1]) / out * 2.0];
+                let r = |p: [f64; 2]| P::new(geometry::round(p[0]), geometry::round(p[1]));
+                return vec![r(a), r(x), r(b)];
+            }
+        }
+    }
+    let (mut s0, mut s1, mut t0, mut t1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    for p in &pts {
+        let (s, t) = (p[0] * u[0] + p[1] * u[1], p[0] * v[0] + p[1] * v[1]);
+        (s0, s1, t0, t1) = (s0.min(s), s1.max(s), t0.min(t), t1.max(t));
+    }
+    // Un'unità in più per lato contro gli arrotondamenti.
+    let (s0, s1, t0, t1) = (s0 - 1.0, s1 + 1.0, t0 - 1.0, t1 + 1.0);
+    let corner = |s: f64, t: f64| {
+        P::new(
+            geometry::round(s * u[0] + t * v[0]),
+            geometry::round(s * u[1] + t * v[1]),
+        )
+    };
+    vec![corner(s0, t0), corner(s1, t0), corner(s1, t1), corner(s0, t1)]
+}
+
+/// La sagoma semplificata `simple` allargata quanto basta per contenere `original` (contorno e
+/// fori, pari-dispari): ogni pezzetto di `original` rimasto fuori (fra una curva e la sua corda)
+/// si copre con [`sliver_cover`]. I lati che la semplificazione non
+/// tocca restano fermi. `None` se il risultato non è una sagoma sola o non contiene tutto.
+fn cover(original: &[Poly], simple: &[Poly]) -> Option<Vec<Poly>> {
+    let outer = simple.first()?;
+    let sign = geometry::area2(outer).signum();
+    let mut parts: Vec<Poly> = simple.to_vec();
+    let missing = overlay(original, simple, OverlayRule::Difference, FillRule::EvenOdd);
+    for sliver in missing.iter().filter_map(|s| s.first()) {
+        let mut piece = sliver_cover(sliver);
+        if piece.len() < 3 {
+            continue;
+        }
+        if geometry::area2(&piece).signum() != sign {
+            piece.reverse();
+        }
+        parts.push(piece);
+    }
+    let merged = union(&parts, FillRule::NonZero);
+    let [shape] = merged.as_slice() else {
+        return None;
+    };
+    let shape: Vec<Poly> = shape
+        .iter()
+        .map(|c| geometry::clean(c))
+        .filter(|c| c.len() >= 3)
+        .collect();
+    // Tutto dentro: quello che resta fuori deve essere niente (meno di un'unità quadrata).
+    let left: f64 = overlay(original, &shape, OverlayRule::Difference, FillRule::EvenOdd)
+        .iter()
+        .flatten()
+        .map(|c| geometry::area(c))
+        .sum();
+    (left.abs() < 1.0).then_some(shape)
+}
+
 fn prepare(item: &Item, cfg: &Config) -> Option<Prepared> {
     let rings: Vec<Poly> = item
         .shape
@@ -247,25 +369,37 @@ fn prepare(item: &Item, cfg: &Config) -> Option<Prepared> {
     }
     let area = outers.iter().map(|p| geometry::area(p).abs()).sum::<f64>() / (S * S);
 
-    // Semplifica, poi allarga di metà distanza più la tolleranza: la sagoma del calcolo contiene
-    // sempre quella vera. Se la semplificazione non toglie punti (i rettangoli) la tolleranza non
-    // serve, così i pezzi possono toccarsi.
+    // Semplifica, poi allarga di metà distanza: la sagoma del calcolo deve contenere sempre
+    // quella vera. Dove la semplificazione taglia una curva si aggiunge un rettangolino sopra la
+    // corda ([`cover`]), così i lati dritti restano dove sono e due pezzi si possono toccare (le
+    // linee di taglio comuni). Se non riesce, si allarga tutto della tolleranza.
     let mut dev = 0.0;
-    let mut simplify = |p: &Poly| -> Poly {
-        let c = geometry::clean(p);
-        let s = geometry::simplify(&c, SIMPLIFY_MM * S);
-        if s.len() < c.len() {
-            dev = SIMPLIFY_MM;
+    let mut simplify = |shape: &[Poly]| -> Vec<Poly> {
+        let clean: Vec<Poly> = shape.iter().map(|c| geometry::clean(c)).collect();
+        let simple: Vec<Poly> = clean
+            .iter()
+            .map(|c| geometry::simplify(c, SIMPLIFY_MM * S))
+            .filter(|c| c.len() >= 3)
+            .collect();
+        let same = simple.len() == clean.len() && simple.iter().zip(&clean).all(|(a, b)| a.len() == b.len());
+        if same {
+            return simple;
         }
-        s
+        match cover(&clean, &simple) {
+            Some(c) => c,
+            None => {
+                dev = SIMPLIFY_MM;
+                simple
+            }
+        }
     };
     let source: Vec<Vec<Poly>> = if cfg.holes {
-        shapes
-            .iter()
-            .map(|s| s.iter().map(&mut simplify).filter(|c| c.len() >= 3).collect())
-            .collect()
+        shapes.iter().map(|s| simplify(s)).collect()
     } else {
-        outers.iter().map(|o| vec![simplify(o)]).collect()
+        outers
+            .iter()
+            .map(|o| simplify(std::slice::from_ref(o)).into_iter().take(1).collect())
+            .collect()
     };
     let grow = geometry::round((cfg.spacing / 2.0 + dev + SAFETY_MM) * S);
     let grown = offset(&source, grow);

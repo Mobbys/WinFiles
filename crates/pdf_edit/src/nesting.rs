@@ -14,7 +14,7 @@ use pdfcraft_cos::{Dict, Document, Object, Stream};
 use pdfcraft_organize as organize;
 use winfiles_geom::{mm_to_pt, pt_to_mm};
 
-use crate::paths::{self, PageScan, PathId};
+use crate::paths::{self, NewDie, PageScan, PathId};
 use crate::{EditError, PdfFile};
 
 /// Contorni in millimetri, y verso il basso: un contorno dentro un altro è un foro.
@@ -140,6 +140,8 @@ pub struct SheetPiece {
     pub matrix: [f64; 6],
     /// Il ritaglio sulla pagina (mm, y in giù): la sagoma con l'abbondanza. Vuoto: nessuno.
     pub clip: Contours,
+    /// I tracciati della pagina da non disegnare: la fustella, quando la tagliano le linee comuni.
+    pub hide: Vec<PathId>,
 }
 
 /// Un foglio (o un pezzo di rotolo).
@@ -148,6 +150,8 @@ pub struct NestSheet {
     pub width: f64,
     pub height: f64,
     pub pieces: Vec<SheetPiece>,
+    /// Le linee di taglio comuni (polilinee in mm sul foglio, y in giù), sopra le copie.
+    pub lines: Contours,
 }
 
 fn num(v: f64) -> String {
@@ -161,13 +165,31 @@ fn rect_object(r: [f64; 4]) -> Object {
 }
 
 /// Il PDF dei fogli: una pagina per foglio, alla misura vera, con TrimBox uguale alla pagina.
-pub fn nest_document(sources: &[&PdfFile], sheets: &[NestSheet]) -> Result<PdfFile, EditError> {
+/// Le linee comuni dei fogli (`lines`) si tracciano nella tinta `ink`; senza, non si disegnano.
+pub fn nest_document(
+    sources: &[&PdfFile],
+    sheets: &[NestSheet],
+    ink: Option<&NewDie>,
+) -> Result<PdfFile, EditError> {
     if sheets.is_empty() {
         return Err(EditError::Invalid("nessun foglio da salvare".into()));
     }
+    if let Some(die) = ink {
+        let name = die.name.trim();
+        if name.is_empty() || name.len() > 127 {
+            return Err(EditError::Invalid("nome della tinta non valido".into()));
+        }
+        if !(die.width.is_finite() && (0.0..=100.0).contains(&die.width)) {
+            return Err(EditError::Invalid("spessore non valido".into()));
+        }
+    }
     let mut doc = Document::new_empty();
-    // Ogni pagina di partenza una volta sola: (sorgente, pagina) → (modulo, altezza in punti).
-    let mut forms: Vec<((usize, usize), pdfcraft_cos::ObjRef, f64)> = Vec::new();
+    let stroke = ink.map(|die| paths::spot_stroke(&mut doc, die));
+    // Ogni pagina di partenza una volta sola: (sorgente, pagina, senza fustella) → (modulo,
+    // altezza in punti).
+    let mut forms: Vec<((usize, usize, bool), pdfcraft_cos::ObjRef, f64)> = Vec::new();
+    // Le copie dei PDF da cui si è tolta la fustella di qualche pagina.
+    let mut stripped: Vec<(usize, Document, Vec<usize>)> = Vec::new();
     for (n, sheet) in sheets.iter().enumerate() {
         let ok = |v: f64| v.is_finite() && (1.0..=MAX_SHEET_MM).contains(&v);
         if !ok(sheet.width) || !ok(sheet.height) {
@@ -181,7 +203,7 @@ pub fn nest_document(sources: &[&PdfFile], sheets: &[NestSheet]) -> Result<PdfFi
         let mut ops = String::new();
         let mut used = Dict::new();
         for piece in &sheet.pieces {
-            let key = (piece.source, piece.page);
+            let key = (piece.source, piece.page, !piece.hide.is_empty());
             let (form, h) = match forms.iter().find(|(k, _, _)| *k == key) {
                 Some((_, r, h)) => (*r, *h),
                 None => {
@@ -191,7 +213,26 @@ pub fn nest_document(sources: &[&PdfFile], sheets: &[NestSheet]) -> Result<PdfFi
                     let src = sources
                         .get(piece.source)
                         .ok_or_else(|| EditError::Invalid("file mancante".into()))?;
-                    let (r, (_, h)) = organize::page_as_form(&mut doc, &src.0, piece.page)?;
+                    let (r, (_, h)) = if piece.hide.is_empty() {
+                        organize::page_as_form(&mut doc, &src.0, piece.page)?
+                    } else {
+                        // La pagina senza la fustella, in una copia del PDF fatta una volta sola.
+                        let at = match stripped.iter().position(|(s, _, _)| *s == piece.source) {
+                            Some(i) => i,
+                            None => {
+                                stripped.push((piece.source, src.0.clone(), Vec::new()));
+                                stripped.len() - 1
+                            }
+                        };
+                        let (_, copy, done) = stripped
+                            .get_mut(at)
+                            .ok_or_else(|| EditError::Invalid("file mancante".into()))?;
+                        if !done.contains(&piece.page) {
+                            paths::hide(copy, piece.page, &piece.hide)?;
+                            done.push(piece.page);
+                        }
+                        organize::page_as_form(&mut doc, copy, piece.page)?
+                    };
                     forms.push((key, r, h));
                     (r, h)
                 }
@@ -228,10 +269,46 @@ pub fn nest_document(sources: &[&PdfFile], sheets: &[NestSheet]) -> Result<PdfFi
             }
             ops.push_str(&format!("/{name} Do Q\n"));
         }
+        // Le linee comuni, sopra tutto: aperte, come le ha lasciate il calcolo.
+        let lines: Vec<_> = sheet.lines.iter().filter(|l| l.len() >= 2).collect();
+        let draw = match (ink, &stroke) {
+            (Some(die), Some(st)) if !lines.is_empty() => Some((die, st)),
+            _ => None,
+        };
+        if let Some((die, _)) = draw {
+            let k = pt_to_mm(1.0);
+            ops.push_str(&format!(
+                "q /WFTaglio CS 1 SCN /WFTaglioGS gs {} w 1 j 1 J [] 0 d\n",
+                num(mm_to_pt(die.width))
+            ));
+            for line in &lines {
+                for (i, p) in line.iter().enumerate() {
+                    let (x, y) = (p[0] / k, sh - p[1] / k);
+                    if !(x.is_finite() && y.is_finite()) {
+                        return Err(EditError::Invalid("linea di taglio non valida".into()));
+                    }
+                    ops.push_str(&format!(
+                        "{} {} {}\n",
+                        num(x),
+                        num(y),
+                        if i == 0 { "m" } else { "l" }
+                    ));
+                }
+            }
+            ops.push_str("S Q\n");
+        }
         let page = organize::insert_blank_page(&mut doc, n, sw, sh)?;
         let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), ops.as_bytes())));
         doc.update_dict(page, |p| {
             let mut resources = Dict::new();
+            if let Some((_, (cs, gs))) = draw {
+                let mut spaces = Dict::new();
+                spaces.set(b"WFTaglio".to_vec(), Object::Ref(*cs));
+                resources.set(b"ColorSpace".to_vec(), Object::Dict(spaces));
+                let mut states = Dict::new();
+                states.set(b"WFTaglioGS".to_vec(), Object::Ref(*gs));
+                resources.set(b"ExtGState".to_vec(), Object::Dict(states));
+            }
             resources.set(b"XObject".to_vec(), Object::Dict(used));
             p.set(b"Resources".to_vec(), Object::Dict(resources));
             p.set(b"Contents".to_vec(), Object::Ref(contents));

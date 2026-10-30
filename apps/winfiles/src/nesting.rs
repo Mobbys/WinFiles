@@ -14,8 +14,8 @@ use egui::{Align, Color32, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use winfiles_geom::{Size, Unit, format_area, format_length, format_number, format_size};
 use winfiles_model::FileKind;
-use winfiles_nest::{Item, Options, Outcome, Placement, Stock};
-use winfiles_pdf_edit::{Contours, NestSheet, PdfFile, SheetPiece};
+use winfiles_nest::{CutLines, Item, Options, Outcome, Placement, Stock};
+use winfiles_pdf_edit::{Contours, NestSheet, NewDie, PathId, PdfFile, SheetPiece};
 
 use crate::app::{card, segmented};
 use crate::icons;
@@ -86,6 +86,9 @@ pub struct NestSettings {
     pub mirror: bool,
     pub holes: bool,
     pub seconds: u64,
+    /// Linee di taglio comuni (laser): il lato che due pezzi affiancati condividono si taglia una
+    /// volta sola, e le fustelle dei pezzi lasciano il posto alle linee calcolate.
+    pub common_lines: bool,
 }
 
 impl Default for NestSettings {
@@ -103,6 +106,7 @@ impl Default for NestSettings {
             mirror: false,
             holes: false,
             seconds: 10,
+            common_lines: false,
         }
     }
 }
@@ -124,9 +128,26 @@ impl NestSettings {
         self
     }
 
-    /// La distanza vera fra due sagome: almeno due abbondanze, che non si devono toccare.
+    /// La distanza vera fra due sagome: almeno due abbondanze, che non si devono toccare. Con le
+    /// linee comuni conta solo la distanza: i pezzi si possono affiancare.
     fn gap(&self) -> f64 {
-        self.spacing.max(2.0 * self.bleed)
+        if self.common_lines {
+            self.spacing
+        } else {
+            self.spacing.max(2.0 * self.bleed)
+        }
+    }
+
+    /// L'abbondanza con cui si ritaglia la grafica (mm sul foglio). Di solito almeno mezzo
+    /// millimetro, perché lo spessore della fustella resti intero; con le linee comuni la fustella
+    /// non si disegna e l'abbondanza arriva a metà distanza, così due pezzi affiancati non si
+    /// coprono.
+    fn clip_bleed(&self) -> f64 {
+        if self.common_lines {
+            self.bleed.min(self.spacing / 2.0).max(0.0)
+        } else {
+            self.bleed.max(0.5)
+        }
     }
 }
 
@@ -161,6 +182,9 @@ struct Shape {
     bounds: [f64; 4],
     /// L'abbondanza più stretta che il file ha già oltre la sagoma (mm), se si sa.
     bleed: Option<f64>,
+    /// I tracciati della fustella nella pagina e il loro spessore (mm), se c'è.
+    die: Vec<PathId>,
+    die_width: Option<f64>,
 }
 
 /// Una pagina da disporre.
@@ -256,6 +280,8 @@ enum RunMsg {
 /// Il risultato e per quali scelte è stato calcolato.
 struct Result_ {
     outcome: Outcome,
+    /// Le linee di taglio comuni di ogni foglio, se sono state chieste.
+    cut: Vec<CutLines>,
     /// Le pagine dell'elenco al momento del calcolo (gli indici di `Placement::item`).
     entries: Vec<(PathBuf, usize, Option<usize>)>,
     stamp: Stamp,
@@ -400,12 +426,14 @@ impl NestingModule {
             };
         }
         let mut finished = false;
+        let mut changed = false;
         if let Some(run) = &mut self.running {
             while let Ok(msg) = run.rx.try_recv() {
                 match msg {
                     RunMsg::Better(o) => {
                         if let Some(r) = &mut self.result {
                             r.outcome = o;
+                            changed = true;
                         }
                     }
                     RunMsg::Tries(n) => run.tries = n,
@@ -415,6 +443,7 @@ impl NestingModule {
                             Ok(o) => {
                                 if let Some(res) = &mut self.result {
                                     res.outcome = o;
+                                    changed = true;
                                 }
                             }
                             Err(e) => {
@@ -425,6 +454,12 @@ impl NestingModule {
                     }
                 }
             }
+        }
+        if changed
+            && let Some(cut) = self.result.as_ref().map(|r| self.cut_lines(r))
+            && let Some(r) = &mut self.result
+        {
+            r.cut = cut;
         }
         if finished {
             self.running = None;
@@ -484,6 +519,8 @@ impl NestingModule {
                         page: e.shape.page,
                         bounds,
                         bleed: e.shape.bleed,
+                        die: e.shape.die.clone(),
+                        die_width: e.shape.die_width,
                     },
                     thumb: e.thumb.clone(),
                     texture: None,
@@ -669,6 +706,7 @@ impl NestingModule {
                 utilization: 0.0,
                 tries: 0,
             },
+            cut: Vec::new(),
             entries: self.entries.iter().map(Entry::key).collect(),
             stamp: self.stamp(),
         });
@@ -681,6 +719,74 @@ impl NestingModule {
     fn stop(&mut self) {
         if let Some(r) = &self.running {
             r.stop.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Le linee di taglio comuni dei fogli di `r`, se le scelte del calcolo le chiedono: i
+    /// contorni di ogni copia al loro posto, nell'ordine in cui il motore le ha messe.
+    fn cut_lines(&self, r: &Result_) -> Vec<CutLines> {
+        if !r.stamp.settings.common_lines {
+            return Vec::new();
+        }
+        r.outcome
+            .sheets
+            .iter()
+            .map(|sheet| {
+                let pieces: Vec<Contours> = sheet
+                    .placements
+                    .iter()
+                    .filter_map(|p| {
+                        let key = r.entries.get(p.item)?;
+                        let e = self.entries.iter().find(|e| e.key() == *key)?;
+                        let k = e.factor();
+                        Some(
+                            e.shape
+                                .contours
+                                .iter()
+                                .map(|c| c.iter().map(|q| p.apply([q[0] * k, q[1] * k])).collect())
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                winfiles_nest::common_lines(&pieces, winfiles_nest::cutlines::TOLERANCE)
+            })
+            .collect()
+    }
+
+    /// La tinta delle linee comuni: quella della prima fustella dei file, altrimenti la tinta di
+    /// taglio; lo spessore della fustella, o mezzo millimetro.
+    fn line_ink(&self) -> NewDie {
+        let cut = self
+            .inks
+            .iter()
+            .find(|i| i.role == Role::Cut)
+            .cloned()
+            .unwrap_or(InkName {
+                name: "Taglio".into(),
+                role: Role::Cut,
+                cmyk: None,
+            });
+        let first = self.entries.iter().find_map(|e| match &e.shape.from {
+            From::Die(name) => Some((name.clone(), e.shape.die_width)),
+            _ => None,
+        });
+        let name = first
+            .as_ref()
+            .map_or_else(|| cut.name.clone(), |(n, _)| n.clone());
+        let cmyk = self
+            .inks
+            .iter()
+            .find(|i| i.name == name)
+            .map_or_else(|| cut.color(), InkName::color);
+        let width = first
+            .and_then(|(_, w)| w)
+            .filter(|w| w.is_finite() && *w > 0.0 && *w <= 10.0)
+            .unwrap_or(0.5);
+        NewDie {
+            name,
+            cmyk,
+            width,
+            overprint: true,
         }
     }
 
@@ -717,6 +823,69 @@ impl NestingModule {
 
     // --- Salvataggio -----------------------------------------------------------------------
 
+    /// Quello che serve per scrivere il PDF dei fogli di `r`: i file (le immagini con la misura
+    /// della loro pagina), le copie ritagliate sui fogli e la tinta delle linee comuni.
+    fn job(&self, r: &Result_) -> Job {
+        let mut files: Vec<(PathBuf, Option<Size>)> = Vec::new();
+        let mut pieces: Vec<(usize, usize, Contours, f64, Vec<PathId>)> = Vec::new();
+        for e in &self.entries {
+            let source = match files.iter().position(|(p, _)| *p == e.path) {
+                Some(i) => i,
+                None => {
+                    let image =
+                        (e.shape.from == From::Image).then(|| Size::new(e.shape.page[0], e.shape.page[1]));
+                    files.push((e.path.clone(), image));
+                    files.len() - 1
+                }
+            };
+            let hide = if self.settings.common_lines {
+                e.shape.die.clone()
+            } else {
+                Vec::new()
+            };
+            pieces.push((
+                source,
+                e.page,
+                e.clip(self.settings.clip_bleed()),
+                e.factor(),
+                hide,
+            ));
+        }
+        let mut sheets: Vec<NestSheet> = r
+            .outcome
+            .sheets
+            .iter()
+            .map(|s| NestSheet {
+                width: s.width,
+                height: s.height,
+                pieces: s
+                    .placements
+                    .iter()
+                    .filter_map(|p| {
+                        let (source, page, clip, k, hide) = pieces.get(p.item)?;
+                        Some(SheetPiece {
+                            source: *source,
+                            page: *page,
+                            matrix: matrix(p, *k),
+                            clip: clip.clone(),
+                            hide: hide.clone(),
+                        })
+                    })
+                    .collect(),
+                lines: Vec::new(),
+            })
+            .collect();
+        let ink = if self.settings.common_lines {
+            for (sheet, cut) in sheets.iter_mut().zip(&r.cut) {
+                sheet.lines = cut.lines.clone();
+            }
+            Some(self.line_ink())
+        } else {
+            None
+        };
+        Job { files, sheets, ink }
+    }
+
     fn save(&mut self) {
         if self.running.is_some() || self.saving.is_some() {
             return;
@@ -750,68 +919,13 @@ impl NestingModule {
         if target.extension().is_none_or(|e| !e.eq_ignore_ascii_case("pdf")) {
             target.set_extension("pdf");
         }
-        // Tutto quello che serve al thread: i file (le immagini con la misura della loro pagina),
-        // le sagome con l'abbondanza e la scala, i fogli.
-        let mut files: Vec<(PathBuf, Option<Size>)> = Vec::new();
-        let mut pieces: Vec<(usize, usize, Contours, f64)> = Vec::new();
-        for e in &self.entries {
-            let source = match files.iter().position(|(p, _)| *p == e.path) {
-                Some(i) => i,
-                None => {
-                    let image =
-                        (e.shape.from == From::Image).then(|| Size::new(e.shape.page[0], e.shape.page[1]));
-                    files.push((e.path.clone(), image));
-                    files.len() - 1
-                }
-            };
-            pieces.push((source, e.page, e.clip(self.settings.bleed), e.factor()));
-        }
-        let sheets: Vec<NestSheet> = r
-            .outcome
-            .sheets
-            .iter()
-            .map(|s| NestSheet {
-                width: s.width,
-                height: s.height,
-                pieces: s
-                    .placements
-                    .iter()
-                    .filter_map(|p| {
-                        let (source, page, clip, k) = pieces.get(p.item)?;
-                        Some(SheetPiece {
-                            source: *source,
-                            page: *page,
-                            matrix: matrix(p, *k),
-                            clip: clip.clone(),
-                        })
-                    })
-                    .collect(),
-            })
-            .collect();
+        let job = self.job(r);
         let (tx, rx) = mpsc::channel();
         let wake = self.wake.clone();
         let spawned = std::thread::Builder::new()
             .name("nesting-pdf".into())
             .spawn(move || {
-                let result = (|| {
-                    let opened = files
-                        .iter()
-                        .map(|(p, image)| {
-                            let file = match image {
-                                // L'immagine entra come un PDF di una pagina, alla sua risoluzione.
-                                Some(size) => winfiles_pdf_out::image_page(p, *size)
-                                    .map_err(|e| e.to_string())
-                                    .and_then(|b| PdfFile::from_bytes(b).map_err(|e| e.to_string())),
-                                None => PdfFile::open(p).map_err(|e| e.to_string()),
-                            };
-                            file.map_err(|e| format!("{}: {e}", file_name(p)))
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let refs: Vec<&PdfFile> = opened.iter().collect();
-                    let out = winfiles_pdf_edit::nest_document(&refs, &sheets).map_err(|e| e.to_string())?;
-                    out.save(&target).map_err(|e| e.to_string())?;
-                    Ok(target)
-                })();
+                let result = write_job(&job, &target).map(|()| target);
                 let _ = tx.send(result);
                 wake.request_repaint();
             });
@@ -1044,7 +1158,7 @@ impl NestingModule {
 
     /// Le immagini delle pagine, ritagliate sulla sagoma più l'abbondanza di adesso.
     fn textures(&mut self, ctx: &egui::Context) {
-        let bleed = self.settings.bleed;
+        let bleed = self.settings.clip_bleed();
         for (i, e) in self.entries.iter_mut().enumerate() {
             if e.texture
                 .as_ref()
@@ -1579,6 +1693,8 @@ impl NestingModule {
         }
         let hover = ui.input(|i| i.pointer.hover_pos());
         let mut tip: Option<String> = None;
+        // Con le linee comuni si vede il taglio vero, non le fustelle dei pezzi.
+        let common = r.cut.get(self.sheet).filter(|_| r.stamp.settings.common_lines);
         for p in &sheet.placements {
             let Some(key) = r.entries.get(p.item) else {
                 continue;
@@ -1612,10 +1728,18 @@ impl NestingModule {
                 {
                     inside = !inside;
                 }
-                painter.add(egui::Shape::closed_line(pts, Stroke::new(1.0, t.quote)));
+                if common.is_none() {
+                    painter.add(egui::Shape::closed_line(pts, Stroke::new(1.0, t.quote)));
+                }
             }
             if inside {
                 tip = Some(format!("{} · copia {}", e.name(), p.copy + 1));
+            }
+        }
+        if let Some(cut) = common {
+            for line in &cut.lines {
+                let pts: Vec<Pos2> = line.iter().map(|q| to(*q)).collect();
+                painter.add(egui::Shape::line(pts, Stroke::new(1.5, t.quote)));
             }
         }
         if let Some(tip) = tip {
@@ -1680,7 +1804,25 @@ impl NestingModule {
                         length_row(ui, "Distanza", &mut s.spacing, Unit::Mm, 0.0..=200.0);
                         length_row(ui, "Abbondanza", &mut s.bleed, Unit::Mm, 0.0..=50.0);
                     });
-                if 2.0 * s.bleed > s.spacing {
+                ui.add_space(6.0);
+                ui.add(crate::fluent::checkbox(&mut s.common_lines, "Linee di taglio comuni (laser)"))
+                    .on_hover_text(
+                        "Il lato che due pezzi affiancati condividono si taglia una volta sola: nel PDF le \
+                         fustelle dei pezzi lasciano il posto alle linee comuni, nella tinta di taglio",
+                    );
+                if s.common_lines {
+                    hint(
+                        ui,
+                        &if s.spacing > 0.0 {
+                            "Con la distanza a 0 i pezzi si affiancano e condividono il taglio.".to_string()
+                        } else {
+                            format!(
+                                "I pezzi si toccano: la grafica si ritaglia sulla fustella{}.",
+                                if s.bleed > 0.0 { ", senza abbondanza" } else { "" }
+                            )
+                        },
+                    );
+                } else if 2.0 * s.bleed > s.spacing {
                     hint(
                         ui,
                         &format!(
@@ -1747,6 +1889,22 @@ impl NestingModule {
                             row(ui, "Materiale", format_area(area));
                             row(ui, "Sagome", format_area(pieces));
                             row(ui, "Resa", format!("{}%", format_number(o.utilization * 100.0, 0, false)));
+                            if r.stamp.settings.common_lines && !r.cut.is_empty() {
+                                let before: f64 = r.cut.iter().map(|c| c.before).sum();
+                                let after: f64 = r.cut.iter().map(|c| c.after).sum();
+                                row(ui, "Taglio", metres(after));
+                                if before > 0.0 && after < before - 1.0 {
+                                    row(
+                                        ui,
+                                        "Risparmio",
+                                        format!(
+                                            "{} (−{}%)",
+                                            metres(before - after),
+                                            format_number((1.0 - after / before) * 100.0, 0, false)
+                                        ),
+                                    );
+                                }
+                            }
                         });
                     if !o.unplaced.is_empty() {
                         hint_color(
@@ -1819,12 +1977,45 @@ pub(crate) fn length_row(
     ui.end_row();
 }
 
-/// Il ritaglio di una sagoma: la sagoma più l'abbondanza, almeno mezzo millimetro (lo spessore
-/// della linea di taglio deve restare intero).
+/// Il lavoro per il PDF dei fogli, pronto per un altro thread.
+struct Job {
+    files: Vec<(PathBuf, Option<Size>)>,
+    sheets: Vec<NestSheet>,
+    ink: Option<NewDie>,
+}
+
+/// Apre i file e scrive il PDF dei fogli in `target`.
+fn write_job(job: &Job, target: &Path) -> Result<(), String> {
+    let opened = job
+        .files
+        .iter()
+        .map(|(p, image)| {
+            let file = match image {
+                // L'immagine entra come un PDF di una pagina, alla sua risoluzione.
+                Some(size) => winfiles_pdf_out::image_page(p, *size)
+                    .map_err(|e| e.to_string())
+                    .and_then(|b| PdfFile::from_bytes(b).map_err(|e| e.to_string())),
+                None => PdfFile::open(p).map_err(|e| e.to_string()),
+            };
+            file.map_err(|e| format!("{}: {e}", file_name(p)))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let refs: Vec<&PdfFile> = opened.iter().collect();
+    let out =
+        winfiles_pdf_edit::nest_document(&refs, &job.sheets, job.ink.as_ref()).map_err(|e| e.to_string())?;
+    out.save(target).map_err(|e| e.to_string())
+}
+
+/// Una lunghezza di taglio in metri.
+fn metres(mm: f64) -> String {
+    format!("{} m", format_number(mm / 1000.0, 2, false))
+}
+
+/// Il ritaglio di una sagoma: la sagoma più l'abbondanza (vedi [`NestSettings::clip_bleed`]).
 /// Con la scala 1:`k` la pagina si ingrandisce, quindi sulla pagina l'abbondanza è `k` volte più
 /// stretta.
 fn clip_of(shape: &Shape, bleed: f64, k: f64) -> Contours {
-    winfiles_pdf_edit::grow_shape(&shape.contours, bleed.max(0.5) / k.max(1.0))
+    winfiles_pdf_edit::grow_shape(&shape.contours, bleed.max(0.0) / k.max(1.0))
 }
 
 /// La matrice dalla pagina (mm) al foglio (mm) di una copia: prima la scala `k` e lo specchio,
@@ -1948,6 +2139,10 @@ fn load(path: &Path, inks: &[InkName]) -> Result<Vec<(usize, usize, Shape, winfi
             );
             room.iter().copied().fold(f64::MAX, f64::min)
         });
+        // La fustella da nascondere con le linee comuni: solo se la sagoma viene da lei.
+        let found = die.filter(|_| matches!(from, From::Die(_)));
+        let die_ids = found.map(|(_, _, g)| g.ids.clone()).unwrap_or_default();
+        let die_width = found.map(|(_, _, g)| g.width);
         let thumb = winfiles_thumbs::render(path, kind, page, THUMB_SIDE).map_err(|e| e.to_string())?;
         out.push((
             page,
@@ -1958,6 +2153,8 @@ fn load(path: &Path, inks: &[InkName]) -> Result<Vec<(usize, usize, Shape, winfi
                 page: [scan.width, scan.height],
                 bounds,
                 bleed,
+                die: die_ids,
+                die_width,
             },
             thumb,
         ));
@@ -1986,6 +2183,8 @@ fn load_image(path: &Path) -> Result<(usize, usize, Shape, winfiles_thumbs::Thum
             page: [size.w, size.h],
             bounds,
             bleed: Some(0.0),
+            die: Vec::new(),
+            die_width: None,
         },
         thumb,
     ))
@@ -2102,6 +2301,8 @@ mod tests {
             page: [20.0, 10.0],
             bounds: [0.0, 0.0, 20.0, 10.0],
             bleed: Some(0.0),
+            die: Vec::new(),
+            die_width: None,
         };
         let b = winfiles_pdf_edit::shape_bounds(&clip_of(&shape, 3.0, 10.0)).unwrap();
         assert!((b[0] + 0.3).abs() < 0.02 && (b[2] - 20.3).abs() < 0.02, "{b:?}");

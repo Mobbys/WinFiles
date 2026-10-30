@@ -1464,6 +1464,7 @@ fn i_fogli_del_nesting_ritagliano_le_copie_sulla_sagoma() {
                 page: 0,
                 matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
                 clip: clip.clone(),
+                hide: Vec::new(),
             },
             SheetPiece {
                 source: 0,
@@ -1471,10 +1472,12 @@ fn i_fogli_del_nesting_ritagliano_le_copie_sulla_sagoma() {
                 // (x, y) → (page_mm - y, x) spostato a destra: 90° in senso orario.
                 matrix: [0.0, 1.0, -1.0, 0.0, 2.0 * page_mm, 0.0],
                 clip,
+                hide: Vec::new(),
             },
         ],
+        lines: Vec::new(),
     };
-    let out = nest_document(&[&file], &[sheet]).unwrap();
+    let out = nest_document(&[&file], &[sheet], None).unwrap();
     let pdf = Pdf::new(out.to_bytes().unwrap()).unwrap();
     let img = render(&pdf, 0);
     assert_eq!((img.1, img.2), (600, 300));
@@ -1496,6 +1499,74 @@ fn i_fogli_del_nesting_ritagliano_le_copie_sulla_sagoma() {
         );
         assert!(is_white(pixel(&img, cx, 150 + five)));
     }
+}
+
+#[test]
+fn con_le_linee_comuni_la_fustella_dei_pezzi_sparisce() {
+    // Un quadrato rosso con la fustella nera spessa sul bordo: due copie affiancate senza
+    // distanza. Le fustelle dei pezzi non si disegnano; sopra c'è una linea sola in tinta Taglio.
+    let content = leak("1 0 0 rg 0 0 100 100 re f 0 0 0 1 K 6 w 0 0 100 100 re S".to_string());
+    let file = PdfFile::from_bytes(pdf(&[page([0.0, 0.0, 100.0, 100.0], 0, content)])).unwrap();
+    let scan = file.scan_page(0).unwrap();
+    let die: Vec<PathId> = scan
+        .paths
+        .iter()
+        .filter(|p| p.line.is_some())
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(die.len(), 1);
+    let side = pt_to_mm(100.0);
+    let piece = |x: f64| SheetPiece {
+        source: 0,
+        page: 0,
+        matrix: [1.0, 0.0, 0.0, 1.0, x, 0.0],
+        clip: Vec::new(),
+        hide: die.clone(),
+    };
+    // La linea comune: il lato in mezzo, in verticale.
+    let sheet = NestSheet {
+        width: 2.0 * side,
+        height: side,
+        pieces: vec![piece(0.0), piece(side)],
+        lines: vec![vec![[side, 0.0], [side, side]]],
+    };
+    let ink = NewDie {
+        name: "Taglio".into(),
+        cmyk: [0.0, 1.0, 0.0, 0.0],
+        width: 2.0,
+        // Senza sovrastampa: sul rosso il magenta in sovrastampa resterebbe rosso.
+        overprint: false,
+    };
+    let out = nest_document(&[&file], &[sheet], Some(&ink)).unwrap();
+    let bytes = out.to_bytes().unwrap();
+    let pdf = Pdf::new(bytes.clone()).unwrap();
+    let img = render(&pdf, 0);
+    // Dove c'era la fustella nera (il bordo in alto) ora c'è il rosso della grafica.
+    assert!(is_red(pixel(&img, 50, 1)), "{:?}", pixel(&img, 50, 1));
+    assert!(is_red(pixel(&img, 150, 1)), "{:?}", pixel(&img, 150, 1));
+    // Sul lato comune c'è la linea magenta della tinta, non il nero.
+    let p = pixel(&img, 100, 50);
+    assert!(p[1] < 120 && p[0] > 150 && p[2] > 60, "{p:?}");
+    // La tinta si chiama come deve.
+    let scan = out.scan_page(0).unwrap();
+    assert!(scan.paths.iter().any(|q| matches!(
+        q.line.as_ref().map(|l| &l.ink),
+        Some(Ink::Spot { name, .. }) if name == "Taglio"
+    )));
+    // Senza togliere le fustelle il nero resta.
+    let sheet = NestSheet {
+        width: side,
+        height: side,
+        pieces: vec![SheetPiece {
+            hide: Vec::new(),
+            ..piece(0.0)
+        }],
+        lines: Vec::new(),
+    };
+    let out = nest_document(&[&file], &[sheet], None).unwrap();
+    let img = render(&Pdf::new(out.to_bytes().unwrap()).unwrap(), 0);
+    let p = pixel(&img, 50, 1);
+    assert!(p.iter().all(|v| *v < 60), "{p:?}");
 }
 
 #[test]

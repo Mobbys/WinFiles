@@ -44,7 +44,7 @@ Alternativa 3.
   con le pagine ritagliate sulla sagoma.
 
 ## Conseguenze
-- Restano fuori per ora le linee di taglio comuni del pannello (laser).
+- Le linee di taglio comuni del pannello (laser) sono arrivate dopo: vedi la sezione qui sotto.
 - Le immagini entrano come rettangoli: al salvataggio ognuna diventa un PDF di una pagina
   (`pdf_out::image_page`, JPEG e PNG senza ricomprimere, il resto in PNG) e da lì segue la strada
   dei PDF.
@@ -53,3 +53,24 @@ Alternativa 3.
 - Un PDF di molte pagine diventa molte sagome, una per pagina, ognuna con le sue copie.
 - L'anteprima mostra le pagine a 512 pixel di lato: basta per riconoscerle, non per controllare i
   dettagli (quelli si guardano nel PDF salvato).
+
+## Linee di taglio comuni (laser), 30 ottobre 2026
+- Il calcolo è `nest::cutlines` (da `cutlines.js` del pannello, con i suoi test): i contorni delle
+  copie al loro posto, una dopo l'altra; di ogni lato resta solo la parte che nessun lato già
+  accettato copre (parallelo entro 1°, a meno di 0,6 mm), e i tratti consecutivi dello stesso
+  contorno diventano una polilinea. I lati accettati stanno in una griglia di celle da 20 mm, così
+  i fogli con migliaia di lati restano veloci.
+- Con la casella "Linee di taglio comuni (laser)" la distanza fra le sagome è solo quella scritta
+  (le abbondanze non la allargano) e la grafica si ritaglia a metà distanza: con distanza 0 i pezzi
+  si toccano e la grafica arriva alla fustella. Nel PDF le fustelle dei pezzi non si disegnano più
+  (`paths::hide` sulla copia della pagina, l'operatore che dipinge diventa `n`) e sopra ogni foglio
+  ci sono le linee comuni, aperte, nella tinta della prima fustella dei file (o quella di taglio),
+  in sovrastampa, con il suo spessore.
+- Il motore ora tiene fermi i lati dritti delle sagome con curve: prima, se la semplificazione a
+  0,3 mm toglieva punti, tutta la sagoma si allargava di 0,3 mm e due rettangoli ad angoli tondi
+  restavano a 0,7 mm. Ora ogni pezzetto rimasto fuori fra una curva e la sua corda si copre con il
+  triangolo fra la corda e le tangenti (o un rettangolo, se non è convesso) e si controlla che la
+  sagoma del calcolo contenga davvero quella vera; se no si torna all'allargamento di prima.
+- Le fustelle dentro i moduli della pagina (rare) restano: si toglie solo quella del contenuto
+  della pagina.
+

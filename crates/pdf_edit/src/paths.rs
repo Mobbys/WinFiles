@@ -1162,6 +1162,31 @@ pub(crate) fn without(doc: &Document, page: usize, ids: &[PathId]) -> Result<(Ve
     Ok((serialize_ops(&out), left))
 }
 
+/// Toglie dalla pagina i tracciati `ids` (vedi [`without`]): restituisce quanti stanno dentro i
+/// moduli e restano.
+pub(crate) fn hide(doc: &mut Document, page: usize, ids: &[PathId]) -> Result<usize, EditError> {
+    let (data, left) = without(doc, page, ids)?;
+    let page_ref = organize::pages(doc)?
+        .get(page)
+        .map(|p| p.obj)
+        .ok_or(EditError::NoPage(page.saturating_add(1)))?;
+    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), &data)));
+    doc.update_dict(page_ref, |d| d.set(b"Contents".to_vec(), Object::Ref(contents)))?;
+    Ok(left)
+}
+
+/// Le risorse per tracciare in una tinta piatta nuova: lo spazio colore e lo stato grafico con la
+/// sovrastampa del contorno.
+pub(crate) fn spot_stroke(doc: &mut Document, die: &NewDie) -> (ObjRef, ObjRef) {
+    let cs = spot_space(doc, &die.name, die.cmyk);
+    let mut state = Dict::new();
+    state.set(b"Type".to_vec(), Object::name("ExtGState"));
+    state.set(b"OP".to_vec(), Object::Bool(die.overprint));
+    state.set(b"op".to_vec(), Object::Bool(false));
+    let state = doc.add(Object::Dict(state));
+    (cs, state)
+}
+
 /// Il contenuto della pagina con soli i tracciati `ids` (per esempio la fustella da sola): gli
 /// altri tracciati non si dipingono e testi, immagini, sfumature e moduli si tolgono.
 pub(crate) fn only(doc: &Document, page: usize, ids: &[PathId]) -> Result<Vec<u8>, EditError> {

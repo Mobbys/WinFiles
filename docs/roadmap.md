@@ -111,7 +111,7 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] Scheda "Nesting": copie dei PDF sagomati su lastre o rotolo, sulla fustella di taglio, con
   l'abbondanza; PDF dei fogli per Onyx ([ADR 0027](adr/0027-nesting.md))
 - [x] Nesting: immagini come rettangoli, scala 1:N per file, "Manda al nesting" dal tasto destro
-- [ ] Nesting: linee di taglio comuni (laser)
+- [x] Nesting: linee di taglio comuni (laser), il lato condiviso si taglia una volta sola
 - [x] Fustella e abbondanza sulle immagini, fase 1: abbondanza con i pixel e PDF con fustella
   rettangolare o ad angoli tondi ([ADR 0028](adr/0028-fustella-e-abbondanza-sulle-immagini.md))
 - [x] Fase 2: fustella dal contorno del soggetto (colore di sfondo con contagocce, o trasparenza)

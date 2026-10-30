@@ -375,3 +375,112 @@ fn misure_sbagliate() {
     let big = opts(sheet(100.0, 100.0), 60.0, 0.0, 0.0, 0);
     assert!(nest(&items, &big, &stop, |_| {}, |_| {}).is_err());
 }
+
+// --- Linee di taglio comuni (`test/cutlines.test.js`) ---------------------------------------
+
+fn rect_at(x: f64, y: f64, w: f64, h: f64) -> Vec<C> {
+    vec![vec![[x, y], [x + w, y], [x + w, y + h], [x, y + h]]]
+}
+
+#[test]
+fn due_rettangoli_affiancati_tagliano_il_lato_comune_una_volta() {
+    let r = common_lines(
+        &[rect_at(0.0, 0.0, 100.0, 50.0), rect_at(100.1, 0.0, 100.0, 50.0)],
+        cutlines::TOLERANCE,
+    );
+    assert!((r.before - 600.0).abs() < 1e-6, "{}", r.before);
+    assert!((r.after - 550.0).abs() < 0.5, "{}", r.after);
+}
+
+#[test]
+fn una_griglia_due_per_due_taglia_1200_mm() {
+    let pieces: Vec<Vec<C>> = [(0.0, 0.0), (100.0, 0.0), (0.0, 100.0), (100.0, 100.0)]
+        .iter()
+        .map(|&(x, y)| rect_at(x, y, 100.0, 100.0))
+        .collect();
+    let r = common_lines(&pieces, cutlines::TOLERANCE);
+    assert!((r.before - 1600.0).abs() < 1e-6);
+    assert!((r.after - 1200.0).abs() < 0.5, "{}", r.after);
+}
+
+#[test]
+fn i_pezzi_lontani_restano_interi() {
+    let r = common_lines(
+        &[rect_at(0.0, 0.0, 100.0, 50.0), rect_at(110.0, 0.0, 100.0, 50.0)],
+        cutlines::TOLERANCE,
+    );
+    assert_eq!(r.lines.len(), 2);
+    assert!((r.after - r.before).abs() < 1e-6);
+    // Ogni contorno intero è una polilinea sola, chiusa: dal primo punto al primo punto.
+    for l in &r.lines {
+        assert_eq!(l.len(), 5);
+        assert_eq!(l.first(), l.last());
+    }
+}
+
+#[test]
+fn il_tratto_comune_non_spezza_il_resto_del_contorno() {
+    // Il secondo rettangolo perde solo il lato sinistro: il resto è una polilinea unica.
+    let r = common_lines(
+        &[rect_at(0.0, 0.0, 100.0, 50.0), rect_at(100.0, 0.0, 100.0, 50.0)],
+        cutlines::TOLERANCE,
+    );
+    assert_eq!(r.lines.len(), 2, "{:?}", r.lines);
+    assert!((r.after - 550.0).abs() < 1e-6);
+}
+
+#[test]
+fn rotazione_e_specchio_come_nel_motore() {
+    let p = Placement {
+        item: 0,
+        copy: 0,
+        rotation: 90.0,
+        mirror: true,
+        x: 0.0,
+        y: 0.0,
+    };
+    let q = p.apply([100.0, 0.0]);
+    assert!(q[0].abs() < 1e-9 && (q[1] + 100.0).abs() < 1e-9, "{q:?}");
+}
+
+fn rounded(w: f64, h: f64, r: f64) -> C {
+    let mut out = Vec::new();
+    let corners = [
+        (w - r, r, -90.0),
+        (w - r, h - r, 0.0),
+        (r, h - r, 90.0),
+        (r, r, 180.0),
+    ];
+    for (cx, cy, start) in corners {
+        for k in 0..=12 {
+            let a = (start + 90.0 * f64::from(k) / 12.0_f64).to_radians();
+            out.push([cx + r * a.cos(), cy + r * a.sin()]);
+        }
+    }
+    out
+}
+
+#[test]
+fn le_curve_semplificate_non_allontanano_i_lati_dritti() {
+    // Rettangoli con gli angoli tondi: la semplificazione taglia le curve, ma i lati dritti di
+    // due pezzi vicini devono toccarsi, perché le linee comuni li uniscano.
+    let items = vec![item(vec![rounded(100.0, 50.0, 8.0)], 4)];
+    let o = opts(roll(200.5, 1000.0), 0.0, 0.0, 0.0, 0);
+    let res = run(&items, &o);
+    let len = res.total_length.unwrap();
+    assert!(len < 100.5, "lunghezza {len}");
+    let sheet = res.sheets.first().unwrap();
+    let pieces: Vec<Vec<C>> = sheet
+        .placements
+        .iter()
+        .map(|p| vec![rounded(100.0, 50.0, 8.0).iter().map(|q| p.apply(*q)).collect()])
+        .collect();
+    let cut = common_lines(&pieces, cutlines::TOLERANCE);
+    // Quattro pezzi in 2×2: due lati comuni da 34 mm (i dritti) e due da 84 mm.
+    assert!(
+        cut.before - cut.after > 2.0 * 34.0 + 2.0 * 84.0 - 2.0,
+        "{} {}",
+        cut.before,
+        cut.after
+    );
+}
