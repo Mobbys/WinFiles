@@ -3,6 +3,7 @@
 //! tinte piatte com'erano. Il motore è `winfiles-nest` (dal pannello per Illustrator); qui ci sono
 //! l'elenco dei file con le copie, le impostazioni, l'anteprima dei fogli e il salvataggio.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,6 +32,8 @@ const FIELDS_H: f32 = 30.0;
 /// Le scale dei file disegnati in piccolo: 1:N diventa N volte più grande sul foglio.
 const SCALES: [u32; 10] = [1, 2, 4, 5, 10, 20, 25, 30, 50, 100];
 const BAR_ROW: f32 = 38.0;
+/// Altezza della barra di copie e scala per tutte le sagome.
+const BULK_H: f32 = 68.0;
 /// Spazio sotto il foglio per la sua misura.
 const CAPTION_H: f32 = 22.0;
 /// Copie di una pagina.
@@ -266,7 +269,11 @@ pub struct NestingModule {
     result: Option<Result_>,
     saving: Option<mpsc::Receiver<Result<PathBuf, String>>>,
     sheet: usize,
+    /// L'ultima riga cliccata (da qui parte Maiusc+clic) e le righe scelte.
     chosen: Option<usize>,
+    selected: BTreeSet<usize>,
+    /// Le copie scritte nella barra di tutte (o delle scelte).
+    bulk_copies: usize,
     pub status: String,
     unit: Unit,
     wake: egui::Context,
@@ -291,6 +298,8 @@ impl NestingModule {
             saving: None,
             sheet: 0,
             chosen: None,
+            selected: BTreeSet::new(),
+            bulk_copies: 1,
             status: String::new(),
             unit: Unit::Mm,
             wake: ctx.clone(),
@@ -416,11 +425,50 @@ impl NestingModule {
         }
     }
 
-    fn remove(&mut self, i: usize) {
-        if i < self.entries.len() {
-            self.entries.remove(i);
-            self.chosen = None;
+    /// Toglie dall'elenco le righe `rows`.
+    fn remove(&mut self, rows: &[usize]) {
+        let mut rows = rows.to_vec();
+        rows.sort_unstable();
+        rows.dedup();
+        for i in rows.into_iter().rev() {
+            if i < self.entries.len() {
+                self.entries.remove(i);
+            }
         }
+        self.chosen = None;
+        self.selected.clear();
+    }
+
+    /// Le righe su cui lavorano i comandi della barra: le scelte, o tutte se non ce n'è.
+    fn targets(&self) -> Vec<usize> {
+        if self.selected.is_empty() {
+            (0..self.entries.len()).collect()
+        } else {
+            self.selected
+                .iter()
+                .copied()
+                .filter(|i| *i < self.entries.len())
+                .collect()
+        }
+    }
+
+    /// Un clic sulla riga `i`: da sola, Ctrl+clic la aggiunge o la toglie, Maiusc+clic prende
+    /// tutte quelle fino all'ultima cliccata.
+    fn click(&mut self, i: usize, mods: egui::Modifiers) {
+        if mods.shift
+            && let Some(a) = self.chosen
+        {
+            self.selected = (a.min(i)..=a.max(i)).collect();
+            return;
+        }
+        if mods.command {
+            if !self.selected.remove(&i) {
+                self.selected.insert(i);
+            }
+        } else {
+            self.selected = BTreeSet::from([i]);
+        }
+        self.chosen = Some(i);
     }
 
     fn stamp(&self) -> Stamp {
@@ -692,10 +740,12 @@ impl NestingModule {
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.stop();
         }
-        if ctx.input(|i| i.key_pressed(Key::Delete))
-            && let Some(i) = self.chosen
-        {
-            self.remove(i);
+        if ctx.input(|i| i.key_pressed(Key::Delete)) && !self.selected.is_empty() {
+            let rows: Vec<usize> = self.selected.iter().copied().collect();
+            self.remove(&rows);
+        }
+        if pressed(Modifiers::COMMAND, Key::A) {
+            self.selected = (0..self.entries.len()).collect();
         }
         let sheets = self.result.as_ref().map_or(0, |r| r.outcome.sheets.len());
         if ctx.input(|i| i.key_pressed(Key::PageDown)) && self.sheet + 1 < sheets {
@@ -727,6 +777,8 @@ impl NestingModule {
             ui.close();
             self.stop();
             self.entries.clear();
+            self.selected.clear();
+            self.chosen = None;
             self.result = None;
         }
     }
@@ -928,10 +980,16 @@ impl NestingModule {
         if self.pending > 0 {
             bar.add(egui::Spinner::new().size(14.0).color(t.primary));
         }
-        let body = Rect::from_min_max(
-            pos2(rect.left() + 6.0, header.bottom()),
-            rect.max - vec2(6.0, 8.0),
-        );
+        let mut top = header.bottom();
+        if !self.entries.is_empty() {
+            let bulk = Rect::from_min_max(
+                pos2(rect.left() + 8.0, top),
+                pos2(rect.right() - 8.0, top + BULK_H),
+            );
+            self.bulk_bar(ui, bulk);
+            top = bulk.bottom() + 4.0;
+        }
+        let body = Rect::from_min_max(pos2(rect.left() + 6.0, top), rect.max - vec2(6.0, 8.0));
         if self.entries.is_empty() {
             let c = body.center();
             icons::paint(
@@ -953,7 +1011,8 @@ impl NestingModule {
             return;
         }
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
-        let mut remove = None;
+        let mut remove: Option<Vec<usize>> = None;
+        let mut click = None;
         let unit = self.unit;
         let want = self.settings.bleed;
         egui::ScrollArea::vertical()
@@ -964,7 +1023,7 @@ impl NestingModule {
                     let Some(e) = self.entries.get_mut(i) else {
                         continue;
                     };
-                    let chosen = self.chosen == Some(i);
+                    let chosen = self.selected.contains(&i);
                     // Prima i testi, che vanno a capo: l'altezza della riga dipende da loro, e i
                     // campi stanno sotto, a tutta larghezza.
                     let width = ui.available_width();
@@ -1058,18 +1117,169 @@ impl NestingModule {
                              grande, abbondanza compresa",
                         );
                     if resp.clicked() {
-                        self.chosen = Some(i);
+                        click = Some((i, ui.input(|inp| inp.modifiers)));
                     }
+                    let many = chosen && self.selected.len() > 1;
                     resp.context_menu(|ui| {
-                        if ui.button("Togli dall'elenco").clicked() {
-                            remove = Some(i);
+                        let label = if many {
+                            format!("Togli le {} scelte", self.selected.len())
+                        } else {
+                            "Togli dall'elenco".to_string()
+                        };
+                        if ui.button(label).clicked() {
+                            remove = Some(if many {
+                                self.selected.iter().copied().collect()
+                            } else {
+                                vec![i]
+                            });
+                            ui.close();
+                        }
+                        if ui.button("Togli tutte").clicked() {
+                            remove = Some((0..self.entries.len()).collect());
                             ui.close();
                         }
                     });
                 }
             });
-        if let Some(i) = remove {
-            self.remove(i);
+        if let Some((i, mods)) = click {
+            self.click(i, mods);
+        }
+        if let Some(rows) = remove {
+            self.remove(&rows);
+        }
+    }
+
+    /// Sopra l'elenco: copie, scala e "Togli" per le sagome scelte, o per tutte se non ce n'è.
+    fn bulk_bar(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let t = Tokens::get(ui.ctx());
+        ui.painter().rect_filled(rect, t.radius + 2, t.field);
+        let targets = self.targets();
+        let mut ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect.shrink2(vec2(8.0, 4.0)))
+                .layout(egui::Layout::top_down(Align::Min)),
+        );
+        ui.spacing_mut().item_spacing = vec2(4.0, 2.0);
+        let mut remove = false;
+        ui.horizontal(|ui| {
+            ui.set_min_height(26.0);
+            let label = if self.selected.is_empty() {
+                format!("Tutte le sagome ({})", self.entries.len())
+            } else if targets.len() == 1 {
+                "1 sagoma scelta".to_string()
+            } else {
+                format!("{} sagome scelte", targets.len())
+            };
+            ui.label(
+                egui::RichText::new(label)
+                    .font(semibold(12.0))
+                    .color(t.text_strong),
+            );
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                let tip = if self.selected.is_empty() {
+                    "Svuota l'elenco"
+                } else {
+                    "Togli dall'elenco le sagome scelte (Canc)"
+                };
+                if icons::button(ui, "trash-2", tip, false, true, 26.0).clicked() {
+                    remove = true;
+                }
+                if !self.selected.is_empty()
+                    && icons::button(
+                        ui,
+                        "x",
+                        "Nessuna scelta: i comandi valgono per tutte",
+                        false,
+                        true,
+                        26.0,
+                    )
+                    .clicked()
+                {
+                    self.selected.clear();
+                }
+            });
+        });
+        // I valori mostrati: quelli comuni a tutte, se lo sono.
+        let copies: Vec<usize> = targets
+            .iter()
+            .filter_map(|i| self.entries.get(*i))
+            .map(|e| e.copies)
+            .collect();
+        let scales: Vec<u32> = targets
+            .iter()
+            .filter_map(|i| self.entries.get(*i))
+            .map(|e| e.scale)
+            .collect();
+        let same_copies = copies.first().filter(|c| copies.iter().all(|v| v == *c)).copied();
+        if let Some(c) = same_copies {
+            self.bulk_copies = c;
+        }
+        let scale = scales
+            .first()
+            .copied()
+            .filter(|s| scales.iter().all(|v| *v == *s));
+        ui.horizontal(|ui| {
+            ui.set_min_height(30.0);
+            ui.label(egui::RichText::new("Copie").size(11.5).color(t.text_dim));
+            let changed = crate::fluent::number(
+                ui,
+                40.0,
+                egui::DragValue::new(&mut self.bulk_copies)
+                    .range(0..=MAX_COPIES)
+                    .speed(0.2)
+                    // Copie diverse: un trattino finché non se ne scrive una per tutte.
+                    .custom_formatter(move |v, _| {
+                        if same_copies.is_some() {
+                            format!("{v:.0}")
+                        } else {
+                            "–".to_string()
+                        }
+                    }),
+            )
+            .on_hover_text(if same_copies.is_some() {
+                "Le stesse copie per tutte queste sagome"
+            } else {
+                "Le copie sono diverse: un valore nuovo vale per tutte queste sagome"
+            })
+            .changed();
+            if changed {
+                for i in &targets {
+                    if let Some(e) = self.entries.get_mut(*i) {
+                        e.copies = self.bulk_copies;
+                    }
+                }
+            }
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Scala").size(11.5).color(t.text_dim));
+            let mut picked = None;
+            egui::ComboBox::from_id_salt("scala-nesting-tutte")
+                .icon(crate::fluent::combo_icon)
+                .selected_text(scale.map_or_else(|| "varie".to_string(), |n| format!("1:{n}")))
+                .width(62.0)
+                .height(400.0)
+                .show_ui(ui, |ui| {
+                    for n in SCALES {
+                        if ui.selectable_label(scale == Some(n), format!("1:{n}")).clicked() {
+                            picked = Some(n);
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("La stessa scala per tutte queste sagome");
+            if let Some(n) = picked {
+                for i in &targets {
+                    if let Some(e) = self.entries.get_mut(*i) {
+                        e.scale = n;
+                    }
+                }
+            }
+        });
+        if remove {
+            if self.selected.is_empty() {
+                self.stop();
+                self.result = None;
+            }
+            self.remove(&targets);
         }
     }
 
@@ -1762,6 +1972,23 @@ mod tests {
         };
         let b = winfiles_pdf_edit::shape_bounds(&clip_of(&shape, 3.0, 10.0)).unwrap();
         assert!((b[0] + 0.3).abs() < 0.02 && (b[2] - 20.3).abs() < 0.02, "{b:?}");
+    }
+
+    #[test]
+    fn clic_ctrl_e_maiusc_scelgono_le_righe() {
+        let mut m = NestingModule::new(&egui::Context::default());
+        let none = egui::Modifiers::NONE;
+        m.click(2, none);
+        assert_eq!(m.selected, BTreeSet::from([2]));
+        m.click(5, egui::Modifiers::COMMAND);
+        assert_eq!(m.selected, BTreeSet::from([2, 5]));
+        m.click(2, egui::Modifiers::COMMAND);
+        assert_eq!(m.selected, BTreeSet::from([5]));
+        // Come in Esplora file Maiusc parte dall'ultima riga cliccata, anche con Ctrl.
+        m.click(4, egui::Modifiers::SHIFT);
+        assert_eq!(m.selected, BTreeSet::from([2, 3, 4]));
+        m.click(1, none);
+        assert_eq!(m.selected, BTreeSet::from([1]));
     }
 
     #[test]
