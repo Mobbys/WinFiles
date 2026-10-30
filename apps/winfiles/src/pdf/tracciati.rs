@@ -360,7 +360,7 @@ const QUICK: [(&str, [f64; 4]); 8] = [
 /// La ruota dei colori: giro = tinta, distanza dal centro = saturazione; sotto la barra della
 /// luminosità, i colori rapidi e i valori C, M, Y, K. `hue`/`sat` tengono la tinta quando il
 /// colore passa dal grigio.
-fn colour_wheel(ui: &mut egui::Ui, salt: &str, c: &mut [f64; 4], hue: &mut f64, sat: &mut f64) {
+pub(crate) fn colour_wheel(ui: &mut egui::Ui, salt: &str, c: &mut [f64; 4], hue: &mut f64, sat: &mut f64) {
     let t = Tokens::get(ui.ctx());
     let [h0, s0, v0] = rgb_to_hsv(cmyk_rgb(*c));
     if s0 > 0.02 && v0 > 0.02 {

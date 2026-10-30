@@ -56,6 +56,12 @@ pub struct DieSettings {
     pub min_area: f64,
     /// Taglia anche i fori dentro il soggetto.
     pub holes: bool,
+    /// Il nome della tinta della fustella (vuoto: la tinta di taglio dell'elenco).
+    pub ink: String,
+    /// Il colore con cui la tinta si vede (C, M, Y, K da 0 a 1); senza, quello dell'elenco.
+    pub ink_cmyk: Option<[f64; 4]>,
+    /// Lo spessore della linea, in mm.
+    pub width: f64,
 }
 
 impl Default for DieSettings {
@@ -72,6 +78,9 @@ impl Default for DieSettings {
             smooth: 0.0,
             min_area: 4.0,
             holes: false,
+            ink: String::new(),
+            ink_cmyk: None,
+            width: 0.1,
         }
     }
 }
@@ -83,6 +92,13 @@ impl DieSettings {
         self.radius = fix(self.radius, 0.0, 500.0, 5.0);
         self.tolerance = fix(self.tolerance, 0.0, 100.0, 10.0);
         self.smooth = fix(self.smooth, 0.0, 20.0, 0.0);
+        self.width = fix(self.width, 0.0, 5.0, 0.1);
+        self.ink = self.ink.trim().chars().take(127).collect();
+        if let Some(c) = &mut self.ink_cmyk {
+            for v in c.iter_mut() {
+                *v = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+            }
+        }
         self.offset = fix(self.offset, -20.0, 50.0, 2.0);
         self.min_area = fix(self.min_area, 0.0, 10_000.0, 4.0);
         self
@@ -134,6 +150,9 @@ pub struct DieTool {
     pub picking: bool,
     traced: Option<Traced>,
     tracing: Option<(String, mpsc::Receiver<TraceResult>)>,
+    /// Tinta e saturazione della ruota dei colori, tenute quando il colore passa dal grigio.
+    hue: f64,
+    sat: f64,
 }
 
 impl DieTool {
@@ -480,20 +499,84 @@ impl DieTool {
                     length_row(ui, "Raggio", &mut s.radius, Unit::Mm, 0.0..=max.max(0.1));
                 });
         }
-        let ink = cut_ink(inks);
-        match s.shape {
-            DieShape::None => {}
-            DieShape::Contour => hint(
+        if s.shape != DieShape::None {
+            ui.add_space(10.0);
+            heading(ui, "Tinta della fustella");
+            let (name, cmyk) = die_ink(s, inks);
+            let mut text = name.clone();
+            ui.horizontal(|ui| {
+                let edit = egui::TextEdit::singleline(&mut text)
+                    .hint_text("Nome della tinta")
+                    .desired_width((ui.available_width() - 64.0).max(80.0));
+                if crate::fluent::text_field(ui, edit).changed() {
+                    s.ink = text.trim().chars().take(127).collect();
+                    // Un nome già nell'elenco porta il suo colore.
+                    s.ink_cmyk = inks
+                        .iter()
+                        .find(|i| i.name == s.ink)
+                        .map(InkName::color)
+                        .or(Some(cmyk));
+                }
+                egui::ComboBox::from_id_salt("tinta-fustella-immagine")
+                    .icon(crate::fluent::combo_icon)
+                    .selected_text("")
+                    .width(28.0)
+                    .show_ui(ui, |ui| {
+                        for i in inks {
+                            let label = format!("{}  ·  {}", i.name, i.role.label());
+                            if ui.selectable_label(i.name == name, label).clicked() {
+                                s.ink = i.name.clone();
+                                s.ink_cmyk = Some(i.color());
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("Le tinte dell'elenco (Taglio, Cordone…)");
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Spessore").color(t.text));
+                crate::fluent::number(
+                    ui,
+                    90.0,
+                    egui::DragValue::new(&mut s.width)
+                        .range(0.0..=5.0)
+                        .speed(0.01)
+                        .custom_formatter(|v, _| format!("{} mm", winfiles_geom::format_number(v, 2, true)))
+                        .custom_parser(|text| {
+                            let clean = text.trim().trim_end_matches("mm").trim().replace(',', ".");
+                            clean.parse::<f64>().ok()
+                        }),
+                );
+            });
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new("Colore a schermo e nelle prove").color(t.text))
+                .on_hover_text("Il RIP stampa la tinta per nome; questo è il colore con cui si vede");
+            let mut c = cmyk;
+            crate::pdf::tracciati::colour_wheel(
                 ui,
-                &format!("In tinta piatta «{}» in sovrastampa, linea da 0,1 mm.", ink.name),
-            ),
-            _ => hint(
+                "fustella-immagine",
+                &mut c,
+                &mut self.hue,
+                &mut self.sat,
+            );
+            if c != cmyk {
+                s.ink_cmyk = Some(c);
+                if s.ink.is_empty() {
+                    s.ink = name.clone();
+                }
+            }
+            hint(
                 ui,
                 &format!(
-                    "Sul formato finito, in tinta piatta «{}» in sovrastampa, linea da 0,1 mm.",
-                    ink.name
+                    "{} tinta piatta «{name}» in sovrastampa.",
+                    if s.shape == DieShape::Contour {
+                        "In"
+                    } else {
+                        "Sul formato finito, in"
+                    }
                 ),
-            ),
+            );
         }
         ui.add_space(14.0);
         let ready = s.shape != DieShape::Contour || self.outline(picture, owner).is_some();
@@ -552,11 +635,11 @@ impl DieTool {
         }
         let picture = picture.clone();
         let outline = self.outline(&picture, owner);
-        let ink = cut_ink(inks);
+        let (name, cmyk) = die_ink(&self.settings, inks);
         let die = NewDie {
-            name: ink.name.clone(),
-            cmyk: ink.color(),
-            width: 0.1,
+            name,
+            cmyk,
+            width: self.settings.width,
             overprint: true,
         };
         let jpeg = matches!(winfiles_image_edit::default_format(source), Format::Jpeg);
@@ -614,7 +697,7 @@ impl DieTool {
             }
         }
         if let Some(lines) = self.outline(picture, owner) {
-            let c = cut_ink(inks).color();
+            let c = die_ink(&self.settings, inks).1;
             let rgb =
                 |v: f64, kk: f64| ((1.0 - v.clamp(0.0, 1.0)) * (1.0 - kk.clamp(0.0, 1.0)) * 255.0) as u8;
             let color = Color32::from_rgb(rgb(c[0], c[3]), rgb(c[1], c[3]), rgb(c[2], c[3]));
@@ -660,6 +743,18 @@ fn pixel(picture: &Picture, x: u32, y: u32) -> Option<[u8; 3]> {
 }
 
 /// La tinta del taglio: la prima con il ruolo Taglio, o «Taglio».
+/// Il nome e il colore della tinta della fustella: quelli scelti, o la tinta di taglio.
+fn die_ink(s: &DieSettings, inks: &[InkName]) -> (String, [f64; 4]) {
+    let cut = cut_ink(inks);
+    let name = if s.ink.trim().is_empty() {
+        cut.name.clone()
+    } else {
+        s.ink.trim().to_string()
+    };
+    let listed = inks.iter().find(|i| i.name == name).map(InkName::color);
+    (name, s.ink_cmyk.or(listed).unwrap_or_else(|| cut.color()))
+}
+
 fn cut_ink(inks: &[InkName]) -> InkName {
     inks.iter()
         .find(|i| i.role == Role::Cut)
