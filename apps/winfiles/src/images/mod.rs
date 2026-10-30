@@ -4,7 +4,12 @@
 //! Le modifiche le fa `winfiles-image-edit`; qui ci sono solo la finestra e le scelte.
 
 mod dialogs;
+mod die;
 mod render;
+
+pub use die::DieSettings;
+#[cfg(test)]
+pub use die::DieShape;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -90,6 +95,10 @@ pub struct ImagesModule {
     pub output: Option<crate::quotes::Output>,
     /// I file da mandare alla scheda Nesting, che l'app prende e svuota.
     pub to_nesting: Vec<PathBuf>,
+    /// Fustella e abbondanza, con il loro pannello a destra.
+    pub die: die::DieTool,
+    /// I nomi delle tinte e il loro ruolo, gli stessi di Modifica PDF (il taglio).
+    pub inks: Vec<crate::pdf::tracciati::InkName>,
 }
 
 /// Le aperture in corso.
@@ -140,6 +149,8 @@ impl ImagesModule {
             quit_confirmed: false,
             output: None,
             to_nesting: Vec::new(),
+            die: die::DieTool::default(),
+            inks: crate::pdf::tracciati::default_inks(),
         }
     }
 
@@ -559,6 +570,9 @@ impl ImagesModule {
     // --- Barre -----------------------------------------------------------------------------
 
     pub fn control_bar(&mut self, ui: &mut egui::Ui) {
+        if let Some(text) = self.die.poll() {
+            self.status = text;
+        }
         let t = Tokens::get(ui.ctx());
         let frame = egui::Frame::NONE.fill(t.app_bar).inner_margin(egui::Margin {
             left: 14,
@@ -711,6 +725,19 @@ impl ImagesModule {
                         self.quoting = !self.quoting;
                         if self.quoting {
                             self.cutter.crop = None;
+                            self.die.open = false;
+                        }
+                    }
+                    if text_toggle(ui, "scissors", "Fustella", open, self.die.open)
+                        .on_hover_text(
+                            "Abbondanza fatta con i pixel e fustella sul formato finito, salvate in un PDF \
+                             per Onyx e per il nesting",
+                        )
+                        .clicked()
+                    {
+                        self.die.open = !self.die.open;
+                        if self.die.open {
+                            self.quoting = false;
                         }
                     }
                 }
@@ -1047,6 +1074,10 @@ impl ImagesModule {
             self.quotes_panel(ui, rect);
             return;
         }
+        if self.die.open {
+            self.die_panel(ui, rect);
+            return;
+        }
         let body = rect.shrink2(vec2(14.0, 12.0));
         let mut child = ui.new_child(
             egui::UiBuilder::new()
@@ -1058,6 +1089,39 @@ impl ImagesModule {
             .id_salt("dati-immagine")
             .auto_shrink([false, false])
             .show(&mut child, |ui| self.data_contents(ui));
+    }
+
+    /// Al posto dei dati, con la fustella accesa: il suo pannello.
+    fn die_panel(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let Some(d) = self.docs.get(self.current) else {
+            return;
+        };
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect.shrink2(vec2(14.0, 12.0)))
+                .layout(egui::Layout::top_down(Align::Min)),
+        );
+        let unit = self.unit;
+        let picture = d.editor.picture().clone();
+        let source = d.target.clone().unwrap_or_else(|| d.editor.path().to_path_buf());
+        let inks = self.inks.clone();
+        let die = &mut self.die;
+        let action = egui::ScrollArea::vertical()
+            .id_salt("fustella-immagine")
+            .auto_shrink([false, false])
+            .show(&mut child, |ui| die.panel(ui, &picture, &inks, unit))
+            .inner;
+        match action {
+            Some(die::DieAction::Apply(op)) => self.apply(op),
+            Some(die::DieAction::Save) => {
+                let ctx = ui.ctx().clone();
+                if let Some(text) = self.die.save(&picture, &source, &self.inks, &ctx) {
+                    self.status = text;
+                }
+            }
+            Some(die::DieAction::Close) => self.die.open = false,
+            None => {}
+        }
     }
 
     /// Al posto dei dati, mentre le quote sono accese: il loro pannello.
@@ -1542,6 +1606,9 @@ impl ImagesModule {
                     .interact(ui, ui.id().with("ritaglio"), paper, iw as f32, ih as f32);
             }
             self.cutter.paint(ui, paper, iw as f32);
+            if self.die.open {
+                self.die.paint(ui, paper, p, &self.inks);
+            }
             self.cutter.lens
         };
         self.paint_lens(ui, board, paper, iw, ih, lens);

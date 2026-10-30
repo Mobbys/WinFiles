@@ -1703,7 +1703,32 @@ pub(crate) fn add_die(
         return Err(EditError::Invalid("spessore non valido".into()));
     }
     let shapes = outline(&scan(doc, page)?, ids)?;
-    let outlines: Vec<&Vec<[f64; 2]>> = shapes.iter().flatten().collect();
+    let outlines: Vec<Vec<[f64; 2]>> = shapes.into_iter().flatten().collect();
+    draw_die(doc, page, &outlines, die)
+}
+
+/// Disegna sopra la pagina la fustella `outlines` (contorni chiusi in mm della pagina come si
+/// vede, dall'angolo in alto a sinistra) in tinta piatta. Restituisce quanti contorni ha.
+pub(crate) fn draw_die(
+    doc: &mut Document,
+    page: usize,
+    outlines: &[Vec<[f64; 2]>],
+    die: &NewDie,
+) -> Result<usize, EditError> {
+    let name = die.name.trim();
+    if name.is_empty() || name.len() > 127 {
+        return Err(EditError::Invalid("nome della tinta non valido".into()));
+    }
+    if !(die.width.is_finite() && (0.0..=100.0).contains(&die.width)) {
+        return Err(EditError::Invalid("spessore non valido".into()));
+    }
+    if outlines
+        .iter()
+        .flatten()
+        .any(|p| !(p[0].is_finite() && p[1].is_finite()))
+    {
+        return Err(EditError::Invalid("fustella non valida".into()));
+    }
     // Dai millimetri della pagina come si vede alle unità del PDF.
     let back = page_matrix(doc, page)?
         .matrix
@@ -1739,7 +1764,7 @@ pub(crate) fn add_die(
         Op::new("J", vec![Object::Int(0)]),
         Op::new("d", vec![Object::Array(Vec::new()), Object::Int(0)]),
     ];
-    for c in &outlines {
+    for c in outlines {
         for (i, p) in c.iter().enumerate() {
             let (x, y) = back.apply(p[0], p[1]);
             ops.push(Op::new(if i == 0 { "m" } else { "l" }, vec![n(x), n(y)]));
@@ -1759,4 +1784,50 @@ pub(crate) fn add_die(
         d.set(b"Resources".to_vec(), Object::Dict(resources));
     })?;
     Ok(outlines.len())
+}
+
+/// Scrive il formato finito `finished` (mm della pagina come si vede: sinistra, alto, destra,
+/// basso) come TrimBox, e la pagina intera come BleedBox: il RIP sa dove tagliare e quanta
+/// abbondanza c'è.
+pub(crate) fn set_trim(doc: &mut Document, page: usize, finished: [f64; 4]) -> Result<(), EditError> {
+    if !finished.iter().all(|v| v.is_finite())
+        || finished[2] - finished[0] < 1.0
+        || finished[3] - finished[1] < 1.0
+    {
+        return Err(EditError::Invalid("formato finito non valido".into()));
+    }
+    let frame = page_matrix(doc, page)?;
+    let back = frame
+        .matrix
+        .invert()
+        .ok_or_else(|| EditError::Pdf("la pagina non ha una misura".into()))?;
+    let corners = [
+        back.apply(finished[0], finished[1]),
+        back.apply(finished[2], finished[3]),
+    ];
+    let rect = |a: (f64, f64), b: (f64, f64)| {
+        Object::Array(
+            [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]
+                .into_iter()
+                .map(pdfcraft_content::num)
+                .collect(),
+        )
+    };
+    let trim = rect(corners[0], corners[1]);
+    let boxes = organize::page_boxes(doc)?;
+    let crop = boxes
+        .get(page)
+        .map(|b| b[1])
+        .ok_or(EditError::NoPage(page.saturating_add(1)))?;
+    let bleed = rect((crop[0], crop[1]), (crop[2], crop[3]));
+    let pages = organize::pages(doc)?;
+    let page_ref = pages
+        .get(page)
+        .map(|p| p.obj)
+        .ok_or(EditError::NoPage(page.saturating_add(1)))?;
+    doc.update_dict(page_ref, |d| {
+        d.set(b"TrimBox".to_vec(), trim);
+        d.set(b"BleedBox".to_vec(), bleed);
+    })?;
+    Ok(())
 }

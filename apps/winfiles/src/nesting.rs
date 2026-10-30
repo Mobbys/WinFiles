@@ -31,6 +31,8 @@ const FIELDS_H: f32 = 30.0;
 /// Le scale dei file disegnati in piccolo: 1:N diventa N volte più grande sul foglio.
 const SCALES: [u32; 9] = [1, 2, 4, 5, 10, 20, 25, 50, 100];
 const BAR_ROW: f32 = 38.0;
+/// Spazio sotto il foglio per la sua misura.
+const CAPTION_H: f32 = 22.0;
 /// Copie di una pagina.
 const MAX_COPIES: usize = 999;
 
@@ -1173,19 +1175,21 @@ impl NestingModule {
         // Il foglio intero nell'anteprima; il rotolo con la lunghezza usata. Ctrl+rotella
         // ingrandisce verso il puntatore, trascinare sposta, il doppio clic torna al foglio intero.
         let (sw, sh) = (sheet.width, sheet.height.max(1.0));
-        let fit = ((area.width() / sw as f32).min(area.height() / sh as f32)).max(0.0001);
+        // Sotto il foglio resta una riga per la sua misura.
+        let room = area.with_max_y((area.bottom() - CAPTION_H).max(area.top() + 1.0));
+        let fit = ((room.width() / sw as f32).min(room.height() / sh as f32)).max(0.0001);
         let resp = ui.interact(area, ui.id().with("foglio-nesting"), Sense::click_and_drag());
         if let Some(p) = resp.hover_pos()
             && let Some(z) = crate::app::wheel_zoom(ui, area)
         {
             {
                 let old = fit * self.zoom;
-                let min = area.center() + self.pan - vec2(sw as f32, sh as f32) * old / 2.0;
+                let min = room.center() + self.pan - vec2(sw as f32, sh as f32) * old / 2.0;
                 let q = (p - min) / old;
                 self.zoom = (self.zoom * z).clamp(1.0, 400.0);
                 let new = fit * self.zoom;
                 let new_min = p - q * new;
-                self.pan = new_min + vec2(sw as f32, sh as f32) * new / 2.0 - area.center();
+                self.pan = new_min + vec2(sw as f32, sh as f32) * new / 2.0 - room.center();
             }
         }
         if resp.dragged() {
@@ -1197,8 +1201,8 @@ impl NestingModule {
         }
         let scale = fit * self.zoom;
         let size = vec2(sw as f32 * scale, sh as f32 * scale);
-        self.pan = crate::pan::clamp(self.pan, size, area.size(), 24.0);
-        let paper = Rect::from_center_size(area.center() + self.pan, size);
+        self.pan = crate::pan::clamp(self.pan, size, room.size(), 24.0);
+        let paper = Rect::from_center_size(room.center() + self.pan, size);
         let to = |p: [f64; 2]| -> Pos2 {
             pos2(
                 paper.left() + p[0] as f32 * scale,
@@ -1279,7 +1283,7 @@ impl NestingModule {
         // La misura del foglio sotto.
         let caption = format_size(Size::new(sw, sh), Unit::Cm);
         painter.text(
-            pos2(paper.center().x, (paper.bottom() + 4.0).min(area.bottom() - 2.0)),
+            pos2(paper.center().x, (paper.bottom() + 4.0).min(room.bottom() + 4.0)),
             egui::Align2::CENTER_TOP,
             caption,
             egui::FontId::proportional(11.5),
@@ -1416,7 +1420,7 @@ impl NestingModule {
     }
 }
 
-fn heading(ui: &mut egui::Ui, text: &str) {
+pub(crate) fn heading(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     ui.label(
         egui::RichText::new(text)
@@ -1426,18 +1430,18 @@ fn heading(ui: &mut egui::Ui, text: &str) {
     ui.add_space(4.0);
 }
 
-fn hint(ui: &mut egui::Ui, text: &str) {
+pub(crate) fn hint(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     hint_color(ui, text, t.text_dim);
 }
 
-fn hint_color(ui: &mut egui::Ui, text: &str, color: Color32) {
+pub(crate) fn hint_color(ui: &mut egui::Ui, text: &str, color: Color32) {
     ui.add_space(4.0);
     ui.add(egui::Label::new(egui::RichText::new(text).size(11.5).color(color)).wrap());
 }
 
 /// Una riga del modulo: etichetta e lunghezza in `unit`, salvata in mm.
-fn length_row(
+pub(crate) fn length_row(
     ui: &mut egui::Ui,
     label: &str,
     mm: &mut f64,

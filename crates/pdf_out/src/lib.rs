@@ -140,6 +140,16 @@ pub fn image_page(path: &Path, size: winfiles_geom::Size) -> Result<Vec<u8>, Pdf
             Image::from_png(Data::from(png), true)
         })
         .map_err(PdfOutError::Write)?;
+    one_image_page(image, size)
+}
+
+/// Come [`image_page`], con l'immagine già codificata in memoria (JPEG, PNG, TIFF…): serve a
+/// Modifica immagini, che salva l'immagine com'è adesso, con le modifiche.
+pub fn image_page_bytes(bytes: Vec<u8>, size: winfiles_geom::Size) -> Result<Vec<u8>, PdfOutError> {
+    one_image_page(full_image(bytes).map_err(PdfOutError::Write)?, size)
+}
+
+fn one_image_page(image: Image, size: winfiles_geom::Size) -> Result<Vec<u8>, PdfOutError> {
     let page = KSize::from_wh(pt(size.w), pt(size.h))
         .ok_or_else(|| PdfOutError::Write("formato della pagina non valido".into()))?;
     let mut doc = Document::new();

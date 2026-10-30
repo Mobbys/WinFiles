@@ -44,6 +44,7 @@ fn picture(width: u32, height: u32, dpi: f64) -> Picture {
         color: ColorMode::Rgb,
         bits: 8,
         origin: None,
+        trim: None,
         icc_name: None,
     }
 }
@@ -318,6 +319,7 @@ fn il_jpeg_appiattisce_la_trasparenza_sul_bianco() {
         color: ColorMode::Rgba,
         bits: 8,
         origin: None,
+        trim: None,
         icc_name: None,
     };
     let path = dir.join("alfa.jpg");
@@ -522,4 +524,191 @@ fn apre_un_psd_con_risoluzione_e_propone_il_tiff() {
     assert!((p.dpi() - 150.0).abs() < 0.01);
     assert_eq!(default_format(&path), Format::Tiff);
     assert!(extensions().contains(&"psd") && extensions().contains(&"nef"));
+}
+
+#[test]
+fn l_abbondanza_a_specchio_ribalta_l_immagine_sul_bordo() {
+    let p = picture(30, 20, 254.0);
+    let sides = [3, 2, 4, 1];
+    let out = apply_one(
+        &p,
+        Op::Bleed {
+            sides,
+            method: BleedMethod::Mirror,
+        },
+    )
+    .unwrap();
+    assert_eq!((out.width(), out.height()), (37, 23));
+    let px = |pic: &Picture, x: u32, y: u32| pic.image().to_rgb8().get_pixel(x, y).0;
+    // Dentro, l'immagine di prima spostata; fuori a sinistra la colonna 0 è ribaltata.
+    assert_eq!(px(&out, 3, 2), px(&p, 0, 0));
+    assert_eq!(px(&out, 2, 2), px(&p, 0, 0));
+    assert_eq!(px(&out, 0, 2), px(&p, 2, 0));
+    // A destra e in basso.
+    assert_eq!(px(&out, 33, 21), px(&p, 29, 19));
+    assert_eq!(px(&out, 36, 22), px(&p, 26, 19));
+    assert_eq!(
+        out.trim(),
+        Some(CropPx {
+            x: 3,
+            y: 2,
+            width: 30,
+            height: 20
+        })
+    );
+    // 254 DPI: 10 pixel al millimetro.
+    let t = out.trim_mm();
+    assert!((t[0] - 0.3).abs() < 1e-9 && (t[2] - 3.3).abs() < 1e-9, "{t:?}");
+}
+
+#[test]
+fn l_abbondanza_allungata_ripete_l_ultima_riga() {
+    let p = picture(10, 10, 100.0);
+    let out = apply_one(
+        &p,
+        Op::Bleed {
+            sides: [5, 5, 5, 5],
+            method: BleedMethod::Stretch,
+        },
+    )
+    .unwrap();
+    let px = |pic: &Picture, x: u32, y: u32| pic.image().to_rgb8().get_pixel(x, y).0;
+    assert_eq!(px(&out, 0, 0), px(&p, 0, 0));
+    assert_eq!(px(&out, 19, 7), px(&p, 9, 2));
+}
+
+#[test]
+fn una_fascia_piu_larga_dell_immagine_si_ribalta_ancora() {
+    let p = picture(4, 4, 100.0);
+    let out = apply_one(
+        &p,
+        Op::Bleed {
+            sides: [10, 0, 0, 0],
+            method: BleedMethod::Mirror,
+        },
+    )
+    .unwrap();
+    assert_eq!(out.width(), 14);
+    let px = |pic: &Picture, x: u32, y: u32| pic.image().to_rgb8().get_pixel(x, y).0;
+    // Le colonne nuove prendono 1 0 0 1 2 3 3 2 1 0, poi l'immagine 0 1 2 3.
+    assert_eq!(px(&out, 9, 0), px(&p, 0, 0));
+    assert_eq!(px(&out, 6, 0), px(&p, 3, 0));
+    assert_eq!(px(&out, 2, 0), px(&p, 0, 0));
+    assert_eq!(px(&out, 0, 0), px(&p, 1, 0));
+}
+
+#[test]
+fn il_formato_finito_segue_rotazioni_specchi_e_ritagli() {
+    let p = picture(30, 20, 100.0);
+    let b = apply_one(
+        &p,
+        Op::Bleed {
+            sides: [3, 2, 4, 1],
+            method: BleedMethod::Mirror,
+        },
+    )
+    .unwrap();
+    // 37 × 23 con il formato finito a (3, 2) di 30 × 20.
+    let r = apply_one(&b, Op::Rotate(1)).unwrap();
+    assert_eq!(
+        r.trim(),
+        Some(CropPx {
+            x: 1,
+            y: 3,
+            width: 20,
+            height: 30
+        })
+    );
+    let back = apply_one(&r, Op::Rotate(-1)).unwrap();
+    assert_eq!(back.trim(), b.trim());
+    let f = apply_one(&b, Op::Flip(Axis::Horizontal)).unwrap();
+    assert_eq!(
+        f.trim(),
+        Some(CropPx {
+            x: 4,
+            y: 2,
+            width: 30,
+            height: 20
+        })
+    );
+    let c = apply_one(
+        &b,
+        Op::Crop(CropPx {
+            x: 5,
+            y: 0,
+            width: 10,
+            height: 23,
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        c.trim(),
+        Some(CropPx {
+            x: 0,
+            y: 2,
+            width: 10,
+            height: 20
+        })
+    );
+    let z = apply_one(
+        &b,
+        Op::Resize {
+            width: 74,
+            height: 46,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        z.trim(),
+        Some(CropPx {
+            x: 6,
+            y: 4,
+            width: 60,
+            height: 40
+        })
+    );
+    // Una seconda abbondanza allarga ancora: il formato finito resta quello.
+    let again = apply_one(
+        &b,
+        Op::Bleed {
+            sides: [1, 1, 1, 1],
+            method: BleedMethod::Stretch,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        again.trim(),
+        Some(CropPx {
+            x: 4,
+            y: 3,
+            width: 30,
+            height: 20
+        })
+    );
+}
+
+#[test]
+fn l_abbondanza_vale_anche_a_16_bit_e_con_la_trasparenza() {
+    let mut p = picture(8, 8, 100.0);
+    p.image = std::sync::Arc::new(DynamicImage::ImageRgba16(p.image().to_rgba16()));
+    let out = apply_one(
+        &p,
+        Op::Bleed {
+            sides: [2, 2, 2, 2],
+            method: BleedMethod::Mirror,
+        },
+    )
+    .unwrap();
+    assert!(matches!(out.image(), DynamicImage::ImageRgba16(_)));
+    assert_eq!(out.width(), 12);
+    assert!(
+        apply_one(
+            &p,
+            Op::Bleed {
+                sides: [0, 0, 0, 0],
+                method: BleedMethod::Mirror
+            }
+        )
+        .is_err()
+    );
 }

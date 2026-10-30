@@ -104,6 +104,8 @@ pub struct Prefs {
     pub inks: Vec<crate::pdf::tracciati::InkName>,
     /// Le scelte del nesting (supporto, misure, distanze).
     pub nesting: crate::nesting::NestSettings,
+    /// Le scelte di fustella e abbondanza in Modifica immagini.
+    pub image_die: crate::images::DieSettings,
 }
 
 impl Prefs {
@@ -122,6 +124,7 @@ impl Prefs {
             .filter(|[w, h]| w.is_finite() && h.is_finite() && *w >= MIN_WINDOW[0] && *h >= MIN_WINDOW[1]);
         self.window = self.window.map(|[w, h]| [w.min(MAX_WINDOW), h.min(MAX_WINDOW)]);
         self.nesting = self.nesting.sanitized();
+        self.image_die = self.image_die.sanitized();
         if winfiles_layout::grid(&self.print, &[]).is_err() {
             self.print = PrintSettings::default();
         }
@@ -239,6 +242,11 @@ mod tests {
                 support: crate::nesting::Support::Roll,
                 roll_w: 1370.0,
                 ..crate::nesting::NestSettings::default()
+            },
+            image_die: crate::images::DieSettings {
+                shape: crate::images::DieShape::Rounded,
+                radius: 8.0,
+                ..crate::images::DieSettings::default()
             },
         };
         save_to(&file, &prefs).unwrap();

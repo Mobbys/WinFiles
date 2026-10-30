@@ -145,6 +145,22 @@ impl PdfFile {
     pub fn scan_page(&self, page: usize) -> Result<PageScan, EditError> {
         paths::scan(&self.0, page)
     }
+    /// Disegna sopra la pagina `page` la fustella `outlines` (contorni chiusi in mm della pagina,
+    /// dall'angolo in alto a sinistra) in tinta piatta.
+    pub fn draw_die(
+        &mut self,
+        page: usize,
+        outlines: &[Vec<[f64; 2]>],
+        die: &NewDie,
+    ) -> Result<usize, EditError> {
+        paths::draw_die(&mut self.0, page, outlines, die)
+    }
+
+    /// Scrive il formato finito della pagina (mm: sinistra, alto, destra, basso) come TrimBox, e la
+    /// pagina intera come BleedBox.
+    pub fn set_trim(&mut self, page: usize, finished: [f64; 4]) -> Result<(), EditError> {
+        paths::set_trim(&mut self.0, page, finished)
+    }
 }
 
 /// Una copia del documento da scrivere in un altro thread, per l'anteprima.

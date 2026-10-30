@@ -274,6 +274,7 @@ impl WinFilesApp {
             app.pdf.inks = app.prefs.inks.clone();
         }
         app.nesting.settings = app.prefs.nesting.clone().sanitized();
+        app.images.die.settings = app.prefs.image_die.clone().sanitized();
         if app.batch_pdf.is_none() && app.batch_calibration.is_none() {
             app.scan_printers();
             // Come la 4.9: all'avvio si chiede a GitHub se c'è una versione nuova, senza aspettare.
@@ -2864,6 +2865,7 @@ impl WinFilesApp {
             menu11_later: self.menu11_later,
             inks: self.pdf.inks.clone(),
             nesting: self.nesting.settings.clone(),
+            image_die: self.images.die.settings.clone(),
         }
     }
 
@@ -2917,6 +2919,10 @@ impl eframe::App for WinFilesApp {
         let pdf_mode = self.module == Module::Pdf;
         let images_mode = self.module == Module::Images;
         let nesting_mode = self.module == Module::Nesting;
+        // La tinta del taglio della fustella sulle immagini è quella di Modifica PDF.
+        if images_mode && self.images.inks != self.pdf.inks {
+            self.images.inks = self.pdf.inks.clone();
+        }
         if nesting_mode {
             // Le tinte di taglio sono quelle di Modifica PDF.
             if self.nesting.inks != self.pdf.inks {
