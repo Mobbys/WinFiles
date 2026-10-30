@@ -44,8 +44,12 @@ Alternativa 3.
   con le pagine ritagliate sulla sagoma.
 
 ## Conseguenze
-- Restano fuori per ora le linee di taglio comuni del pannello (laser) e le immagini (JPEG, TIFF):
-  si aggiungono come rettangoli quando servirà.
+- Restano fuori per ora le linee di taglio comuni del pannello (laser).
+- Le immagini entrano come rettangoli: al salvataggio ognuna diventa un PDF di una pagina
+  (`pdf_out::image_page`, JPEG e PNG senza ricomprimere, il resto in PNG) e da lì segue la strada
+  dei PDF.
+- La scala del file (1:N) moltiplica la matrice della pagina; l'abbondanza, che è in mm sul foglio,
+  sulla pagina si divide per N.
 - Un PDF di molte pagine diventa molte sagome, una per pagina, ognuna con le sue copie.
 - L'anteprima mostra le pagine a 512 pixel di lato: basta per riconoscerle, non per controllare i
   dettagli (quelli si guardano nel PDF salvato).

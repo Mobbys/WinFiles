@@ -11,12 +11,12 @@ publish = false
 winfiles-geom.workspace = true
 winfiles-scene.workspace = true
 winfiles-thumbs.workspace = true
+winfiles-model.workspace = true
 thiserror.workspace = true
 image.workspace = true
 krilla.workspace = true
 
 [dev-dependencies]
-winfiles-model.workspace = true
 winfiles-formats.workspace = true
 
 [lints]

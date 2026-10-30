@@ -329,6 +329,8 @@ pub(crate) enum FileAction {
     Expand(std::path::PathBuf),
     /// Copia negli appunti la tabella dei file scelti.
     CopyMarked,
+    /// Manda il file (o i file scelti, se è tra quelli) alla scheda Nesting.
+    Nest(std::path::PathBuf),
 }
 
 /// Il menu del tasto destro su un file, nell'elenco e nell'anteprima del foglio: `count` file
@@ -360,6 +362,20 @@ pub(crate) fn file_menu(
             }
         }
         _ => {}
+    }
+    if matches!(f.kind, FileKind::Pdf | FileKind::Ai | FileKind::Image) {
+        let label = match count {
+            1 => "Manda al nesting".to_string(),
+            n => format!("Manda al nesting i {n} file scelti"),
+        };
+        if ui
+            .button(label)
+            .on_hover_text("Apre la scheda Nesting con questi file (PDF, AI e immagini)")
+            .clicked()
+        {
+            action = Some(FileAction::Nest(path.clone()));
+            ui.close();
+        }
     }
     if ui.button("Apri con il programma predefinito").clicked() {
         action = Some(FileAction::Open(path.clone()));
@@ -1197,6 +1213,24 @@ impl WinFilesApp {
                 };
                 self.module = crate::app::Module::Images;
                 self.images.open_from_list(&paths);
+            }
+            FileAction::Nest(path) => {
+                // Con il file tra quelli scelti vanno tutti quelli scelti che il nesting legge.
+                let marked: Vec<std::path::PathBuf> = self
+                    .marked
+                    .iter()
+                    .filter_map(|i| self.project.files.get(*i))
+                    .filter(|f| matches!(f.kind, FileKind::Pdf | FileKind::Ai | FileKind::Image))
+                    .map(|f| f.path.clone())
+                    .collect();
+                let paths = if marked.contains(&path) {
+                    marked
+                } else {
+                    vec![path]
+                };
+                self.module = crate::app::Module::Nesting;
+                self.nesting.inks = self.pdf.inks.clone();
+                self.nesting.add(&paths);
             }
             FileAction::Open(path) => {
                 if let Err(e) = crate::shell::open(&path) {

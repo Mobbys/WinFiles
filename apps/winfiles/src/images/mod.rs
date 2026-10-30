@@ -88,6 +88,8 @@ pub struct ImagesModule {
     pub quit_confirmed: bool,
     /// La stampa o il PDF con le quote chiesti, che l'app prende e manda avanti.
     pub output: Option<crate::quotes::Output>,
+    /// I file da mandare alla scheda Nesting, che l'app prende e svuota.
+    pub to_nesting: Vec<PathBuf>,
 }
 
 /// Le aperture in corso.
@@ -137,6 +139,7 @@ impl ImagesModule {
             },
             quit_confirmed: false,
             output: None,
+            to_nesting: Vec::new(),
         }
     }
 
@@ -932,6 +935,7 @@ impl ImagesModule {
         );
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
         let mut close = None;
+        let mut nest = None;
         let mut choose = None;
         egui::ScrollArea::vertical()
             .id_salt("elenco-immagini")
@@ -994,6 +998,14 @@ impl ImagesModule {
                         choose = Some(i);
                     }
                     resp.context_menu(|ui| {
+                        if ui
+                            .button("Manda al nesting")
+                            .on_hover_text("Apre la scheda Nesting con l'immagine com'è salvata")
+                            .clicked()
+                        {
+                            nest = Some(i);
+                            ui.close();
+                        }
                         if ui.button("Chiudi l'immagine").clicked() {
                             close = Some(i);
                             ui.close();
@@ -1006,6 +1018,14 @@ impl ImagesModule {
         }
         if let Some(i) = close {
             self.guard(Then::Close(i));
+        }
+        if let Some(d) = nest.and_then(|i| self.docs.get(i)) {
+            let path = d.target.clone().unwrap_or_else(|| d.editor.path().to_path_buf());
+            if d.editor.is_modified() {
+                self.status = "Al nesting va l'immagine com'è salvata: le modifiche non salvate restano qui."
+                    .to_string();
+            }
+            self.to_nesting.push(path);
         }
         // Le miniature che mancano si chiedono al thread.
         let wanted: Vec<(usize, u64)> = self.live();

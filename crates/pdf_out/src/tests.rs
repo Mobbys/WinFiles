@@ -233,3 +233,33 @@ fn la_correzione_della_stampante_sposta_e_allunga_il_foglio() {
     assert!((probe[0].0 - 210.0).abs() < 0.1);
     std::fs::remove_dir_all(&d).unwrap();
 }
+
+#[test]
+fn un_immagine_diventa_un_pdf_di_una_pagina_alla_sua_misura() {
+    let d = dir("immagine");
+    // Metà sinistra nera e destra bianca: si deve ritrovare nel PDF, in PNG, JPEG e TIFF.
+    let img = image::RgbImage::from_fn(200, 100, |x, _| {
+        if x < 100 {
+            image::Rgb([0, 0, 0])
+        } else {
+            image::Rgb([255, 255, 255])
+        }
+    });
+    for name in ["prova.png", "prova.jpg", "prova.tif"] {
+        let src = d.join(name);
+        img.save(&src).unwrap();
+        let bytes = image_page(&src, winfiles_geom::Size::new(80.0, 40.0)).unwrap();
+        let out = d.join(format!("{name}.pdf"));
+        save(&out, &bytes).unwrap();
+        let size = winfiles_formats_like_size(&out);
+        assert!(
+            (size[0].0 - 80.0).abs() < 0.1 && (size[0].1 - 40.0).abs() < 0.1,
+            "{name}"
+        );
+        let thumb = winfiles_thumbs::render(&out, FileKind::Pdf, 0, 400).unwrap();
+        let px = |x: u32| thumb.rgba[((thumb.height / 2 * thumb.width + x) * 4) as usize];
+        assert!(px(thumb.width / 4) < 60, "{name}");
+        assert!(px(thumb.width * 3 / 4) > 200, "{name}");
+    }
+    std::fs::remove_dir_all(&d).unwrap();
+}

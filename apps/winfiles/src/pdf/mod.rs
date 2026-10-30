@@ -108,6 +108,8 @@ pub struct PdfModule {
     paths: tracciati::PathTool,
     /// I nomi delle tinte usati (taglio, cordonatura…), ricordati nelle impostazioni.
     pub inks: Vec<tracciati::InkName>,
+    /// I file da mandare alla scheda Nesting, che l'app prende e svuota.
+    pub to_nesting: Vec<PathBuf>,
 }
 
 impl PdfModule {
@@ -147,7 +149,19 @@ impl PdfModule {
             output: None,
             paths: tracciati::PathTool::default(),
             inks: tracciati::default_inks(),
+            to_nesting: Vec::new(),
         }
+    }
+
+    /// Manda alla scheda Nesting il PDF aperto, com'è salvato su disco.
+    fn send_to_nesting(&mut self) {
+        let Some(e) = self.editor.as_ref() else { return };
+        let path = self.target.clone().unwrap_or_else(|| e.path().to_path_buf());
+        if e.is_modified() {
+            self.status =
+                "Al nesting va il PDF com'è salvato: le modifiche non salvate restano qui.".to_string();
+        }
+        self.to_nesting.push(path);
     }
 
     pub fn is_modified(&self) -> bool {
@@ -1567,6 +1581,14 @@ impl PdfModule {
             if ui.button("Estrai…").clicked() {
                 ui.close();
                 self.dialog = Some(Dialog::Extract { one_per_page: false });
+            }
+            if ui
+                .button("Manda il PDF al nesting")
+                .on_hover_text("Apre la scheda Nesting con questo PDF, com'è salvato")
+                .clicked()
+            {
+                ui.close();
+                self.send_to_nesting();
             }
             ui.separator();
             let can_delete = self.selected.len() < self.infos.len();

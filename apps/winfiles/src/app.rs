@@ -2906,6 +2906,14 @@ impl eframe::App for WinFilesApp {
             self.module = Module::Thumbnails;
             dropped.extend(sent);
         }
+        // I file mandati al nesting dal tasto destro di Modifica PDF o Modifica immagini.
+        let mut to_nest = std::mem::take(&mut self.pdf.to_nesting);
+        to_nest.append(&mut self.images.to_nesting);
+        if !to_nest.is_empty() {
+            self.module = Module::Nesting;
+            self.nesting.inks = self.pdf.inks.clone();
+            self.nesting.add(&to_nest);
+        }
         let pdf_mode = self.module == Module::Pdf;
         let images_mode = self.module == Module::Images;
         let nesting_mode = self.module == Module::Nesting;

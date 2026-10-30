@@ -25,7 +25,11 @@ use crate::theme::{Tokens, semibold};
 const THUMB_SIDE: u32 = 512;
 /// Pagine lette da un solo PDF.
 const MAX_PAGES: usize = 200;
-const CELL_H: f32 = 84.0;
+/// Altezza minima di una riga dell'elenco (la miniatura) e quella della riga dei campi.
+const CELL_MIN: f32 = 76.0;
+const FIELDS_H: f32 = 30.0;
+/// Le scale dei file disegnati in piccolo: 1:N diventa N volte più grande sul foglio.
+const SCALES: [u32; 9] = [1, 2, 4, 5, 10, 20, 25, 50, 100];
 const BAR_ROW: f32 = 38.0;
 /// Copie di una pagina.
 const MAX_COPIES: usize = 999;
@@ -126,6 +130,8 @@ enum From {
     Die(String),
     /// Un rettangolo: il formato finito trovato in questo modo.
     Rect(Finish),
+    /// Un'immagine: il suo rettangolo.
+    Image,
 }
 
 impl From {
@@ -133,6 +139,7 @@ impl From {
         match self {
             From::Die(name) => format!("Fustella «{name}»"),
             From::Rect(f) => f.label().to_string(),
+            From::Image => "Immagine".to_string(),
         }
     }
 }
@@ -155,10 +162,13 @@ struct Entry {
     page: usize,
     pages: usize,
     copies: usize,
+    /// La scala del disegno, 1:`scale`: sul foglio la pagina è `scale` volte più grande.
+    scale: u32,
     shape: Shape,
     /// L'immagine della pagina intera e quella ritagliata sulla sagoma più l'abbondanza.
     thumb: winfiles_thumbs::Thumb,
-    texture: Option<(egui::TextureHandle, f64)>,
+    /// La miniatura ritagliata, con l'abbondanza e la scala per cui è stata fatta.
+    texture: Option<(egui::TextureHandle, f64, u32)>,
 }
 
 impl Entry {
@@ -171,10 +181,42 @@ impl Entry {
         }
     }
 
+    /// Di quanto si ingrandisce la pagina sul foglio.
+    fn factor(&self) -> f64 {
+        f64::from(self.scale.max(1))
+    }
+
+    /// La misura della sagoma sul foglio (con la scala).
     fn size(&self) -> Size {
         let b = self.shape.bounds;
-        Size::new(b[2] - b[0], b[3] - b[1])
+        let k = self.factor();
+        Size::new((b[2] - b[0]) * k, (b[3] - b[1]) * k)
     }
+
+    /// I contorni della sagoma sul foglio, in mm (con la scala).
+    fn contours(&self) -> Contours {
+        let k = self.factor();
+        scaled(&self.shape.contours, k)
+    }
+
+    /// L'abbondanza che il file ha già, sul foglio.
+    fn file_bleed(&self) -> Option<f64> {
+        self.shape.bleed.map(|b| b * self.factor())
+    }
+
+    /// Il ritaglio della grafica in mm della pagina: la sagoma più l'abbondanza `bleed` (mm sul
+    /// foglio, quindi divisa per la scala).
+    fn clip(&self, bleed: f64) -> Contours {
+        clip_of(&self.shape, bleed, self.factor())
+    }
+}
+
+/// I contorni ingranditi di `k`.
+fn scaled(contours: &Contours, k: f64) -> Contours {
+    contours
+        .iter()
+        .map(|c| c.iter().map(|p| [p[0] * k, p[1] * k]).collect())
+        .collect()
 }
 
 type Loaded = (
@@ -207,7 +249,7 @@ struct Result_ {
 #[derive(Clone, Debug, PartialEq)]
 struct Stamp {
     settings: NestSettings,
-    copies: Vec<(PathBuf, usize, usize)>,
+    copies: Vec<(PathBuf, usize, usize, u32)>,
 }
 
 pub struct NestingModule {
@@ -258,11 +300,15 @@ impl NestingModule {
 
     // --- File ------------------------------------------------------------------------------
 
-    /// Aggiunge i PDF (e gli AI salvati con il PDF dentro): ogni pagina diventa una sagoma.
+    /// Aggiunge i PDF (e gli AI salvati con il PDF dentro), di cui ogni pagina diventa una sagoma,
+    /// e le immagini, che sono rettangoli.
     pub fn add(&mut self, paths: &[PathBuf]) {
         let mut skipped = 0usize;
         for path in paths {
-            if !matches!(FileKind::from_path(path), FileKind::Pdf | FileKind::Ai) {
+            if !matches!(
+                FileKind::from_path(path),
+                FileKind::Pdf | FileKind::Ai | FileKind::Image
+            ) {
                 skipped += 1;
                 continue;
             }
@@ -287,9 +333,9 @@ impl NestingModule {
         }
         if skipped > 0 {
             self.status = if skipped == 1 {
-                "Un file non è un PDF: nel nesting vanno solo PDF e AI".into()
+                "Un file non va: nel nesting vanno PDF, AI e immagini".into()
             } else {
-                format!("{skipped} file non sono PDF: nel nesting vanno solo PDF e AI")
+                format!("{skipped} file non vanno: nel nesting vanno PDF, AI e immagini")
             };
         }
     }
@@ -310,6 +356,7 @@ impl NestingModule {
                             page,
                             pages,
                             copies,
+                            scale: 1,
                             shape,
                             thumb,
                             texture: None,
@@ -380,7 +427,7 @@ impl NestingModule {
             copies: self
                 .entries
                 .iter()
-                .map(|e| (e.path.clone(), e.page, e.copies))
+                .map(|e| (e.path.clone(), e.page, e.copies, e.scale))
                 .collect(),
         }
     }
@@ -399,7 +446,7 @@ impl NestingModule {
     fn start(&mut self) {
         self.stop();
         if self.total_copies() == 0 {
-            self.status = "Aggiungi dei PDF e scegli quante copie".into();
+            self.status = "Aggiungi dei file e scegli quante copie".into();
             return;
         }
         let s = self.settings.clone().sanitized();
@@ -408,7 +455,7 @@ impl NestingModule {
             .entries
             .iter()
             .map(|e| Item {
-                shape: e.shape.contours.clone(),
+                shape: e.contours(),
                 copies: e.copies,
                 right_angles_only: false,
             })
@@ -552,19 +599,21 @@ impl NestingModule {
         if target.extension().is_none_or(|e| !e.eq_ignore_ascii_case("pdf")) {
             target.set_extension("pdf");
         }
-        // Tutto quello che serve al thread: i file, le sagome con l'abbondanza, i fogli.
-        let mut files: Vec<PathBuf> = Vec::new();
-        let mut pieces: Vec<(usize, usize, Contours)> = Vec::new();
+        // Tutto quello che serve al thread: i file (le immagini con la misura della loro pagina),
+        // le sagome con l'abbondanza e la scala, i fogli.
+        let mut files: Vec<(PathBuf, Option<Size>)> = Vec::new();
+        let mut pieces: Vec<(usize, usize, Contours, f64)> = Vec::new();
         for e in &self.entries {
-            let source = match files.iter().position(|p| *p == e.path) {
+            let source = match files.iter().position(|(p, _)| *p == e.path) {
                 Some(i) => i,
                 None => {
-                    files.push(e.path.clone());
+                    let image =
+                        (e.shape.from == From::Image).then(|| Size::new(e.shape.page[0], e.shape.page[1]));
+                    files.push((e.path.clone(), image));
                     files.len() - 1
                 }
             };
-            let clip = clip_of(&e.shape, self.settings.bleed);
-            pieces.push((source, e.page, clip));
+            pieces.push((source, e.page, e.clip(self.settings.bleed), e.factor()));
         }
         let sheets: Vec<NestSheet> = r
             .outcome
@@ -577,11 +626,11 @@ impl NestingModule {
                     .placements
                     .iter()
                     .filter_map(|p| {
-                        let (source, page, clip) = pieces.get(p.item)?;
+                        let (source, page, clip, k) = pieces.get(p.item)?;
                         Some(SheetPiece {
                             source: *source,
                             page: *page,
-                            matrix: matrix(p),
+                            matrix: matrix(p, *k),
                             clip: clip.clone(),
                         })
                     })
@@ -596,7 +645,16 @@ impl NestingModule {
                 let result = (|| {
                     let opened = files
                         .iter()
-                        .map(|p| PdfFile::open(p).map_err(|e| format!("{}: {e}", file_name(p))))
+                        .map(|(p, image)| {
+                            let file = match image {
+                                // L'immagine entra come un PDF di una pagina, alla sua risoluzione.
+                                Some(size) => winfiles_pdf_out::image_page(p, *size)
+                                    .map_err(|e| e.to_string())
+                                    .and_then(|b| PdfFile::from_bytes(b).map_err(|e| e.to_string())),
+                                None => PdfFile::open(p).map_err(|e| e.to_string()),
+                            };
+                            file.map_err(|e| format!("{}: {e}", file_name(p)))
+                        })
                         .collect::<Result<Vec<_>, _>>()?;
                     let refs: Vec<&PdfFile> = opened.iter().collect();
                     let out = winfiles_pdf_edit::nest_document(&refs, &sheets).map_err(|e| e.to_string())?;
@@ -651,7 +709,7 @@ impl NestingModule {
             ui.add_enabled(enabled, egui::Button::new(text).shortcut_text(keys))
                 .clicked()
         };
-        if item(ui, "Aggiungi PDF…", "Ctrl+O", true) {
+        if item(ui, "Aggiungi file…", "Ctrl+O", true) {
             ui.close();
             let paths = pick_pdfs();
             self.add(&paths);
@@ -724,8 +782,8 @@ impl NestingModule {
                 {
                     let ui = &mut left;
                     ui.spacing_mut().interact_size.y = 34.0;
-                    if text_button(ui, "file-plus", "Aggiungi PDF", true)
-                        .on_hover_text("Aggiungi i PDF da disporre: ogni pagina è una sagoma (Ctrl+O)")
+                    if text_button(ui, "file-plus", "Aggiungi file", true)
+                        .on_hover_text("Aggiungi PDF, AI e immagini: ogni pagina è una sagoma (Ctrl+O)")
                         .clicked()
                     {
                         let paths = pick_pdfs();
@@ -833,17 +891,20 @@ impl NestingModule {
     fn textures(&mut self, ctx: &egui::Context) {
         let bleed = self.settings.bleed;
         for (i, e) in self.entries.iter_mut().enumerate() {
-            if e.texture.as_ref().is_some_and(|(_, b)| (*b - bleed).abs() < 1e-9) {
+            if e.texture
+                .as_ref()
+                .is_some_and(|(_, b, k)| (*b - bleed).abs() < 1e-9 && *k == e.scale)
+            {
                 continue;
             }
-            let clip = clip_of(&e.shape, bleed);
+            let clip = e.clip(bleed);
             let img = masked(&e.thumb, &clip, e.shape.page);
             let tex = ctx.load_texture(
                 format!("nesting-{i}-{}", e.path.display()),
                 img,
                 egui::TextureOptions::LINEAR,
             );
-            e.texture = Some((tex, bleed));
+            e.texture = Some((tex, bleed, e.scale));
         }
     }
 
@@ -878,7 +939,7 @@ impl NestingModule {
                 t.text_dim,
             );
             let g = ui.painter().layout(
-                "Trascina qui i PDF da disporre. La sagoma è la fustella di taglio, o il formato \
+                "Trascina qui i PDF o le immagini da disporre. La sagoma è la fustella di taglio, o il formato \
                  finito se non c'è."
                     .into(),
                 egui::FontId::proportional(13.0),
@@ -898,15 +959,42 @@ impl NestingModule {
             .auto_shrink([false, false])
             .show(&mut child, |ui| {
                 for i in 0..self.entries.len() {
-                    let (cell, resp) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), CELL_H), Sense::click());
                     let Some(e) = self.entries.get_mut(i) else {
                         continue;
                     };
+                    let chosen = self.chosen == Some(i);
+                    // Prima i testi, che vanno a capo: l'altezza della riga dipende da loro, e i
+                    // campi stanno sotto, a tutta larghezza.
+                    let width = ui.available_width();
+                    let x_off = 8.0 + 56.0 + 10.0;
+                    let text_w = (width - x_off - 8.0).max(20.0);
+                    let name = ui.painter().layout(
+                        e.name(),
+                        semibold(12.5),
+                        if chosen { t.text_strong } else { t.text },
+                        text_w,
+                    );
+                    let mut info = format!("{} · {}", format_size(e.size(), unit), e.shape.from.label());
+                    if e.scale > 1 {
+                        info = format!("{info} · scala 1:{}", e.scale);
+                    }
+                    let short = e.file_bleed().is_some_and(|b| b + 0.05 < want);
+                    if let (true, Some(b)) = (short, e.file_bleed()) {
+                        info = format!("{info}\nAbbondanza nel file: {}", format_length(b, Unit::Mm));
+                    }
+                    let galley = ui.painter().layout(
+                        info,
+                        egui::FontId::proportional(11.5),
+                        if short { t.warning } else { t.text_dim },
+                        text_w,
+                    );
+                    let text_h = 8.0 + name.size().y + 2.0 + galley.size().y;
+                    let top_h = text_h.max(CELL_MIN);
+                    let cell_h = top_h + FIELDS_H + 8.0;
+                    let (cell, resp) = ui.allocate_exact_size(vec2(width, cell_h), Sense::click());
                     if !ui.is_rect_visible(cell) {
                         continue;
                     }
-                    let chosen = self.chosen == Some(i);
                     let fill = if chosen {
                         t.selection
                     } else if resp.hovered() {
@@ -916,7 +1004,7 @@ impl NestingModule {
                     };
                     ui.painter().rect_filled(cell.shrink(2.0), t.radius + 2, fill);
                     let thumb_rect = Rect::from_min_size(cell.min + vec2(8.0, 10.0), Vec2::splat(56.0));
-                    if let Some((tex, _)) = &e.texture {
+                    if let Some((tex, _, _)) = &e.texture {
                         let at = fit_rect(thumb_rect, Size::new(e.shape.page[0], e.shape.page[1]));
                         ui.painter().image(
                             tex.id(),
@@ -925,39 +1013,22 @@ impl NestingModule {
                             Color32::WHITE,
                         );
                     }
-                    let x = thumb_rect.right() + 10.0;
-                    let text_w = (cell.right() - x - 8.0).max(20.0);
-                    let name = ui.painter().layout(
-                        e.name(),
-                        semibold(12.5),
-                        if chosen { t.text_strong } else { t.text },
-                        text_w,
-                    );
-                    let name_h = name.size().y.min(32.0);
+                    let x = cell.left() + x_off;
+                    let name_h = name.size().y;
                     ui.painter().galley(pos2(x, cell.top() + 8.0), name, t.text);
-                    let mut info = format!("{} · {}", format_size(e.size(), unit), e.shape.from.label());
-                    let short = e.shape.bleed.is_some_and(|b| b + 0.05 < want);
-                    if let (true, Some(b)) = (short, e.shape.bleed) {
-                        info = format!("{info}\nAbbondanza nel file: {}", format_length(b, Unit::Mm));
-                    }
-                    let galley = ui.painter().layout(
-                        info,
-                        egui::FontId::proportional(11.5),
-                        if short { t.warning } else { t.text_dim },
-                        text_w,
-                    );
                     ui.painter()
                         .galley(pos2(x, cell.top() + 10.0 + name_h), galley, t.text_dim);
-                    // Le copie, in basso a destra.
-                    let field = Rect::from_min_size(
-                        pos2(cell.right() - 86.0, cell.bottom() - 34.0),
-                        vec2(80.0, 28.0),
+                    // Copie e scala, sotto i testi.
+                    let row = Rect::from_min_size(
+                        pos2(cell.left() + 8.0, cell.top() + top_h + 2.0),
+                        vec2(width - 16.0, FIELDS_H),
                     );
                     let mut c = ui.new_child(
                         egui::UiBuilder::new()
-                            .max_rect(field)
+                            .max_rect(row)
                             .layout(egui::Layout::left_to_right(Align::Center)),
                     );
+                    c.spacing_mut().item_spacing.x = 4.0;
                     c.label(egui::RichText::new("Copie").size(11.5).color(t.text_dim));
                     crate::fluent::number(
                         &mut c,
@@ -967,6 +1038,23 @@ impl NestingModule {
                             .speed(0.2),
                     )
                     .on_hover_text("Quante copie di questa sagoma (0 la lascia fuori)");
+                    c.add_space(8.0);
+                    c.label(egui::RichText::new("Scala").size(11.5).color(t.text_dim));
+                    egui::ComboBox::from_id_salt(("scala-nesting", i))
+                        .icon(crate::fluent::combo_icon)
+                        .selected_text(format!("1:{}", e.scale))
+                        .width(62.0)
+                        .height(400.0)
+                        .show_ui(&mut c, |ui| {
+                            for n in SCALES {
+                                ui.selectable_value(&mut e.scale, n, format!("1:{n}"));
+                            }
+                        })
+                        .response
+                        .on_hover_text(
+                            "La scala del disegno nel file: con 1:10 sul foglio va 10 volte più \
+                             grande, abbondanza compresa",
+                        );
                     if resp.clicked() {
                         self.chosen = Some(i);
                     }
@@ -1049,7 +1137,7 @@ impl NestingModule {
         );
         let Some(r) = &self.result else {
             let text = if self.entries.is_empty() {
-                "Aggiungi i PDF, scegli le copie e premi Calcola"
+                "Aggiungi i file, scegli le copie e premi Calcola"
             } else {
                 "Premi Calcola per disporre le copie"
             };
@@ -1151,8 +1239,9 @@ impl NestingModule {
             let Some(e) = self.entries.iter().find(|e| e.path == *path && e.page == *page) else {
                 continue;
             };
-            let [pw, ph] = e.shape.page;
-            if let Some((tex, _)) = &e.texture {
+            let k = e.factor();
+            let [pw, ph] = e.shape.page.map(|v| v * k);
+            if let Some((tex, _, _)) = &e.texture {
                 let corners = [[0.0, 0.0], [pw, 0.0], [pw, ph], [0.0, ph]].map(|c| to(p.apply(c)));
                 let uvs = [pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(0.0, 1.0)];
                 let mut mesh = egui::Mesh::with_texture(tex.id());
@@ -1170,7 +1259,7 @@ impl NestingModule {
             // La linea di taglio, sopra.
             let mut inside = false;
             for c in &e.shape.contours {
-                let pts: Vec<Pos2> = c.iter().map(|q| to(p.apply(*q))).collect();
+                let pts: Vec<Pos2> = c.iter().map(|q| to(p.apply([q[0] * k, q[1] * k]))).collect();
                 if let Some(h) = hover
                     && contains(&pts, h)
                 {
@@ -1385,16 +1474,18 @@ fn length_row(
 
 /// Il ritaglio di una sagoma: la sagoma più l'abbondanza, almeno mezzo millimetro (lo spessore
 /// della linea di taglio deve restare intero).
-fn clip_of(shape: &Shape, bleed: f64) -> Contours {
-    winfiles_pdf_edit::grow_shape(&shape.contours, bleed.max(0.5))
+/// Con la scala 1:`k` la pagina si ingrandisce, quindi sulla pagina l'abbondanza è `k` volte più
+/// stretta.
+fn clip_of(shape: &Shape, bleed: f64, k: f64) -> Contours {
+    winfiles_pdf_edit::grow_shape(&shape.contours, bleed.max(0.5) / k.max(1.0))
 }
 
-/// La matrice dalla pagina (mm) al foglio (mm) di una copia: prima lo specchio, poi la rotazione
-/// e lo spostamento, come nel motore.
-fn matrix(p: &Placement) -> [f64; 6] {
+/// La matrice dalla pagina (mm) al foglio (mm) di una copia: prima la scala `k` e lo specchio,
+/// poi la rotazione e lo spostamento, come nel motore.
+fn matrix(p: &Placement, k: f64) -> [f64; 6] {
     let (s, c) = p.rotation.to_radians().sin_cos();
     let f = if p.mirror { -1.0 } else { 1.0 };
-    [c * f, s * f, -s, c, p.x, p.y]
+    [c * f * k, s * f * k, -s * k, c * k, p.x, p.y]
 }
 
 /// Il punto `p` è dentro il poligono (pari-dispari).
@@ -1468,6 +1559,9 @@ fn masked(thumb: &winfiles_thumbs::Thumb, clip: &[Vec<[f64; 2]>], page: [f64; 2]
 /// Legge un PDF: per ogni pagina la sagoma (la fustella di taglio, se c'è, o il formato finito)
 /// e l'immagine.
 fn load(path: &Path, inks: &[InkName]) -> Result<Vec<(usize, usize, Shape, winfiles_thumbs::Thumb)>, String> {
+    if FileKind::from_path(path) == FileKind::Image {
+        return load_image(path).map(|one| vec![one]);
+    }
     let file = PdfFile::open(path).map_err(|e| e.to_string())?;
     let count = file.page_count();
     if count == 0 {
@@ -1524,6 +1618,32 @@ fn load(path: &Path, inks: &[InkName]) -> Result<Vec<(usize, usize, Shape, winfi
     Ok(out)
 }
 
+/// Legge un'immagine: la sagoma è il suo rettangolo, alla misura che dicono i pixel e i DPI. Oltre
+/// il bordo non c'è grafica, quindi l'abbondanza nel file è zero.
+fn load_image(path: &Path) -> Result<(usize, usize, Shape, winfiles_thumbs::Thumb), String> {
+    let probe = winfiles_formats::probe(path, FileKind::Image).map_err(|e| e.to_string())?;
+    let size = probe
+        .pages
+        .first()
+        .map(|p| p.size)
+        .filter(|s| s.w > 0.0 && s.h > 0.0)
+        .ok_or_else(|| "l'immagine non dichiara le sue misure".to_string())?;
+    let thumb = winfiles_thumbs::render(path, FileKind::Image, 0, THUMB_SIDE).map_err(|e| e.to_string())?;
+    let bounds = [0.0, 0.0, size.w, size.h];
+    Ok((
+        0,
+        1,
+        Shape {
+            contours: rect_contour(bounds),
+            from: From::Image,
+            page: [size.w, size.h],
+            bounds,
+            bleed: Some(0.0),
+        },
+        thumb,
+    ))
+}
+
 /// Le copie scritte nel nome del file, come nel pannello per Illustrator: «x20» o «20pz».
 fn copies_in_name(name: &str) -> Option<usize> {
     let stem = name.rsplit_once('.').map_or(name, |(s, _)| s).to_lowercase();
@@ -1577,8 +1697,13 @@ fn text_button(ui: &mut egui::Ui, icon: &str, text: &str, enabled: bool) -> egui
 
 fn pick_pdfs() -> Vec<PathBuf> {
     rfd::FileDialog::new()
-        .set_title("Aggiungi PDF al nesting")
-        .add_filter("PDF e Illustrator", &["pdf", "PDF", "ai", "AI"])
+        .set_title("Aggiungi file al nesting")
+        .add_filter(
+            "PDF, Illustrator e immagini",
+            &[
+                "pdf", "PDF", "ai", "AI", "jpg", "jpeg", "png", "tif", "tiff", "webp", "bmp", "psd",
+            ],
+        )
         .pick_files()
         .unwrap_or_default()
 }
@@ -1603,11 +1728,36 @@ mod tests {
             x: 10.0,
             y: 5.0,
         };
-        let m = matrix(&p);
+        let m = matrix(&p, 1.0);
         let q = [3.0, 7.0];
         let a = p.apply(q);
         let b = [m[0] * q[0] + m[2] * q[1] + m[4], m[1] * q[0] + m[3] * q[1] + m[5]];
         assert!((a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9);
+    }
+
+    #[test]
+    fn la_scala_ingrandisce_la_pagina_ma_non_l_abbondanza() {
+        let p = Placement {
+            item: 0,
+            copy: 0,
+            rotation: 0.0,
+            mirror: false,
+            x: 10.0,
+            y: 5.0,
+        };
+        // In scala 1:10 un punto a 3 mm dall'angolo della pagina sta a 30 mm sul foglio.
+        let m = matrix(&p, 10.0);
+        assert_eq!([m[0] * 3.0 + m[4], m[3] * 3.0 + m[5]], [40.0, 35.0]);
+        // L'abbondanza di 3 mm sul foglio è 0,3 mm sulla pagina.
+        let shape = Shape {
+            contours: rect_contour([0.0, 0.0, 20.0, 10.0]),
+            from: From::Image,
+            page: [20.0, 10.0],
+            bounds: [0.0, 0.0, 20.0, 10.0],
+            bleed: Some(0.0),
+        };
+        let b = winfiles_pdf_edit::shape_bounds(&clip_of(&shape, 3.0, 10.0)).unwrap();
+        assert!((b[0] + 0.3).abs() < 0.02 && (b[2] - 20.3).abs() < 0.02, "{b:?}");
     }
 
     #[test]
