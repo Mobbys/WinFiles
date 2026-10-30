@@ -1387,3 +1387,84 @@ fn gli_oggetti_sovrapposti_si_allargano_solo_fuori() {
     assert!(is_red(at(98.0, 152.0)) && is_blue(at(102.0, 152.0)));
     assert!(is_red(at(48.0, 100.0)) && is_blue(at(202.0, 100.0)));
 }
+
+#[test]
+fn la_fustella_aperta_diventa_una_sagoma() {
+    // Un quadrato disegnato con quattro tratti aperti che si toccano.
+    let content =
+        "0 0 0 1 K 0.5 w 50 50 m 250 50 l S 250 50 m 250 250 l S 250 250 m 50 250 l S 50 250 m 50 50 l S";
+    let e = editor(&[page([0.0, 0.0, 300.0, 300.0], 0, content)]);
+    let scan = e.scan_page(0).unwrap();
+    let die: Vec<PathId> = scan.paths.iter().map(|p| p.id).collect();
+    assert_eq!(die.len(), 4);
+    let shape = die_shape(&scan, &die).unwrap();
+    let side = pt_to_mm(200.0);
+    let area = shape_area(&shape);
+    assert!(
+        (area - side * side).abs() < side * 4.0 * 0.2,
+        "{area} contro {}",
+        side * side
+    );
+}
+
+#[test]
+fn i_fogli_del_nesting_ritagliano_le_copie_sulla_sagoma() {
+    // Pagina tutta rossa con una fustella tonda: sul foglio resta il cerchio più l'abbondanza.
+    let c = circle(150.0, 150.0, 100.0);
+    let content = leak(format!("1 0 0 rg 0 0 300 300 re f 0 0 0 1 K 0.5 w {c} S"));
+    let file = PdfFile::from_bytes(pdf(&[page([0.0, 0.0, 300.0, 300.0], 0, content)])).unwrap();
+    let scan = file.scan_page(0).unwrap();
+    let die: Vec<PathId> = scan
+        .paths
+        .iter()
+        .filter(|p| p.line.is_some())
+        .map(|p| p.id)
+        .collect();
+    let shape = die_shape(&scan, &die).unwrap();
+    let r = pt_to_mm(100.0);
+    assert!((shape_area(&shape) - std::f64::consts::PI * r * r).abs() < r * r * 0.02);
+    let clip = grow_shape(&shape, 3.0);
+    let page_mm = pt_to_mm(300.0);
+    // Due copie affiancate su un foglio largo due pagine; la seconda girata di 90°.
+    let sheet = NestSheet {
+        width: 2.0 * page_mm,
+        height: page_mm,
+        pieces: vec![
+            SheetPiece {
+                source: 0,
+                page: 0,
+                matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                clip: clip.clone(),
+            },
+            SheetPiece {
+                source: 0,
+                page: 0,
+                // (x, y) → (page_mm - y, x) spostato a destra: 90° in senso orario.
+                matrix: [0.0, 1.0, -1.0, 0.0, 2.0 * page_mm, 0.0],
+                clip,
+            },
+        ],
+    };
+    let out = nest_document(&[&file], &[sheet]).unwrap();
+    let pdf = Pdf::new(out.to_bytes().unwrap()).unwrap();
+    let img = render(&pdf, 0);
+    assert_eq!((img.1, img.2), (600, 300));
+    for cx in [150, 450] {
+        // Il centro del cerchio è rosso, l'angolo della pagina (fuori dalla sagoma) bianco.
+        assert!(is_red(pixel(&img, cx, 150)));
+        assert!(
+            is_white(pixel(&img, cx - 140, 10)),
+            "{:?}",
+            pixel(&img, cx - 140, 10)
+        );
+        // A 2 mm fuori dal cerchio c'è ancora il rosso dell'abbondanza; a 5 mm no.
+        let two = (100.0 + mm_to_pt(2.0)) as u32;
+        let five = (100.0 + mm_to_pt(5.0)) as u32;
+        assert!(
+            is_red(pixel(&img, cx, 150 + two)),
+            "{:?}",
+            pixel(&img, cx, 150 + two)
+        );
+        assert!(is_white(pixel(&img, cx, 150 + five)));
+    }
+}

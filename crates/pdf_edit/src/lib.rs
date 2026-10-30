@@ -16,10 +16,15 @@ use winfiles_geom::{Paper, Size, pt_to_mm};
 
 mod frame;
 mod illustrator;
+mod nesting;
 mod paths;
 mod spots;
 
 pub use frame::{BleedMode, BleedSpec};
+pub use nesting::{
+    Contours, MAX_SHEET_MM, NestSheet, SheetPiece, die_shape, grow_shape, nest_document, shape_area,
+    shape_bounds,
+};
 pub use paths::{
     Fill, Ink, Line, NewDie, NewInk, PageScan, Part, PathId, PathInfo, Restyle, Restyled, SubPath,
     outline_is_rectangle,
@@ -134,6 +139,11 @@ impl PdfFile {
 
     pub fn save(&self, path: &Path) -> Result<(), EditError> {
         write_atomic(path, &self.to_bytes()?)
+    }
+
+    /// I tracciati della pagina `page` (da 0).
+    pub fn scan_page(&self, page: usize) -> Result<PageScan, EditError> {
+        paths::scan(&self.0, page)
     }
 }
 

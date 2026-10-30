@@ -24,6 +24,7 @@ winfiles-pdf-out = { path = "crates/pdf_out", version = "0.2.3" }
 winfiles-pdf-edit = { path = "crates/pdf_edit", version = "0.2.3" }
 winfiles-image-edit = { path = "crates/image_edit", version = "0.2.3" }
 winfiles-photo = { path = "crates/photo", version = "0.2.3" }
+winfiles-nest = { path = "crates/nest", version = "0.2.3" }
 
 # base
 serde = { version = "1", features = ["derive"] }

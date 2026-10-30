@@ -6575,6 +6575,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "winfiles-nest"
+version = "0.2.17"
+dependencies = [
+ "i_overlay",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "winfiles-pdf-edit"
 version = "0.2.17"
 dependencies = [
