@@ -102,6 +102,8 @@ pub struct Prefs {
     pub menu11_later: bool,
     /// I nomi delle tinte usati in Modifica PDF (taglio, cordonatura…), con il loro ruolo.
     pub inks: Vec<crate::pdf::tracciati::InkName>,
+    /// Le scelte del nesting (supporto, misure, distanze).
+    pub nesting: crate::nesting::NestSettings,
 }
 
 impl Prefs {
@@ -119,6 +121,7 @@ impl Prefs {
             .window
             .filter(|[w, h]| w.is_finite() && h.is_finite() && *w >= MIN_WINDOW[0] && *h >= MIN_WINDOW[1]);
         self.window = self.window.map(|[w, h]| [w.min(MAX_WINDOW), h.min(MAX_WINDOW)]);
+        self.nesting = self.nesting.sanitized();
         if winfiles_layout::grid(&self.print, &[]).is_err() {
             self.print = PrintSettings::default();
         }
@@ -232,6 +235,11 @@ mod tests {
                 role: crate::pdf::tracciati::Role::Cut,
                 cmyk: Some([0.0, 1.0, 0.0, 0.0]),
             }],
+            nesting: crate::nesting::NestSettings {
+                support: crate::nesting::Support::Roll,
+                roll_w: 1370.0,
+                ..crate::nesting::NestSettings::default()
+            },
         };
         save_to(&file, &prefs).unwrap();
         assert_eq!(load_from(&file), prefs);

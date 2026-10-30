@@ -133,6 +133,8 @@ pub struct Sheet {
     pub width: f64,
     /// L'altezza della lastra, o la lunghezza usata del rotolo.
     pub height: f64,
+    /// Fin dove arrivano le sagome dall'alto, margine compreso (mm).
+    pub used: f64,
     /// Area delle sagome (mm²).
     pub area: f64,
     pub placements: Vec<Placement>,
@@ -775,6 +777,7 @@ fn outcome(
             Sheet {
                 width: cfg.width,
                 height: if cfg.roll { used } else { cfg.height },
+                used,
                 area: sh
                     .placed
                     .iter()

@@ -6501,6 +6501,7 @@ dependencies = [
  "winfiles-image-edit",
  "winfiles-layout",
  "winfiles-model",
+ "winfiles-nest",
  "winfiles-pdf-edit",
  "winfiles-pdf-out",
  "winfiles-scene",

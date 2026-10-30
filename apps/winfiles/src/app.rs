@@ -154,6 +154,7 @@ pub struct WinFilesApp {
     pub(crate) pdf: crate::pdf::PdfModule,
     /// Il modulo immagini (Fase 8), con le immagini aperte.
     pub(crate) images: crate::images::ImagesModule,
+    pub(crate) nesting: crate::nesting::NestingModule,
     /// I file mandati da "Apri in WinFiles" mentre la finestra è aperta.
     inbox: Option<crate::instance::Inbox>,
 }
@@ -165,9 +166,12 @@ pub enum Module {
     Thumbnails,
     Pdf,
     Images,
+    Nesting,
 }
 
 impl WinFilesApp {
+    // Uno per ogni modo di aprire WinFiles dalla riga di comando.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         ctx: &egui::Context,
         paths: Vec<PathBuf>,
@@ -175,6 +179,7 @@ impl WinFilesApp {
         batch_calibration: Option<(Paper, PathBuf)>,
         edit_pdf: Option<PathBuf>,
         edit_images: Vec<PathBuf>,
+        nest_files: Vec<PathBuf>,
         prefs: crate::prefs::Prefs,
     ) -> Self {
         let blank = blank_project(&prefs);
@@ -261,12 +266,14 @@ impl WinFilesApp {
             module: Module::Thumbnails,
             pdf: crate::pdf::PdfModule::new(ctx),
             images: crate::images::ImagesModule::new(ctx),
+            nesting: crate::nesting::NestingModule::new(ctx),
             inbox: None,
         };
         // Le stampanti si cercano subito, così Stampa le trova già pronte.
         if !app.prefs.inks.is_empty() {
             app.pdf.inks = app.prefs.inks.clone();
         }
+        app.nesting.settings = app.prefs.nesting.clone().sanitized();
         if app.batch_pdf.is_none() && app.batch_calibration.is_none() {
             app.scan_printers();
             // Come la 4.9: all'avvio si chiede a GitHub se c'è una versione nuova, senza aspettare.
@@ -281,6 +288,11 @@ impl WinFilesApp {
         if !edit_images.is_empty() {
             app.module = Module::Images;
             app.images.open(&edit_images);
+        }
+        if !nest_files.is_empty() {
+            app.module = Module::Nesting;
+            app.nesting.inks = app.pdf.inks.clone();
+            app.nesting.add(&nest_files);
         }
         // Un file .winfiles sulla riga di comando (doppio clic in Esplora file) apre il lavoro;
         // gli altri file e cartelle si aggiungono all'elenco.
@@ -780,6 +792,7 @@ impl WinFilesApp {
         match self.module {
             Module::Pdf => self.pdf.status = text,
             Module::Images => self.images.status = text,
+            Module::Nesting => self.nesting.status = text,
             _ => {}
         }
     }
@@ -1376,6 +1389,10 @@ impl WinFilesApp {
                                 self.images.file_menu(ui);
                                 return;
                             }
+                            if self.module == Module::Nesting {
+                                self.nesting.file_menu(ui);
+                                return;
+                            }
                             let ctx = ui.ctx().clone();
                             let item = |ui: &mut egui::Ui, text: &str, keys: &str| {
                                 ui.add(egui::Button::new(text).shortcut_text(keys)).clicked()
@@ -1596,10 +1613,11 @@ impl WinFilesApp {
     /// browser. La scheda attiva ha il colore della barra dei menu e si unisce a lei.
     /// Ctrl+Tab e Ctrl+Maiusc+Tab passano alla scheda dopo e a quella prima.
     fn module_tabs(&mut self, ui: &mut egui::Ui) {
-        const TABS: [(Module, &str); 3] = [
+        const TABS: [(Module, &str); 4] = [
             (Module::Thumbnails, "Miniature"),
             (Module::Pdf, "Modifica PDF"),
             (Module::Images, "Modifica immagini"),
+            (Module::Nesting, "Nesting"),
         ];
         let t = Tokens::get(ui.ctx());
         let (next, previous) = ui.input_mut(|i| {
@@ -2845,6 +2863,7 @@ impl WinFilesApp {
             keep_legacy: self.keep_legacy,
             menu11_later: self.menu11_later,
             inks: self.pdf.inks.clone(),
+            nesting: self.nesting.settings.clone(),
         }
     }
 
@@ -2889,7 +2908,17 @@ impl eframe::App for WinFilesApp {
         }
         let pdf_mode = self.module == Module::Pdf;
         let images_mode = self.module == Module::Images;
-        if pdf_mode {
+        let nesting_mode = self.module == Module::Nesting;
+        if nesting_mode {
+            // Le tinte di taglio sono quelle di Modifica PDF.
+            if self.nesting.inks != self.pdf.inks {
+                self.nesting.inks = self.pdf.inks.clone();
+            }
+            if !dropped.is_empty() {
+                self.nesting.dropped(dropped);
+            }
+            self.nesting.shortcuts(&ctx);
+        } else if pdf_mode {
             if !dropped.is_empty() {
                 self.pdf.dropped(&ctx, dropped);
             }
@@ -2937,6 +2966,7 @@ impl eframe::App for WinFilesApp {
                 .images
                 .title()
                 .unwrap_or_else(|| "Modifica immagini — WinFiles".into()),
+            Module::Nesting => "Nesting — WinFiles".into(),
             Module::Thumbnails => self.window_title(),
         };
         if title != self.shown_title {
@@ -3034,6 +3064,22 @@ impl eframe::App for WinFilesApp {
             self.module_output();
             self.pdf.windows(&ctx);
             self.notes_window(&ctx);
+            self.unsaved_dialog(&ctx);
+            return;
+        }
+        if self.module == Module::Nesting {
+            self.nesting.control_bar(ui);
+            self.update_bar(ui);
+            self.nesting.status_bar(ui);
+            let unit = self.project.unit;
+            egui::CentralPanel::default()
+                .frame(frame.inner_margin(egui::Margin {
+                    left: 10,
+                    right: 10,
+                    top: 0,
+                    bottom: 2,
+                }))
+                .show(ui, |ui| self.nesting.body(ui, unit));
             self.unsaved_dialog(&ctx);
             return;
         }

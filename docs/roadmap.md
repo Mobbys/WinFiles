@@ -108,6 +108,9 @@ WinFile 4.9 resta in uso per le miniature fino alla Fase 7 e per immagini e PDF 
 - [x] "Crea la fustella" dal contorno dei tracciati scelti, uniti se si sovrappongono
   ([ADR 0025](adr/0025-fustella-dalla-selezione.md))
 - [x] Abbondanza lungo una fustella sagomata (angoli tondi, forme), ADR 0026
+- [x] Scheda "Nesting": copie dei PDF sagomati su lastre o rotolo, sulla fustella di taglio, con
+  l'abbondanza; PDF dei fogli per Onyx ([ADR 0027](adr/0027-nesting.md))
+- [ ] Nesting: linee di taglio comuni (laser) e immagini come rettangoli
 - [ ] Provata da Michel su file veri
 
 ## Fase 8 in dettaglio

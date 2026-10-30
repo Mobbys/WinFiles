@@ -27,6 +27,7 @@ winfiles-scene.workspace = true
 winfiles-pdf-out.workspace = true
 winfiles-pdf-edit.workspace = true
 winfiles-image-edit.workspace = true
+winfiles-nest.workspace = true
 # Il modulo immagini usa `image` per disegnare l'anteprima e la lente senza ricopiare i pixel.
 image.workspace = true
 eframe.workspace = true

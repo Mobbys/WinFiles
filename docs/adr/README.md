@@ -31,3 +31,4 @@ Una decisione si cambia con un nuovo ADR che sostituisce il precedente, mai risc
 | [0024](0024-abbondanza-vettoriale.md) | Abbondanza creata in vettoriale, ribaltando la pagina attorno al formato finito | Accettata |
 | [0025](0025-fustella-dalla-selezione.md) | Fustella dai tracciati scelti, unendo le forme (`i_overlay`) | Accettata |
 | [0026](0026-abbondanza-sagomata.md) | Abbondanza che segue una fustella sagomata, allungando l'ultima striscia di grafica | Accettata |
+| [0027](0027-nesting.md) | Nesting delle sagome su lastre e rotoli, con il motore del pannello per Illustrator portato in Rust | Accettata |
