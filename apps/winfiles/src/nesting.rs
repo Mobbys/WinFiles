@@ -26,6 +26,8 @@ use crate::theme::{Tokens, semibold};
 const THUMB_SIDE: u32 = 512;
 /// Pagine lette da un solo PDF.
 const MAX_PAGES: usize = 200;
+/// Pezzi al massimo da una sagoma scomposta (una scritta lunga ne ha decine).
+const MAX_SPLIT: usize = 500;
 /// Altezza minima di una riga dell'elenco (la miniatura) e quella della riga dei campi.
 const CELL_MIN: f32 = 76.0;
 const FIELDS_H: f32 = 30.0;
@@ -167,6 +169,8 @@ struct Entry {
     page: usize,
     pages: usize,
     copies: usize,
+    /// Il pezzo della sagoma scomposta (da 0), o `None` per la pagina intera.
+    piece: Option<usize>,
     /// La scala del disegno, 1:`scale`: sul foglio la pagina è `scale` volte più grande.
     scale: u32,
     shape: Shape,
@@ -178,12 +182,19 @@ struct Entry {
 
 impl Entry {
     fn name(&self) -> String {
-        let name = file_name(&self.path);
+        let mut name = file_name(&self.path);
         if self.pages > 1 {
-            format!("{name} · pag. {}", self.page + 1)
-        } else {
-            name
+            name = format!("{name} · pag. {}", self.page + 1);
         }
+        if let Some(k) = self.piece {
+            name = format!("{name} · pezzo {}", k + 1);
+        }
+        name
+    }
+
+    /// Chi è nel risultato: file, pagina e pezzo.
+    fn key(&self) -> (PathBuf, usize, Option<usize>) {
+        (self.path.clone(), self.page, self.piece)
     }
 
     /// Di quanto si ingrandisce la pagina sul foglio.
@@ -246,7 +257,7 @@ enum RunMsg {
 struct Result_ {
     outcome: Outcome,
     /// Le pagine dell'elenco al momento del calcolo (gli indici di `Placement::item`).
-    entries: Vec<(PathBuf, usize)>,
+    entries: Vec<(PathBuf, usize, Option<usize>)>,
     stamp: Stamp,
 }
 
@@ -254,7 +265,7 @@ struct Result_ {
 #[derive(Clone, Debug, PartialEq)]
 struct Stamp {
     settings: NestSettings,
-    copies: Vec<(PathBuf, usize, usize, u32)>,
+    copies: Vec<(PathBuf, usize, Option<usize>, usize, u32)>,
 }
 
 pub struct NestingModule {
@@ -367,6 +378,7 @@ impl NestingModule {
                             page,
                             pages,
                             copies,
+                            piece: None,
                             scale: 1,
                             shape,
                             thumb,
@@ -439,6 +451,95 @@ impl NestingModule {
         self.selected.clear();
     }
 
+    /// Scompone le righe `rows` nei loro pezzi staccati (ogni contorno esterno con i suoi fori):
+    /// ogni pezzo diventa una sagoma con le stesse copie e la stessa scala.
+    fn split(&mut self, rows: &[usize]) {
+        let mut out: Vec<Entry> = Vec::with_capacity(self.entries.len());
+        let mut made = 0usize;
+        for (i, e) in std::mem::take(&mut self.entries).into_iter().enumerate() {
+            let pieces = if rows.contains(&i) && e.piece.is_none() {
+                winfiles_pdf_edit::split_shape(&e.shape.contours)
+            } else {
+                Vec::new()
+            };
+            if pieces.len() < 2 || pieces.len() > MAX_SPLIT {
+                out.push(e);
+                continue;
+            }
+            made += pieces.len();
+            for (k, contours) in pieces.into_iter().enumerate() {
+                let Some(bounds) = winfiles_pdf_edit::shape_bounds(&contours) else {
+                    continue;
+                };
+                out.push(Entry {
+                    path: e.path.clone(),
+                    page: e.page,
+                    pages: e.pages,
+                    copies: e.copies,
+                    piece: Some(k),
+                    scale: e.scale,
+                    shape: Shape {
+                        contours,
+                        from: e.shape.from.clone(),
+                        page: e.shape.page,
+                        bounds,
+                        bleed: e.shape.bleed,
+                    },
+                    thumb: e.thumb.clone(),
+                    texture: None,
+                });
+            }
+        }
+        self.entries = out;
+        self.selected.clear();
+        self.chosen = None;
+        self.status = if made == 0 {
+            "Niente da scomporre: la sagoma è un pezzo solo".into()
+        } else {
+            format!("Scomposta in {made} pezzi")
+        };
+    }
+
+    /// Rimette insieme i pezzi delle righe `rows`: ogni pagina torna una sagoma sola.
+    fn merge(&mut self, rows: &[usize]) {
+        let keys: Vec<(PathBuf, usize)> = rows
+            .iter()
+            .filter_map(|i| self.entries.get(*i))
+            .filter(|e| e.piece.is_some())
+            .map(|e| (e.path.clone(), e.page))
+            .collect();
+        let mut out: Vec<Entry> = Vec::with_capacity(self.entries.len());
+        for e in std::mem::take(&mut self.entries) {
+            let whole = keys.contains(&(e.path.clone(), e.page)) && e.piece.is_some();
+            let host = out
+                .iter_mut()
+                .find(|o| whole && o.piece == Some(usize::MAX) && o.path == e.path && o.page == e.page);
+            match host {
+                Some(o) => {
+                    o.shape.contours.extend(e.shape.contours);
+                    let (a, b) = (o.shape.bounds, e.shape.bounds);
+                    o.shape.bounds = [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])];
+                }
+                None => {
+                    let mut e = e;
+                    if whole {
+                        e.piece = Some(usize::MAX);
+                        e.texture = None;
+                    }
+                    out.push(e);
+                }
+            }
+        }
+        for e in &mut out {
+            if e.piece == Some(usize::MAX) {
+                e.piece = None;
+            }
+        }
+        self.entries = out;
+        self.selected.clear();
+        self.chosen = None;
+    }
+
     /// Le righe su cui lavorano i comandi della barra: le scelte, o tutte se non ce n'è.
     fn targets(&self) -> Vec<usize> {
         if self.selected.is_empty() {
@@ -477,7 +578,7 @@ impl NestingModule {
             copies: self
                 .entries
                 .iter()
-                .map(|e| (e.path.clone(), e.page, e.copies, e.scale))
+                .map(|e| (e.path.clone(), e.page, e.piece, e.copies, e.scale))
                 .collect(),
         }
     }
@@ -568,7 +669,7 @@ impl NestingModule {
                 utilization: 0.0,
                 tries: 0,
             },
-            entries: self.entries.iter().map(|e| (e.path.clone(), e.page)).collect(),
+            entries: self.entries.iter().map(Entry::key).collect(),
             stamp: self.stamp(),
         });
         self.sheet = 0;
@@ -1012,6 +1113,8 @@ impl NestingModule {
         }
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
         let mut remove: Option<Vec<usize>> = None;
+        let mut split: Option<Vec<usize>> = None;
+        let mut merge: Option<Vec<usize>> = None;
         let mut click = None;
         let unit = self.unit;
         let want = self.settings.bleed;
@@ -1138,6 +1241,30 @@ impl NestingModule {
                             remove = Some((0..self.entries.len()).collect());
                             ui.close();
                         }
+                        ui.separator();
+                        let rows: Vec<usize> = if many {
+                            self.selected.iter().copied().collect()
+                        } else {
+                            vec![i]
+                        };
+                        let any_piece = rows
+                            .iter()
+                            .any(|r| self.entries.get(*r).is_some_and(|e| e.piece.is_some()));
+                        if ui
+                            .button("Scomponi in pezzi")
+                            .on_hover_text(
+                                "Ogni parte staccata della fustella diventa una sagoma a sé; una O resta \
+                                 intera con il suo foro",
+                            )
+                            .clicked()
+                        {
+                            split = Some(rows.clone());
+                            ui.close();
+                        }
+                        if any_piece && ui.button("Riunisci i pezzi").clicked() {
+                            merge = Some(rows);
+                            ui.close();
+                        }
                     });
                 }
             });
@@ -1146,6 +1273,12 @@ impl NestingModule {
         }
         if let Some(rows) = remove {
             self.remove(&rows);
+        }
+        if let Some(rows) = split {
+            self.split(&rows);
+        }
+        if let Some(rows) = merge {
+            self.merge(&rows);
         }
     }
 
@@ -1447,10 +1580,10 @@ impl NestingModule {
         let hover = ui.input(|i| i.pointer.hover_pos());
         let mut tip: Option<String> = None;
         for p in &sheet.placements {
-            let Some((path, page)) = r.entries.get(p.item) else {
+            let Some(key) = r.entries.get(p.item) else {
                 continue;
             };
-            let Some(e) = self.entries.iter().find(|e| e.path == *path && e.page == *page) else {
+            let Some(e) = self.entries.iter().find(|e| e.key() == *key) else {
                 continue;
             };
             let k = e.factor();

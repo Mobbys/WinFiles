@@ -23,7 +23,7 @@ mod spots;
 pub use frame::{BleedMode, BleedSpec};
 pub use nesting::{
     Contours, MAX_SHEET_MM, NestSheet, SheetPiece, die_shape, grow_shape, nest_document, shape_area,
-    shape_bounds,
+    shape_bounds, split_shape,
 };
 pub use paths::{
     Fill, Ink, Line, NewDie, NewInk, PageScan, Part, PathId, PathInfo, Restyle, Restyled, SubPath,

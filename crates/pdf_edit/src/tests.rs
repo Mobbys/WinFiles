@@ -1408,6 +1408,35 @@ fn la_fustella_aperta_diventa_una_sagoma() {
 }
 
 #[test]
+fn la_o_fatta_di_due_cerchi_ha_il_foro_e_resta_un_pezzo() {
+    // Una O (due cerchi, tracciati separati) e un quadratino a parte: due pezzi.
+    let outer = circle(100.0, 100.0, 80.0);
+    let inner = circle(100.0, 100.0, 40.0);
+    let content = leak(format!(
+        "0 0 0 1 K 0.5 w {outer} S {inner} S 220 80 m 260 80 l 260 120 l 220 120 l h S"
+    ));
+    let e = editor(&[page([0.0, 0.0, 300.0, 300.0], 0, content)]);
+    let scan = e.scan_page(0).unwrap();
+    let die: Vec<PathId> = scan.paths.iter().map(|p| p.id).collect();
+    assert_eq!(die.len(), 3);
+    let shape = die_shape(&scan, &die).unwrap();
+    let (r1, r2, q) = (pt_to_mm(80.0), pt_to_mm(40.0), pt_to_mm(40.0));
+    let pi = std::f64::consts::PI;
+    let want = pi * (r1 * r1 - r2 * r2) + q * q;
+    assert!(
+        (shape_area(&shape) - want).abs() < want * 0.02,
+        "{} contro {want}",
+        shape_area(&shape)
+    );
+    let pieces = split_shape(&shape);
+    assert_eq!(pieces.len(), 2);
+    // La O porta con sé il suo foro.
+    let o = pieces.iter().find(|p| p.len() == 2).unwrap();
+    let o_area = shape_area(o);
+    assert!((o_area - pi * (r1 * r1 - r2 * r2)).abs() < o_area * 0.02);
+}
+
+#[test]
 fn i_fogli_del_nesting_ritagliano_le_copie_sulla_sagoma() {
     // Pagina tutta rossa con una fustella tonda: sul foglio resta il cerchio più l'abbondanza.
     let c = circle(150.0, 150.0, 100.0);

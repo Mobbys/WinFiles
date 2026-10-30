@@ -32,8 +32,24 @@ const MAX_FORMS: usize = 2000;
 pub fn die_shape(scan: &PageScan, ids: &[PathId]) -> Result<Contours, EditError> {
     let chosen: Vec<_> = scan.paths.iter().filter(|p| ids.contains(&p.id)).collect();
     let closed = chosen.iter().all(|p| p.closed());
-    if closed && let Ok(shapes) = paths::outline(scan, ids) {
-        return Ok(shapes.into_iter().flatten().collect());
+    if closed {
+        // Ogni tracciato con la sua forma; poi pari-dispari fra tracciati: un contorno dentro
+        // un altro (il buco della O, fatta di due cerchi) è un foro, non si riempie.
+        let mut all: Contours = Vec::new();
+        for p in &chosen {
+            if let Ok(shapes) = paths::outline(scan, &[p.id]) {
+                all.extend(shapes.into_iter().flatten());
+            }
+        }
+        let shape: Contours = all
+            .simplify_shape(FillRule::EvenOdd)
+            .into_iter()
+            .flatten()
+            .filter(|c| c.len() >= 3)
+            .collect();
+        if !shape.is_empty() {
+            return Ok(shape);
+        }
     }
     // Tratti aperti: ognuno diventa una striscia sottile; il contorno esterno del giro è la
     // sagoma.
@@ -64,6 +80,18 @@ pub fn die_shape(scan: &PageScan, ids: &[PathId]) -> Result<Contours, EditError>
         return Err(EditError::Invalid("la fustella non chiude un'area".into()));
     }
     Ok(filled)
+}
+
+/// I pezzi staccati di una sagoma: ogni contorno esterno con i suoi fori (la O resta una, anche
+/// se fatta di due tracciati); una sagoma dentro il foro di un'altra è un pezzo a sé.
+pub fn split_shape(shape: &[Vec<[f64; 2]>]) -> Vec<Contours> {
+    shape
+        .to_vec()
+        .simplify_shape(FillRule::EvenOdd)
+        .into_iter()
+        .map(|s| s.into_iter().filter(|c| c.len() >= 3).collect::<Contours>())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// La sagoma allargata di `by` mm, con gli spigoli vivi (un rettangolo resta un rettangolo).
