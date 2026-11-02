@@ -1,0 +1,29 @@
+name: Chiedi una nuova funzione
+description: Un'idea per fare meglio o più in fretta il lavoro con WinFiles.
+title: "Funzione: "
+labels: ["nuova funzione"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Grazie! **Non allegare file dei clienti**: questa pagina è pubblica. Uno screenshot o un disegno vanno bene (trascinali nel riquadro).
+  - type: textarea
+    id: idea
+    attributes:
+      label: Cosa vorresti
+      description: Cosa dovrebbe fare WinFiles.
+    validations:
+      required: true
+  - type: textarea
+    id: perche
+    attributes:
+      label: Per quale lavoro
+      description: Quando ti servirebbe e come lo fai oggi.
+  - type: input
+    id: versione
+    attributes:
+      label: Versione di WinFiles
+  - type: input
+    id: windows
+    attributes:
+      label: Windows

@@ -1,0 +1,42 @@
+name: Segnala un problema
+description: Qualcosa in WinFiles non funziona come dovrebbe.
+title: "Problema: "
+labels: ["problema"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Grazie! Si può segnalare anche da WinFiles (Aiuto › Segnala un problema), senza account GitHub.
+        **Non allegare file dei clienti**: questa pagina è pubblica. Uno screenshot va bene (trascinalo nel riquadro).
+  - type: textarea
+    id: cosa
+    attributes:
+      label: Cosa è successo
+      description: Cosa hai visto e cosa ti aspettavi invece.
+    validations:
+      required: true
+  - type: textarea
+    id: passi
+    attributes:
+      label: Come rifarlo
+      description: I passi per far succedere di nuovo il problema, se li sai.
+      placeholder: |
+        1. Apro un PDF in Modifica PDF
+        2. Clicco su …
+        3. …
+  - type: input
+    id: scheda
+    attributes:
+      label: Scheda
+      description: Miniature, Modifica PDF, Modifica immagini o Nesting.
+  - type: input
+    id: versione
+    attributes:
+      label: Versione di WinFiles
+      description: La trovi in Aiuto.
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows
