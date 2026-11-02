@@ -219,7 +219,7 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 }
 
 /// Il comando `curl` senza finestra nera su Windows.
-fn curl() -> Command {
+pub(crate) fn curl() -> Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

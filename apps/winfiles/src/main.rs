@@ -32,6 +32,7 @@ mod printing;
 mod quotes;
 mod recent;
 mod reorder;
+mod report;
 mod scan;
 mod shell;
 mod sketch;

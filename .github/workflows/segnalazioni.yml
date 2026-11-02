@@ -1,0 +1,25 @@
+# Aiuto › Segnala un problema (ADR 0029): le issue inviate da WinFiles risultano create da chi ha
+# fatto la chiave, e GitHub non avvisa nessuno delle proprie azioni. Il bot di GitHub ci scrive
+# allora un commento che menziona Mobbys, così arriva la notifica (email e app).
+# GitHub legge questo file solo dal ramo predefinito del repository.
+name: Avviso segnalazioni
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  avvisa:
+    if: contains(github.event.issue.body, 'Inviata da WinFiles')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Commento con la menzione
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMERO: ${{ github.event.issue.number }}
+        run: >
+          gh issue comment "$NUMERO" --repo "$GITHUB_REPOSITORY"
+          --body "@Mobbys nuova segnalazione arrivata da WinFiles."

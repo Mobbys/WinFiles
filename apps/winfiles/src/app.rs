@@ -52,6 +52,10 @@ pub struct WinFilesApp {
     menu11: Option<crate::menu11::Status>,
     menu11_busy: bool,
     menu11_later: bool,
+    /// La finestra di Aiuto › Segnala un problema / Chiedi una nuova funzione.
+    report: Option<crate::report::ReportDialog>,
+    /// Il nome di chi segnala, ricordato fra una segnalazione e l'altra.
+    reporter: String,
     /// I file non supportati tolti con la casella, da rimettere se la si riaccende.
     pub(crate) parked: Vec<winfiles_model::FileEntry>,
     pub(crate) theme: ThemeChoice,
@@ -169,6 +173,14 @@ pub enum Module {
     Nesting,
 }
 
+/// Le schede dei moduli, con il nome che si vede.
+const MODULE_TABS: [(Module, &str); 4] = [
+    (Module::Thumbnails, "Miniature"),
+    (Module::Pdf, "Modifica PDF"),
+    (Module::Images, "Modifica immagini"),
+    (Module::Nesting, "Nesting"),
+];
+
 impl WinFilesApp {
     // Uno per ogni modo di aprire WinFiles dalla riga di comando.
     #[allow(clippy::too_many_arguments)]
@@ -217,6 +229,8 @@ impl WinFilesApp {
             menu11: None,
             menu11_busy: false,
             menu11_later: prefs.menu11_later,
+            report: None,
+            reporter: prefs.reporter.clone(),
             parked: Vec::new(),
             theme: prefs.theme,
             applied: None,
@@ -1577,6 +1591,17 @@ impl WinFilesApp {
                                 self.menu11_check = Some(crate::menu11::check());
                                 self.status = "Controllo il menu di Windows 11…".into();
                             }
+                            ui.separator();
+                            for (kind, label) in [
+                                (crate::report::Kind::Problem, "Segnala un problema…"),
+                                (crate::report::Kind::Feature, "Chiedi una nuova funzione…"),
+                            ] {
+                                if ui.button(label).clicked() {
+                                    ui.close();
+                                    self.open_report(kind);
+                                }
+                            }
+                            ui.separator();
                             dim_label(ui, "Trascina file o cartelle nella finestra per aggiungerli.");
                         });
                     });
@@ -1613,13 +1638,42 @@ impl WinFilesApp {
     /// La striscia in cima alla finestra: il marchio e le schede dei moduli, come le schede di un
     /// browser. La scheda attiva ha il colore della barra dei menu e si unisce a lei.
     /// Ctrl+Tab e Ctrl+Maiusc+Tab passano alla scheda dopo e a quella prima.
+    /// Aiuto › Segnala un problema / Chiedi una nuova funzione: la finestra per scriverla.
+    fn open_report(&mut self, kind: crate::report::Kind) {
+        let module = MODULE_TABS
+            .iter()
+            .find(|(m, _)| *m == self.module)
+            .map_or("Miniature", |(_, name)| *name);
+        self.report = Some(crate::report::ReportDialog::new(
+            kind,
+            module,
+            self.reporter.clone(),
+        ));
+    }
+
+    /// La finestra della segnalazione, se è aperta.
+    fn report_window(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = self.report.as_mut() else {
+            return;
+        };
+        let text = match dialog.show(ctx) {
+            None => return,
+            Some(crate::report::Answer::Close { name }) => {
+                self.reporter = name.trim().to_string();
+                self.report = None;
+                return;
+            }
+            Some(crate::report::Answer::Status(text)) => text,
+        };
+        if self.module == Module::Thumbnails {
+            self.status = text;
+        } else {
+            self.set_module_status(text);
+        }
+    }
+
     fn module_tabs(&mut self, ui: &mut egui::Ui) {
-        const TABS: [(Module, &str); 4] = [
-            (Module::Thumbnails, "Miniature"),
-            (Module::Pdf, "Modifica PDF"),
-            (Module::Images, "Modifica immagini"),
-            (Module::Nesting, "Nesting"),
-        ];
+        const TABS: [(Module, &str); 4] = MODULE_TABS;
         let t = Tokens::get(ui.ctx());
         let (next, previous) = ui.input_mut(|i| {
             (
@@ -2866,6 +2920,7 @@ impl WinFilesApp {
             inks: self.pdf.inks.clone(),
             nesting: self.nesting.settings.clone(),
             image_die: self.images.die.settings.clone(),
+            reporter: self.reporter.clone(),
         }
     }
 
@@ -3078,6 +3133,7 @@ impl eframe::App for WinFilesApp {
             self.module_output();
             self.pdf.windows(&ctx);
             self.notes_window(&ctx);
+            self.report_window(&ctx);
             self.unsaved_dialog(&ctx);
             return;
         }
@@ -3094,6 +3150,7 @@ impl eframe::App for WinFilesApp {
                     bottom: 2,
                 }))
                 .show(ui, |ui| self.nesting.body(ui, unit));
+            self.report_window(&ctx);
             self.unsaved_dialog(&ctx);
             return;
         }
@@ -3112,6 +3169,7 @@ impl eframe::App for WinFilesApp {
                 .show(ui, |ui| self.images.body(ui, unit));
             self.module_output();
             self.images.windows(&ctx);
+            self.report_window(&ctx);
             self.unsaved_dialog(&ctx);
             return;
         }
@@ -3148,6 +3206,7 @@ impl eframe::App for WinFilesApp {
             }
         });
         self.notes_window(&ctx);
+        self.report_window(&ctx);
         self.unsaved_dialog(&ctx);
     }
 
