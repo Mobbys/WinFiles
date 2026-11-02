@@ -106,6 +106,8 @@ pub struct Prefs {
     pub nesting: crate::nesting::NestSettings,
     /// Le scelte di fustella e abbondanza in Modifica immagini.
     pub image_die: crate::images::DieSettings,
+    /// Il nome scritto l'ultima volta in Aiuto › Segnala un problema.
+    pub reporter: String,
 }
 
 impl Prefs {
@@ -248,6 +250,7 @@ mod tests {
                 radius: 8.0,
                 ..crate::images::DieSettings::default()
             },
+            reporter: "Mario".into(),
         };
         save_to(&file, &prefs).unwrap();
         assert_eq!(load_from(&file), prefs);
