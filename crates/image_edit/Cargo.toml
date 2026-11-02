@@ -1,0 +1,33 @@
+[package]
+name = "winfiles-image-edit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+description = "Modifica delle immagini: misure, ritaglio, rotazione, ridimensionamento, salvataggio"
+
+[lib]
+name = "winfiles_image_edit"
+path = "src/lib.rs"
+
+[dependencies]
+winfiles-geom.workspace = true
+winfiles-model.workspace = true
+# Legge la risoluzione dichiarata dal file (JFIF, EXIF, pHYs, TIFF): già fatto per le misure.
+winfiles-formats.workspace = true
+# Foto RAW e file di Photoshop (ADR 0017).
+winfiles-photo.workspace = true
+thiserror.workspace = true
+image.workspace = true
+# Scrittura dei TIFF con la risoluzione e il profilo ICC (vedi il commento nel Cargo.toml in alto).
+tiff.workspace = true
+photocraft-heif.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+photocraft-raw = { workspace = true, features = ["testgen"] }
+photocraft-psd.workspace = true

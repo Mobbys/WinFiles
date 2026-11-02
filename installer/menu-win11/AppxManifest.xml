@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Il pacchetto "con posizione esterna" che mette "Apri in WinFiles" nel menu corto di Esplora file
+     di Windows 11 (ADR 0022). Non contiene il programma: punta alla cartella dove l'MSI ha
+     installato WinFiles.exe e winfiles_menu11.dll. La CI sostituisce la versione 0.0.0.0, lo crea con
+     MakeAppx e lo firma con il certificato Winsport; WinFiles lo registra al primo avvio.
+     Il Publisher deve essere identico al soggetto del certificato. -->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+  xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap10 desktop4 desktop5 desktop6 com rescap">
+  <Identity Name="Winsport.WinFiles" Publisher="CN=Winsport" Version="0.0.0.0" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>WinFiles</DisplayName>
+    <PublisherDisplayName>Winsport</PublisherDisplayName>
+    <Logo>Assets\logo-50.png</Logo>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+    <!-- WinFiles scrive le impostazioni e i file dove ha sempre scritto, non in una copia del
+         pacchetto. -->
+    <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
+    <desktop6:RegistryWriteVirtualization>disabled</desktop6:RegistryWriteVirtualization>
+  </Properties>
+  <Resources>
+    <Resource Language="it-it" />
+  </Resources>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+  </Capabilities>
+  <Applications>
+    <Application Id="WinFiles" Executable="WinFiles.exe" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
+      <!-- Nessuna seconda icona nel menu Start: c'è già quella dell'MSI. -->
+      <uap:VisualElements AppListEntry="none" DisplayName="WinFiles" Description="Stampa delle miniature di file e cartelle"
+        BackgroundColor="transparent" Square150x150Logo="Assets\logo-150.png" Square44x44Logo="Assets\logo-44.png" />
+      <Extensions>
+        <desktop4:Extension Category="windows.fileExplorerContextMenus">
+          <desktop4:FileExplorerContextMenus>
+            <desktop5:ItemType Type="*">
+              <desktop5:Verb Id="ApriInWinFiles" Clsid="6E2C9B4A-3D71-4F85-A0C2-91B7E5D4F318" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type="Directory">
+              <desktop5:Verb Id="ApriInWinFiles" Clsid="6E2C9B4A-3D71-4F85-A0C2-91B7E5D4F318" />
+            </desktop5:ItemType>
+          </desktop4:FileExplorerContextMenus>
+        </desktop4:Extension>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer DisplayName="Apri in WinFiles">
+              <com:Class Id="6E2C9B4A-3D71-4F85-A0C2-91B7E5D4F318" Path="winfiles_menu11.dll" ThreadingModel="STA" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </com:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>

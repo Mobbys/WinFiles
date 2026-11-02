@@ -1,0 +1,22 @@
+WinFiles
+Copyright © 2026 Mobbys (https://github.com/Mobbys). Tutti i diritti riservati.
+
+Il codice sorgente di WinFiles è pubblicato perché si possa leggere. Non è software libero:
+senza un permesso scritto del titolare non è consentito copiarlo, modificarlo, distribuirlo o
+usarlo in altri programmi, in tutto o in parte.
+
+È consentito scaricare e usare i programmi pubblicati nei rilasci ufficiali di questo repository
+(https://github.com/Mobbys/WinFiles/releases).
+
+Le librerie e i caratteri di terze parti inclusi o usati da WinFiles restano sotto le loro licenze,
+elencate in ATTRIBUTION.md e nei file di licenza delle rispettive cartelle (per esempio
+vendor/hayro-interpret).
+
+IL SOFTWARE È FORNITO "COSÌ COM'È", SENZA GARANZIE DI ALCUN TIPO, ESPRESSE O IMPLICITE. IN NESSUN
+CASO IL TITOLARE SARÀ RESPONSABILE DI DANNI DERIVANTI DALL'USO DEL SOFTWARE.
+
+---
+
+All rights reserved. The source code is published for reading only; copying, modification,
+redistribution or reuse requires the copyright holder's written permission. Official release
+binaries may be downloaded and used.

@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- L'installer MSI di WinFiles (ADR 0014). Si compila con wixl (msitools), in CI e a mano:
+     installer/crea-msi.sh winfiles.exe WinFiles.msi
+     Installazione per l'utente, senza permessi di amministratore: %LocalAppData%\Programs\WinFiles,
+     collegamento nel menu Start e sul Desktop, file .winfiles che si aprono con WinFiles,
+     "Apri in WinFiles" nel tasto destro di Esplora file. Una versione nuova
+     sostituisce la vecchia (stesso UpgradeCode, che non cambia mai). -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="WinFiles" Language="1040" Codepage="1252" Version="$(var.Version)"
+           Manufacturer="Winsport" UpgradeCode="6B1F2B7E-4D0A-4F36-9C55-3A7E2E1D8C41">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser"
+             Description="WinFiles $(var.Version)" Manufacturer="Winsport" Languages="1040" SummaryCodepage="1252" />
+    <Property Id="ALLUSERS" Value="2" />
+    <Property Id="MSIINSTALLPERUSER" Value="1" />
+    <Property Id="ARPPRODUCTICON" Value="WinFilesIcon" />
+    <Icon Id="WinFilesIcon" SourceFile="$(var.Icon)" />
+    <MajorUpgrade DowngradeErrorMessage="È già installata una versione più recente di WinFiles." />
+    <Media Id="1" Cabinet="winfiles.cab" EmbedCab="yes" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsFolder" Name="Programs">
+          <Directory Id="INSTALLDIR" Name="WinFiles">
+            <Component Id="Programma" Guid="0E3C1F6A-8B2D-4C57-A1E9-5D7F3B2C6A10">
+              <File Id="WinFilesExe" Name="WinFiles.exe" Source="$(var.Exe)" />
+<?ifdef var.Menu ?>
+              <!-- La voce del menu corto di Windows 11 (ADR 0022): la DLL e il pacchetto firmato
+                   che WinFiles registra al primo avvio. Senza certificato in CI non ci sono. -->
+              <File Id="MenuDll" Name="winfiles_menu11.dll" Source="$(var.MenuDll)" />
+              <File Id="MenuMsix" Name="WinFilesMenu.msix" Source="$(var.Menu)" />
+<?endif ?>
+              <RegistryValue Root="HKCU" Key="Software\WinFiles" Name="Cartella" Type="string" Value="[INSTALLDIR]" KeyPath="yes" />
+              <RemoveFolder Id="RimuoviCartella" On="uninstall" />
+            </Component>
+            <Component Id="FileWinfiles" Guid="7C2A9E41-3F6B-4D18-B0A5-9E4C2D7F1B36">
+              <RegistryValue Root="HKCU" Key="Software\Classes\.winfiles" Type="string" Value="WinFiles.Lavoro" KeyPath="yes" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.Lavoro" Type="string" Value="Lavoro WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.Lavoro\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.Lavoro\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\Applications\WinFiles.exe\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; &quot;%1&quot;" />
+            </Component>
+            <!-- "Apri in WinFiles" nel tasto destro di Esplora file, su file, cartelle e sfondo della
+                 cartella aperta. Esplora file avvia WinFiles una volta per file: con l'opzione aggiungi i
+                 file finiscono tutti nella stessa finestra (instance.rs). Su Windows 11 la voce sta
+                 in "Mostra altre opzioni". -->
+            <Component Id="MenuTastoDestro" Guid="5B8E0C27-91D4-4F3A-A6E2-7C1D3F9B4E85">
+              <RegistryValue Root="HKCU" Key="Software\WinFiles" Name="MenuTastoDestro" Type="integer" Value="1" KeyPath="yes" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\*\shell\WinFiles" Type="string" Value="Apri in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\*\shell\WinFiles" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\*\shell\WinFiles" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\*\shell\WinFiles\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --aggiungi &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\Directory\shell\WinFiles" Type="string" Value="Apri in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\Directory\shell\WinFiles" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\Directory\shell\WinFiles" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\Directory\shell\WinFiles\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --aggiungi &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\Directory\Background\shell\WinFiles" Type="string" Value="Apri in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\Directory\Background\shell\WinFiles" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\Directory\Background\shell\WinFiles" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\Directory\Background\shell\WinFiles\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --aggiungi &quot;%V&quot;" />
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Component Id="MenuStart" Guid="A4D85B13-6E2F-4A97-8C31-2B6F9E0D7A58">
+          <Shortcut Id="CollegamentoMenu" Name="WinFiles" Description="Stampa delle miniature di file e cartelle"
+                    Target="[INSTALLDIR]WinFiles.exe" WorkingDirectory="INSTALLDIR" Icon="WinFilesIcon" />
+          <RegistryValue Root="HKCU" Key="Software\WinFiles" Name="MenuStart" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+      <!-- L'icona sul Desktop, come quella della vecchia WinFile 4.9: chi passa da lì la ritrova. -->
+      <Directory Id="DesktopFolder">
+        <Component Id="Desktop" Guid="3E263354-72F4-4F20-9702-99BFCAFBB417">
+          <Shortcut Id="CollegamentoDesktop" Name="WinFiles" Description="Stampa delle miniature di file e cartelle"
+                    Target="[INSTALLDIR]WinFiles.exe" WorkingDirectory="INSTALLDIR" Icon="WinFilesIcon" />
+          <RegistryValue Root="HKCU" Key="Software\WinFiles" Name="Desktop" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </Directory>
+
+    <!-- Alla disinstallazione (non all'aggiornamento) WinFiles toglie il pacchetto del menu di
+         Windows 11, finché il programma c'è ancora. -->
+    <CustomAction Id="TogliMenuWindows11" FileKey="WinFilesExe" ExeCommand="--togli-menu" Execute="immediate" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="TogliMenuWindows11" Before="RemoveFiles">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+    </InstallExecuteSequence>
+
+    <Feature Id="Completa" Title="WinFiles" Level="1">
+      <ComponentRef Id="Programma" />
+      <ComponentRef Id="FileWinfiles" />
+      <ComponentRef Id="MenuTastoDestro" />
+      <ComponentRef Id="MenuStart" />
+      <ComponentRef Id="Desktop" />
+    </Feature>
+  </Product>
+</Wix>

@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  controlli:
+    name: Controlli (fmt, clippy, test, livelli)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask ci
+
+  licenze:
+    name: Licenze e vulnerabilità
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  windows:
+    name: Windows (test ed eseguibile)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+      - run: cargo build --release -p winfiles -p winfiles-menu11
+      # Il pacchetto del menu di Windows 11 (ADR 0022), firmato con un certificato di prova,
+      # registrato su questo PC e interrogato come fa Esplora file.
+      - name: Menu di Windows 11 (prova)
+        shell: powershell
+        run: installer/crea-pacchetto-menu.ps1 -Versione 0.0.1 -Dll target/release/winfiles_menu11.dll -Exe target/release/winfiles.exe -Uscita menu -Prova
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winfiles-windows
+          path: target/release/winfiles.exe
+          if-no-files-found: error
+
+  installer:
+    name: Installer MSI
+    needs: windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: winfiles-windows
+          path: windows
+      - run: sudo apt-get update -q && sudo apt-get install -y -q wixl
+      - run: installer/crea-msi.sh windows/winfiles.exe WinFiles.msi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winfiles-installer
+          path: WinFiles.msi
+          if-no-files-found: error

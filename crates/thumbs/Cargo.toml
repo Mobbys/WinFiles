@@ -1,0 +1,25 @@
+[package]
+name = "winfiles-thumbs"
+description = "Miniature di immagini, PDF, AI ed EPS per l'anteprima."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+winfiles-model.workspace = true
+winfiles-formats.workspace = true
+# Foto RAW e file di Photoshop (ADR 0017).
+winfiles-photo.workspace = true
+thiserror.workspace = true
+photocraft-heif.workspace = true
+image.workspace = true
+hayro.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+photocraft-raw = { workspace = true, features = ["testgen"] }
+photocraft-psd.workspace = true

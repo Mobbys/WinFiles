@@ -1,0 +1,47 @@
+[package]
+name = "winfiles"
+description = "WinFiles: stampa delle miniature di file e cartelle su A4 e A3."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+build = "build.rs"
+
+[[bin]]
+name = "winfiles"
+path = "src/main.rs"
+
+[features]
+# Disegno con OpenGL invece di wgpu: per PC vecchi senza DirectX 12 e per gli screenshot in CI.
+opengl = ["eframe/glow"]
+
+[dependencies]
+winfiles-geom.workspace = true
+winfiles-model.workspace = true
+winfiles-layout.workspace = true
+winfiles-formats.workspace = true
+winfiles-thumbs.workspace = true
+winfiles-scene.workspace = true
+winfiles-pdf-out.workspace = true
+winfiles-pdf-edit.workspace = true
+winfiles-image-edit.workspace = true
+# Il modulo immagini usa `image` per disegnare l'anteprima e la lente senza ricopiare i pixel.
+image.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui_extras.workspace = true
+craft-ui.workspace = true
+craft-print.workspace = true
+rfd.workspace = true
+arboard.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# L'icona e la versione dentro winfiles.exe (Esplora file, barra delle applicazioni): ADR 0014.
+[build-dependencies]
+winresource = "0.1.23"
+
+[lints]
+workspace = true
