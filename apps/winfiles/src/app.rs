@@ -147,7 +147,10 @@ pub struct WinFilesApp {
     prefs: crate::prefs::Prefs,
     prefs_checked: f64,
     /// L'ultima impaginazione e il lavoro da cui viene: si rifà solo quando il lavoro cambia.
-    layout_cache: Option<(Project, std::rc::Rc<Pages>)>,
+    layout_cache: Option<(Project, crate::filter::FileFilter, std::rc::Rc<Pages>)>,
+    /// Il lavoro come lo vedono anteprima, stampa e PDF: senza quello che la ricerca nell'elenco
+    /// nasconde (`FileFilter::apply`). Gli indici dei file sono quelli di `project`.
+    pub(crate) shown: Project,
     /// Nel nesting: la scala 1:N in uso (scelta o automatica).
     pub(crate) nesting_scale: Option<u32>,
     /// Con "Su N fogli", le colonne e il verso scelti all'ultima impaginazione.
@@ -277,6 +280,7 @@ impl WinFilesApp {
             nesting_scale: None,
             fit_choice: None,
             layout_cache: None,
+            shown: Project::default(),
             module: Module::Thumbnails,
             pdf: crate::pdf::PdfModule::new(ctx),
             images: crate::images::ImagesModule::new(ctx),
@@ -383,11 +387,11 @@ impl WinFilesApp {
                 Some(summary) if i < summary_sheets => summary
                     .sheets
                     .get(i)
-                    .map(|s| crate::summary::compose(ctx, s, summary, &self.project)),
+                    .map(|s| crate::summary::compose(ctx, s, summary, &self.shown)),
                 _ => sheets
                     .grid
                     .get(i - summary_sheets)
-                    .map(|s| canvas::compose(ctx, s, &self.project, &self.slots)),
+                    .map(|s| canvas::compose(ctx, s, &self.shown, &self.slots)),
             })
             .collect()
     }
@@ -2144,11 +2148,18 @@ impl WinFilesApp {
             bar.label(egui::RichText::new(detail).color(t.text_dim));
         }
 
+        // Con la ricerca attiva nell'elenco, una striscia lo ricorda: si stampa solo quello.
+        let mut top = full.top() + 48.0;
+        if self.filter.is_active() && !self.project.files.is_empty() {
+            let strip = Rect::from_min_max(
+                egui::pos2(full.left() + 8.0, top),
+                egui::pos2(full.right() - 8.0, top + 34.0),
+            );
+            self.filter_strip(ui, strip);
+            top = strip.bottom() + 6.0;
+        }
         // Il fondo su cui sta il foglio.
-        let board = Rect::from_min_max(
-            egui::pos2(full.left() + 8.0, full.top() + 48.0),
-            full.max - vec2(8.0, 8.0),
-        );
+        let board = Rect::from_min_max(egui::pos2(full.left() + 8.0, top), full.max - vec2(8.0, 8.0));
         if board.width() < 20.0 || board.height() < 20.0 {
             return;
         }
@@ -2171,6 +2182,14 @@ impl WinFilesApp {
         };
         if self.project.files.is_empty() {
             empty_hint(ui, board);
+        } else if self.slots.is_empty() && self.filter.is_active() {
+            ui.painter().text(
+                board.center(),
+                egui::Align2::CENTER_CENTER,
+                "Nessun file corrisponde alla ricerca",
+                semibold(17.0),
+                t.text_strong,
+            );
         }
         let summary_sheets = pages.summary.as_ref().map_or(0, |s| s.sheets.len());
         // I fogli di riepilogo vengono prima di quelli delle miniature.
@@ -2181,7 +2200,7 @@ impl WinFilesApp {
                 .zoom
                 .unwrap_or_else(|| canvas::fit_zoom(sheet.size, board.size()));
             self.shown_zoom = scale;
-            let scene = crate::summary::compose(ui.ctx(), sheet, summary, &self.project);
+            let scene = crate::summary::compose(ui.ctx(), sheet, summary, &self.shown);
             let offset = self.flip_offset(ui, sheet.size, scale);
             let scrolled = scroll_area(offset).show(ui, |ui| {
                 crate::summary::draw(ui, sheet, &scene, summary, &mut self.thumbs, &self.marked, scale)
@@ -2201,7 +2220,7 @@ impl WinFilesApp {
             .zoom
             .unwrap_or_else(|| canvas::fit_zoom(sheet.size, board.size()));
         self.shown_zoom = scale;
-        let scene = canvas::compose(ui.ctx(), sheet, &self.project, &self.slots);
+        let scene = canvas::compose(ui.ctx(), sheet, &self.shown, &self.slots);
         let offset = self.flip_offset(ui, sheet.size, scale);
         let scrolled = scroll_area(offset).show(ui, |ui| {
             canvas::draw(
@@ -2415,6 +2434,63 @@ pub(crate) fn card(ui: &egui::Ui, rect: Rect) {
         Stroke::new(1.0, t.border),
         egui::StrokeKind::Inside,
     );
+}
+
+impl WinFilesApp {
+    /// La striscia sopra l'anteprima quando la ricerca nell'elenco nasconde dei file: dice
+    /// quanti ne vanno in anteprima, stampa e PDF, e li rimette tutti con un clic.
+    fn filter_strip(&mut self, ui: &mut egui::Ui, strip: Rect) {
+        let t = Tokens::get(ui.ctx());
+        let p = ui.painter();
+        p.rect(
+            strip,
+            t.radius,
+            t.panel_darker,
+            egui::Stroke::new(1.0, t.border),
+            egui::StrokeKind::Inside,
+        );
+        // Il bordo sinistro nel colore d'accento, come gli avvisi di Windows 11.
+        let bar = Rect::from_min_size(strip.min + vec2(0.0, 6.0), vec2(3.0, strip.height() - 12.0));
+        p.rect_filled(bar, 1.5, t.accent);
+        let mut row = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(strip.shrink2(vec2(12.0, 0.0)))
+                .layout(egui::Layout::left_to_right(Align::Center)),
+        );
+        row.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        let found = self.filter.count(&self.project);
+        let all = self.project.files.len();
+        let mut clear = false;
+        row.with_layout(egui::Layout::right_to_left(Align::Center), |row| {
+            clear = row
+                .button("Mostra tutti")
+                .on_hover_text("Svuota la ricerca e toglie i tipi scelti nell'elenco dei file")
+                .clicked();
+            row.with_layout(egui::Layout::left_to_right(Align::Center), |row| {
+                icons::paint(
+                    row,
+                    "search",
+                    Rect::from_center_size(
+                        row.cursor().min + vec2(7.0, strip.height() * 0.5),
+                        Vec2::splat(14.0),
+                    ),
+                    t.text_dim,
+                );
+                row.add_space(20.0);
+                row.label(
+                    egui::RichText::new(format!("Ricerca attiva: {found} di {all} file"))
+                        .font(semibold(13.0))
+                        .color(t.text_strong),
+                );
+                row.label(
+                    egui::RichText::new("solo questi vanno in anteprima, stampa e PDF").color(t.text_dim),
+                );
+            });
+        });
+        if clear {
+            self.filter = Default::default();
+        }
+    }
 }
 
 /// Avviso al centro dell'anteprima vuota.
@@ -2704,16 +2780,19 @@ impl WinFilesApp {
     /// note, impostazioni): con migliaia di file misurare tutti i testi a ogni fotogramma
     /// rallenterebbe l'anteprima.
     fn pages(&mut self, ctx: &egui::Context) -> std::rc::Rc<Pages> {
-        if let Some((key, pages)) = &self.layout_cache
+        if let Some((key, filter, pages)) = &self.layout_cache
             && *key == self.project
+            && *filter == self.filter
         {
             return pages.clone();
         }
-        self.slots = captions::slots(&self.project);
+        // Come nella 4.9, i file che la ricerca nasconde nell'elenco non vanno sui fogli.
+        self.shown = self.filter.apply(&self.project);
+        self.slots = captions::slots(&self.shown);
         // Una miniatura per foglio (o l'unica del lavoro) riempie il foglio, girato come il file:
         // i testi si misurano come con una colonna sola, sul foglio verticale (il più stretto).
-        let mut project = std::borrow::Cow::Borrowed(&self.project);
-        if full_pages(&self.project, &self.slots).is_some() {
+        let mut project = std::borrow::Cow::Borrowed(&self.shown);
+        if full_pages(&self.shown, &self.slots).is_some() {
             let p = project.to_mut();
             p.print.columns = 1;
             p.print.orientation = winfiles_geom::Orientation::Portrait;
@@ -2730,7 +2809,7 @@ impl WinFilesApp {
         self.nesting_scale = (print.view == View::Nesting && !items.is_empty())
             .then(|| winfiles_layout::nesting_denominator(&print, &items));
         self.fit_choice = None;
-        let grid = if fits(&self.project, &self.slots) {
+        let grid = if fits(&self.shown, &self.slots) {
             // Su N fogli: per ogni prova di colonne e verso si rimisurano titolo e didascalie.
             let mut trial_project = project.clone();
             winfiles_layout::fit_to_sheets(&print, print.fit_sheets, |trial| {
@@ -2760,7 +2839,7 @@ impl WinFilesApp {
             Ok(Sheets { summary, grid })
         });
         let pages = std::rc::Rc::new(pages);
-        self.layout_cache = Some((self.project.clone(), pages.clone()));
+        self.layout_cache = Some((self.project.clone(), self.filter.clone(), pages.clone()));
         pages
     }
 }
