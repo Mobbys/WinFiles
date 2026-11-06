@@ -801,7 +801,11 @@ impl NestingModule {
                 "{} su {} copie · rotolo lungo {}",
                 o.placed,
                 total,
-                format_length(len, Unit::Cm)
+                if len >= 10_000.0 {
+                    metres(len)
+                } else {
+                    format_length(len, Unit::Cm)
+                }
             ),
             None => format!(
                 "{} su {} copie · {} {}",
@@ -1765,7 +1769,11 @@ impl NestingModule {
             resp.on_hover_text("Ctrl+rotella per ingrandire, rotella o trascina per spostare");
         }
         // La misura del foglio sotto.
-        let caption = format_size(Size::new(sw, sh), Unit::Cm);
+        let caption = if sh >= 10_000.0 {
+            format!("{} × {}", format_length(sw, Unit::Cm), metres(sh))
+        } else {
+            format_size(Size::new(sw, sh), Unit::Cm)
+        };
         painter.text(
             pos2(paper.center().x, (paper.bottom() + 4.0).min(room.bottom() + 4.0)),
             egui::Align2::CENTER_TOP,
@@ -1808,8 +1816,8 @@ impl NestingModule {
                 if s.support == Support::Roll {
                     hint(
                         ui,
-                        "Il rotolo si taglia alla lunghezza usata; oltre la lunghezza massima si passa a un altro \
-                         pezzo (anche 50 m e oltre).",
+                        "Il rotolo si taglia alla lunghezza usata; oltre la lunghezza massima (anche 50 m e più) \
+                         si passa a un altro pezzo.",
                     );
                 }
                 ui.add_space(12.0);
