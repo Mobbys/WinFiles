@@ -12,8 +12,9 @@ pub const MAX_MARKER_POINTS: usize = 4000;
 pub const MAX_PER_PAGE: usize = 500;
 /// Lettere al più di un testo.
 pub const MAX_TEXT_CHARS: usize = 4000;
-/// Quanto lontano dalla miniatura può stare un punto, in frazioni della miniatura.
-const REACH: f64 = 2.0;
+/// Quanto lontano dalla miniatura può stare un punto, in frazioni della miniatura: anche una
+/// miniatura piccola deve poter raggiungere ogni angolo del foglio.
+const REACH: f64 = 100.0;
 
 /// Un colore RGB con opacità.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +65,10 @@ pub enum Annotation {
         start_arrow: bool,
         #[serde(default)]
         end_arrow: bool,
+        /// Il capo `b` attaccato a un'altra miniatura, per una linea a cavallo di due: segue
+        /// quella. Se quella miniatura non è sullo stesso foglio vale `b`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end: Option<Anchor>,
     },
     /// Un rettangolo tra due angoli opposti.
     Rettangolo {
@@ -102,7 +107,20 @@ pub enum Annotation {
         b: Point,
         color: Rgba,
         width: f64,
+        /// La misura scritta a mano, in mm: questa quota è la master e le altre della stessa
+        /// pagina si leggono in proporzione.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<f64>,
     },
+}
+
+/// Un punto attaccato a un'altra miniatura: il file (per percorso, che non cambia riordinando),
+/// la pagina e il punto in frazioni di quella miniatura.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Anchor {
+    pub path: std::path::PathBuf,
+    pub page: usize,
+    pub at: Point,
 }
 
 impl Annotation {
@@ -149,10 +167,27 @@ impl Annotation {
         };
         let width = |w: &mut f64| *w = clean(*w, 0.5).clamp(0.05, 20.0);
         match self {
-            Annotation::Linea { a, b, width: w, .. } | Annotation::Quota { a, b, width: w, .. } => {
+            Annotation::Linea {
+                a, b, width: w, end, ..
+            } => {
                 point(a);
                 point(b);
                 width(w);
+                if let Some(e) = end {
+                    point(&mut e.at);
+                }
+            }
+            Annotation::Quota {
+                a,
+                b,
+                width: w,
+                value,
+                ..
+            } => {
+                point(a);
+                point(b);
+                width(w);
+                *value = value.filter(|v| v.is_finite() && *v > 0.0 && *v <= 1_000_000.0);
             }
             Annotation::Rettangolo { a, b, style, .. } | Annotation::Ovale { a, b, style } => {
                 point(a);
@@ -207,12 +242,13 @@ mod tests {
             width: f64::INFINITY,
             start_arrow: false,
             end_arrow: true,
+            end: None,
         };
         assert!(a.sanitize());
         let Annotation::Linea { a: p, width, .. } = a else {
             panic!("tipo cambiato");
         };
-        assert_eq!(p, (0.5, 3.0));
+        assert_eq!(p, (0.5, 101.0));
         assert_eq!(width, 0.5);
     }
 

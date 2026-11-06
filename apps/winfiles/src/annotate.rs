@@ -13,7 +13,7 @@ use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use winfiles_geom::{Rect as MmRect, Unit};
 use winfiles_layout::Sheet;
-use winfiles_model::{Annotation, MAX_PER_PAGE, PageInfo, Point, Project, Rgba, ShapeStyle};
+use winfiles_model::{Anchor, Annotation, MAX_PER_PAGE, PageInfo, Point, Project, Rgba, ShapeStyle};
 use winfiles_scene::Weight;
 
 use crate::captions::Slot;
@@ -299,15 +299,72 @@ fn text_box(at: (f64, f64), w: f64, h: f64, size: f64, background: bool, width: 
     MmRect::new(at.0, at.1, w + 2.0 * pad, h + 2.0 * pad)
 }
 
+/// Dove sta sul foglio la miniatura di una pagina di un file (per percorso), se c'è.
+pub type Placed<'a> = dyn Fn(&std::path::Path, usize) -> Option<MmRect> + 'a;
+
 /// Disegna nella scena le annotazioni `list` della miniatura `image`; `page` dà la misura vera
-/// alle quote.
-pub fn draw(sk: &mut Sketch<'_>, image: MmRect, list: &[Annotation], page: Option<&PageInfo>, unit: Unit) {
+/// alle quote, `placed` le altre miniature del foglio per le linee a cavallo di due.
+pub fn draw(
+    sk: &mut Sketch<'_>,
+    image: MmRect,
+    list: &[Annotation],
+    page: Option<&PageInfo>,
+    unit: Unit,
+    placed: &Placed<'_>,
+) {
+    let scale = quote_scale(list, page);
     for a in list {
-        draw_one(sk, image, a, page, unit);
+        draw_one(sk, image, &resolve(a, image, placed), page, unit, scale);
     }
 }
 
-fn draw_one(sk: &mut Sketch<'_>, image: MmRect, a: &Annotation, page: Option<&PageInfo>, unit: Unit) {
+/// `a` con il capo attaccato a un'altra miniatura portato nelle frazioni di `image`, come se
+/// fosse suo: così si disegna, si sceglie e si tira come le altre linee.
+pub fn resolve(a: &Annotation, image: MmRect, placed: &Placed<'_>) -> Annotation {
+    let mut out = a.clone();
+    if let Annotation::Linea { b, end, .. } = &mut out
+        && let Some(e) = end.take()
+        && let Some(other) = placed(&e.path, e.page)
+    {
+        *b = to_frac(image, to_mm(other, e.at));
+    }
+    out
+}
+
+/// La scala delle quote di una pagina: misura scritta diviso misura vera della master; 1 senza.
+pub fn quote_scale(list: &[Annotation], page: Option<&PageInfo>) -> f64 {
+    let Some(page) = page else { return 1.0 };
+    list.iter()
+        .find_map(|q| match q {
+            Annotation::Quota {
+                a, b, value: Some(v), ..
+            } => {
+                let t = true_length(page, *a, *b);
+                (t > 1e-9).then(|| v / t)
+            }
+            _ => None,
+        })
+        .unwrap_or(1.0)
+}
+
+/// La misura che mostra una quota, in mm, con la scala `scale` della sua pagina.
+pub fn quote_value(q: &Annotation, page: Option<&PageInfo>, scale: f64) -> Option<f64> {
+    match q {
+        Annotation::Quota { a, b, value, .. } => {
+            value.or_else(|| page.map(|p| true_length(p, *a, *b) * scale))
+        }
+        _ => None,
+    }
+}
+
+fn draw_one(
+    sk: &mut Sketch<'_>,
+    image: MmRect,
+    a: &Annotation,
+    page: Option<&PageInfo>,
+    unit: Unit,
+    scale: f64,
+) {
     let m = |p: Point| to_mm(image, p);
     match a {
         Annotation::Linea {
@@ -317,7 +374,21 @@ fn draw_one(sk: &mut Sketch<'_>, image: MmRect, a: &Annotation, page: Option<&Pa
             width,
             start_arrow,
             end_arrow,
-        } => arrow_line(sk, m(*a), m(*b), c32(*color), *width, *start_arrow, *end_arrow),
+            ..
+        } => {
+            // Un capo attaccato a una miniatura finita su un altro foglio non esce dal foglio.
+            let size = sk.page.size;
+            let keep = |(x, y): (f64, f64)| (x.clamp(0.0, size.w), y.clamp(0.0, size.h));
+            arrow_line(
+                sk,
+                keep(m(*a)),
+                keep(m(*b)),
+                c32(*color),
+                *width,
+                *start_arrow,
+                *end_arrow,
+            );
+        }
         Annotation::Rettangolo { a, b, style, rounded } => {
             let r = rect_of(m(*a), m(*b));
             if r.w <= 0.0 || r.h <= 0.0 {
@@ -383,9 +454,24 @@ fn draw_one(sk: &mut Sketch<'_>, image: MmRect, a: &Annotation, page: Option<&Pa
                 sk.path(pts, false, None, Some((c32(*color), *width)));
             }
         }
-        Annotation::Quota { a, b, color, width } => {
-            let real = page.map(|p| true_length(p, *a, *b));
-            quote(sk, m(*a), m(*b), c32(*color), *width, real, unit);
+        Annotation::Quota {
+            a: pa,
+            b: pb,
+            color,
+            width,
+            value,
+        } => {
+            let shown = quote_value(a, page, scale);
+            quote(
+                sk,
+                m(*pa),
+                m(*pb),
+                c32(*color),
+                *width,
+                shown,
+                value.is_some(),
+                unit,
+            );
         }
     }
 }
@@ -454,6 +540,7 @@ fn arrow_line(
     sk.path(vec![from, to], false, None, Some((color, width)));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn quote(
     sk: &mut Sketch<'_>,
     a: (f64, f64),
@@ -461,6 +548,7 @@ fn quote(
     color: Color32,
     width: f64,
     real: Option<f64>,
+    master: bool,
     unit: Unit,
 ) {
     let len = (b.0 - a.0).hypot(b.1 - a.1);
@@ -502,13 +590,19 @@ fn quote(
         w + 2.0 * pad,
         h + 1.2 * pad,
     );
-    sk.rect(r, 0.8, Some(Color32::from_white_alpha(235)), Some((color, 0.2)));
+    // La master, scritta a mano, ha l'etichetta piena: si vede quale dà la scala.
+    let (fill, ink) = if master {
+        (color, Color32::WHITE)
+    } else {
+        (Color32::from_white_alpha(235), color)
+    };
+    sk.rect(r, 0.8, Some(fill), Some((color, 0.2)));
     sk.text(
         (r.x + pad, r.y + pad * 0.6),
         &galley,
         size,
         Weight::SemiBold,
-        color,
+        ink,
         None,
     );
 }
@@ -551,7 +645,6 @@ enum Gesture {
 struct Drag {
     target: Target,
     image: MmRect,
-    cell: MmRect,
     gesture: Gesture,
 }
 
@@ -609,6 +702,11 @@ pub struct Annotator {
     hovered: Option<(usize, usize, MmRect)>,
     /// Le pagine da riportare nel lavoro alla fine del disegno.
     pending: Vec<(usize, usize)>,
+    /// La misura di una quota che si sta scrivendo, com'è battuta.
+    typing_value: Option<(Target, String)>,
+    /// Le miniature del foglio all'ultimo disegno, con il loro file: per attaccare i capi delle
+    /// linee alla miniatura su cui finiscono.
+    placed: Vec<(Spot, PathBuf)>,
 }
 
 /// Il riquadro di un'annotazione a schermo, per sceglierla e per le maniglie.
@@ -768,6 +866,42 @@ fn square(from: (f64, f64), to: (f64, f64)) -> (f64, f64) {
     (from.0 + side.copysign(dx), from.1 + side.copysign(dy))
 }
 
+/// La miniatura che contiene `q` (mm), o la più vicina.
+fn nearest(spots: &[Spot], q: (f64, f64)) -> Option<Spot> {
+    let dist = |r: MmRect| {
+        let dx = (r.x - q.0).max(q.0 - r.right()).max(0.0);
+        let dy = (r.y - q.1).max(q.1 - r.bottom()).max(0.0);
+        dx.hypot(dy)
+    };
+    spots
+        .iter()
+        .copied()
+        .min_by(|a, b| dist(a.cell).total_cmp(&dist(b.cell)))
+}
+
+/// Attacca il capo `b` delle linee alla miniatura (diversa da `own`) dentro la cui cella
+/// finisce; un capo sulla propria miniatura o fuori da ogni cella resta suo.
+fn anchor_lines(list: &mut [Annotation], own: Spot, placed: &[(Spot, PathBuf)]) {
+    for a in list.iter_mut() {
+        let Annotation::Linea { b, end, .. } = a else {
+            continue;
+        };
+        *end = None;
+        let at = to_mm(own.image, *b);
+        let inside = |r: MmRect| at.0 >= r.x && at.0 <= r.right() && at.1 >= r.y && at.1 <= r.bottom();
+        if inside(own.cell) {
+            continue;
+        }
+        if let Some((s, path)) = placed.iter().find(|(s, _)| inside(s.cell)) {
+            *end = Some(Anchor {
+                path: path.clone(),
+                page: s.page,
+                at: to_frac(s.image, at),
+            });
+        }
+    }
+}
+
 fn clamp_to(cell: MmRect, p: (f64, f64)) -> (f64, f64) {
     (p.0.clamp(cell.x, cell.right()), p.1.clamp(cell.y, cell.bottom()))
 }
@@ -805,12 +939,45 @@ impl Annotator {
     /// Riporta nel lavoro le annotazioni di `file`/`page` come sono nella copia mostrata,
     /// con un passo da annullare.
     pub fn commit(&mut self, project: &mut Project, shown: &Project, file: usize, page: usize) {
-        let after = shown
+        let mut after = shown
             .files
             .get(file)
             .map(|f| f.annotations(page).to_vec())
             .unwrap_or_default();
+        if let Some((own, _)) = self.placed.iter().find(|(s, _)| s.file == file && s.page == page) {
+            anchor_lines(&mut after, *own, &self.placed);
+        }
         self.set(project, file, page, after);
+    }
+
+    /// Tutte le quote della pagina della quota scelta tornano alla misura vera del file.
+    pub fn true_sizes(&mut self, project: &mut Project) {
+        let Some(t) = self.selected else { return };
+        self.edit(project, t.file, t.page, |list| {
+            for a in list.iter_mut() {
+                if let Annotation::Quota { value, .. } = a {
+                    *value = None;
+                }
+            }
+        });
+    }
+
+    /// La misura scritta a mano (mm) della quota `t`: diventa la master della sua pagina.
+    fn set_quote_value(shown: &mut Project, t: Target, mm: Option<f64>) {
+        let Some(f) = shown.files.get_mut(t.file) else {
+            return;
+        };
+        let mut list = f.annotations(t.page).to_vec();
+        for (i, a) in list.iter_mut().enumerate() {
+            if let Annotation::Quota { value, .. } = a {
+                if i == t.index {
+                    *value = mm;
+                } else if mm.is_some() {
+                    *value = None;
+                }
+            }
+        }
+        f.set_annotations(t.page, list);
     }
 
     /// Le pagine cambiate in questo disegno, da riportare nel lavoro.
@@ -939,6 +1106,10 @@ impl Annotator {
         if same {
             a = a.moved(0.03, 0.03);
         }
+        // Sull'altra miniatura il capo attaccato non avrebbe senso: resta suo.
+        if let Annotation::Linea { end, .. } = &mut a {
+            *end = None;
+        }
         let mut index = 0;
         self.edit(project, file, page, |list| {
             list.push(a.clone());
@@ -997,11 +1168,36 @@ impl Annotator {
                 f64::from((p.y - origin.y) / scale),
             )
         };
-        let spot_at = |q: (f64, f64)| {
-            spots.iter().copied().find(|s| {
-                q.0 >= s.cell.x && q.0 <= s.cell.right() && q.1 >= s.cell.y && q.1 <= s.cell.bottom()
-            })
+        // La miniatura di un punto: quella che lo contiene, o la più vicina (testi e forme
+        // si possono mettere anche nei margini e sulle intestazioni).
+        let spot_at = |q: (f64, f64)| nearest(&spots, q);
+        let paper = MmRect::new(0.0, 0.0, sheet.size.w, sheet.size.h);
+        self.placed = spots
+            .iter()
+            .filter_map(|s| Some((*s, shown.files.get(s.file)?.path.clone())))
+            .collect();
+        // Le linee con un capo attaccato a un'altra miniatura si portano nelle frazioni della
+        // loro: si scelgono e si tirano come le altre. Si riattaccano quando si riportano nel
+        // lavoro (`commit`).
+        let placed_rect = |path: &std::path::Path, page: usize| {
+            self.placed
+                .iter()
+                .find(|(s, p)| p == path && s.page == page)
+                .map(|(s, _)| s.image)
         };
+        for s in &spots {
+            let Some(f) = shown.files.get_mut(s.file) else {
+                continue;
+            };
+            let list = f.annotations(s.page);
+            if list
+                .iter()
+                .any(|a| matches!(a, Annotation::Linea { end: Some(_), .. }))
+            {
+                let resolved = list.iter().map(|a| resolve(a, s.image, &placed_rect)).collect();
+                f.set_annotations(s.page, resolved);
+            }
+        }
         let find_spot =
             |file: usize, page: usize| spots.iter().copied().find(|s| s.file == file && s.page == page);
         let shift = ui.input(|i| i.modifiers.shift);
@@ -1068,6 +1264,25 @@ impl Annotator {
             self.selected = Some(t);
             self.editing = Some((t, text));
             self.focus_text = true;
+        } else if resp.double_clicked()
+            && let Some(q) = resp.interact_pointer_pos()
+            && let Some(t) = hit(shown, q, self.selected)
+            && let Some(a @ Annotation::Quota { .. }) = annotation(shown, t)
+        {
+            // Doppio clic su una quota: si scrive la misura vera, e diventa la master.
+            let page = shown.files.get(t.file).and_then(|f| f.pages.get(t.page));
+            let list = shown
+                .files
+                .get(t.file)
+                .map(|f| f.annotations(t.page))
+                .unwrap_or(&[]);
+            let unit = shown.unit;
+            let text = quote_value(&a, page, quote_scale(list, page))
+                .map(|v| winfiles_geom::format_number(v / unit.mm(), unit.decimals(), true))
+                .unwrap_or_default();
+            self.selected = Some(t);
+            self.typing_value = Some((t, text));
+            self.focus_text = true;
         } else if resp.clicked()
             && let Some(q) = resp.interact_pointer_pos()
         {
@@ -1094,7 +1309,6 @@ impl Annotator {
                     self.drag = Some(Drag {
                         target,
                         image: s.image,
-                        cell: s.cell,
                         gesture: Gesture::Handle { handle, start },
                     });
                 } else if let Some(t) = hit(shown, q, self.selected)
@@ -1106,7 +1320,6 @@ impl Annotator {
                     self.drag = Some(Drag {
                         target: t,
                         image: s.image,
-                        cell: s.cell,
                         gesture: Gesture::Move { from: at, start: a },
                     });
                 } else if self.tool != Tool::Select
@@ -1129,7 +1342,6 @@ impl Annotator {
                     self.drag = Some(Drag {
                         target,
                         image: s.image,
-                        cell: s.cell,
                         gesture: Gesture::New { from: at },
                     });
                 }
@@ -1140,7 +1352,7 @@ impl Annotator {
             && let Some(drag) = self.drag.clone()
             && let Some(q) = resp.interact_pointer_pos()
         {
-            let at = clamp_to(drag.cell, to_mm_at(q));
+            let at = clamp_to(paper, to_mm_at(q));
             let t = drag.target;
             let current = annotation(shown, t);
             let changed = match (&drag.gesture, current) {
@@ -1221,6 +1433,7 @@ impl Annotator {
 
         self.paint_selection(ui, origin, scale, &spots, shown);
         self.text_field(ui, origin, scale, &spots, shown);
+        self.value_field(ui, origin, scale, &spots, shown);
     }
 
     /// Un testo nuovo in `at` (mm) della miniatura `s`, da scrivere subito.
@@ -1263,6 +1476,7 @@ impl Annotator {
                 width: st.width,
                 start_arrow: self.tool == Tool::Arrow && st.start_arrow,
                 end_arrow: self.tool == Tool::Arrow,
+                end: None,
             },
             Tool::Rect => Annotation::Rettangolo {
                 a,
@@ -1285,6 +1499,7 @@ impl Annotator {
                 b,
                 color: st.color,
                 width: st.width.min(0.5),
+                value: None,
             },
             Tool::Text => Annotation::Testo {
                 at: a,
@@ -1493,6 +1708,91 @@ impl Annotator {
     }
 }
 
+impl Annotator {
+    /// Il campo dove si scrive la misura di una quota, sotto la quota.
+    fn value_field(
+        &mut self,
+        ui: &mut egui::Ui,
+        origin: Pos2,
+        scale: f32,
+        spots: &[Spot],
+        shown: &mut Project,
+    ) {
+        let Some((t, mut text)) = self.typing_value.clone() else {
+            return;
+        };
+        let Some(s) = spots
+            .iter()
+            .find(|s| s.file == t.file && s.page == t.page)
+            .copied()
+        else {
+            self.typing_value = None;
+            return;
+        };
+        let Some(a) = shown
+            .files
+            .get(t.file)
+            .and_then(|f| f.annotations(t.page).get(t.index))
+            .cloned()
+        else {
+            self.typing_value = None;
+            return;
+        };
+        let unit = shown.unit;
+        let r = screen_bounds(ui.ctx(), &a, s.image, origin, scale);
+        let mut done = false;
+        let mut cancel = false;
+        egui::Area::new(egui::Id::new("misura-quota"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos2(r.center().x - 110.0, r.bottom() + 10.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        crate::app::dim_label(ui, &format!("Misura vera ({})", unit.symbol()));
+                        let edit = egui::TextEdit::singleline(&mut text).desired_width(90.0);
+                        let resp = crate::fluent::text_field(ui, edit);
+                        if self.focus_text {
+                            resp.request_focus();
+                            self.focus_text = false;
+                        }
+                        if resp.lost_focus() {
+                            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                cancel = true;
+                            } else {
+                                done = true;
+                            }
+                        }
+                        if ui.button("Fatto").clicked() {
+                            done = true;
+                        }
+                    });
+                    crate::app::dim_label(ui, "Le altre quote della miniatura si adeguano");
+                });
+            });
+        self.typing_value = Some((t, text.clone()));
+        if cancel {
+            self.typing_value = None;
+        } else if done {
+            self.typing_value = None;
+            let clean = text
+                .trim()
+                .trim_end_matches(unit.symbol())
+                .trim()
+                .replace('.', "")
+                .replace(',', ".");
+            let mm = if clean.is_empty() {
+                None
+            } else {
+                clean.parse::<f64>().ok().map(|v| v * unit.mm())
+            };
+            if clean.is_empty() || mm.is_some_and(|v| v.is_finite() && v > 0.0 && v <= 1_000_000.0) {
+                Self::set_quote_value(shown, t, mm);
+                self.pending.push((t.file, t.page));
+            }
+        }
+    }
+}
+
 /// `a` con i due punti cambiati (linee, quote, rettangoli, ovali).
 fn with_ends(a: &Annotation, pa: Point, pb: Point) -> Annotation {
     let mut out = a.clone();
@@ -1595,6 +1895,7 @@ pub struct BarOutput {
     pub delete: bool,
     pub restyle: bool,
     pub arrows: Option<(bool, bool)>,
+    pub true_sizes: bool,
 }
 
 impl Annotator {
@@ -1691,6 +1992,22 @@ impl Annotator {
                     if a || b {
                         out.arrows = Some((s, e));
                     }
+                } else if let Some(Annotation::Quota { value, .. }) = selected {
+                    if crate::icons::button(
+                        ui,
+                        "rotate-ccw",
+                        "Torna alle misure vere del file",
+                        false,
+                        value.is_some(),
+                        30.0,
+                    )
+                    .clicked()
+                    {
+                        out.true_sizes = true;
+                    }
+                    crate::app::dim_label(ui, "Doppio clic sulla quota per scrivere la misura");
+                } else if what == Tool::Quote {
+                    crate::app::dim_label(ui, "Doppio clic su una quota per scrivere la misura");
                 } else if what == Tool::Arrow && self.tool == Tool::Arrow {
                     ui.add(crate::fluent::checkbox(
                         &mut self.style.start_arrow,
@@ -1874,5 +2191,66 @@ mod tests {
         };
         assert_eq!(style.stroke.map(|s| s.0), Some(PALETTE[4].0));
         assert!(style.fill.is_some());
+    }
+
+    fn spot(file: usize, x: f64) -> Spot {
+        Spot {
+            file,
+            page: 0,
+            image: MmRect::new(x, 10.0, 50.0, 50.0),
+            cell: MmRect::new(x, 10.0, 50.0, 60.0),
+        }
+    }
+
+    #[test]
+    fn il_capo_che_finisce_su_un_altra_miniatura_si_attacca_a_lei() {
+        let own = spot(0, 0.0);
+        let other = spot(1, 100.0);
+        let placed = vec![(own, PathBuf::from("/a.pdf")), (other, PathBuf::from("/b.pdf"))];
+        let mut list = vec![Annotation::Linea {
+            a: (0.5, 0.5),
+            // 125 mm: dentro la seconda miniatura, a metà.
+            b: (2.5, 0.5),
+            color: PALETTE[0].0,
+            width: 0.5,
+            start_arrow: false,
+            end_arrow: true,
+            end: None,
+        }];
+        anchor_lines(&mut list, own, &placed);
+        let Annotation::Linea { end: Some(e), .. } = &list[0] else {
+            panic!("capo non attaccato");
+        };
+        assert_eq!(e.path, PathBuf::from("/b.pdf"));
+        assert!((e.at.0 - 0.5).abs() < 1e-9 && (e.at.1 - 0.5).abs() < 1e-9);
+        // Se la seconda miniatura si sposta, il capo la segue.
+        let moved = MmRect::new(0.0, 200.0, 50.0, 50.0);
+        let lookup = |_: &std::path::Path, _: usize| Some(moved);
+        let Annotation::Linea { b, .. } = resolve(&list[0], own.image, &lookup) else {
+            panic!("tipo cambiato");
+        };
+        assert_eq!(to_mm(own.image, b), (25.0, 225.0));
+    }
+
+    #[test]
+    fn la_quota_scritta_a_mano_fa_la_scala_delle_altre() {
+        let page = PageInfo {
+            size: winfiles_geom::Size::new(200.0, 100.0),
+            trim: None,
+        };
+        let q = |b: f64, value: Option<f64>| Annotation::Quota {
+            a: (0.0, 0.5),
+            b: (b, 0.5),
+            color: PALETTE[3].0,
+            width: 0.3,
+            value,
+        };
+        // La master misura 100 mm nel file ma è scritta 1000: scala 10.
+        let list = vec![q(0.5, Some(1000.0)), q(0.25, None)];
+        let scale = quote_scale(&list, Some(&page));
+        assert!((scale - 10.0).abs() < 1e-9);
+        assert_eq!(quote_value(&list[0], Some(&page), scale), Some(1000.0));
+        assert!((quote_value(&list[1], Some(&page), scale).unwrap() - 500.0).abs() < 1e-9);
+        assert_eq!(quote_scale(&[q(0.5, None)], Some(&page)), 1.0);
     }
 }

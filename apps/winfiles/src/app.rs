@@ -2378,6 +2378,9 @@ impl WinFilesApp {
         if let Some((start, end)) = out.arrows {
             self.annot.set_arrows(&mut self.project, start, end);
         }
+        if out.true_sizes {
+            self.annot.true_sizes(&mut self.project);
+        }
     }
 
     /// I tasti delle annotazioni, prima di quelli dell'elenco dei file: Canc toglie

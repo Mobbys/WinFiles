@@ -38,6 +38,16 @@ aveva strumenti di disegno (solo le annotazioni scritte, che in WinFiles sono le
   della pagina (`PageInfo::finished`), qualunque sia la grandezza della miniatura.
 - Lo stile delle annotazioni nuove si ricorda in `impostazioni.json`.
 
+- (2026-11-06, dopo la prova di Michel) Le annotazioni possono stare ovunque sul foglio: un
+  punto fuori dalla cella resta in frazioni della miniatura più vicina, e `compose` disegna tutte
+  le annotazioni dopo tutte le miniature. Il capo `b` di una linea che finisce nella cella di
+  un'altra miniatura si attacca a quella (`Anchor`: percorso del file, pagina, punto in frazioni);
+  se quella miniatura va su un altro foglio vale `b`, tenuto dentro il foglio. Mentre si modifica,
+  la linea è portata nelle frazioni della sua miniatura (`annotate::resolve`) e si riattacca
+  quando passa nel lavoro (`anchor_lines`).
+- Quote: `Quota::value` è la misura scritta a mano (mm); la prima quota della pagina che ce l'ha è
+  la master e dà la scala alle altre della stessa pagina, come le Quote dei moduli di modifica.
+
 ## Conseguenze
 - Un lavoro annotato riaperto e risalvato con una WinFiles fino alla 0.2.25 perde le annotazioni
   (il campo non è conosciuto): vanno aggiornati tutti i PC.

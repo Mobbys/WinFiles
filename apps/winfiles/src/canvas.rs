@@ -270,20 +270,40 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
                 bottom,
             );
         }
-        // Le annotazioni sopra la miniatura e la didascalia, solo nella griglia.
-        if print.show_annotations && print.view == winfiles_model::View::Grid {
-            crate::annotate::draw(
-                &mut sk,
-                image,
-                file.annotations(slot.page),
-                page_info,
-                project.unit,
-            );
-        }
         // Nell'elenco un filo sottile separa una riga dalla successiva, a metà dello spazio.
         if list && let Some(next) = rows_below.get(&item.id) {
             let ly = (item.cell.bottom() + next) / 2.0;
             sk.line((item.cell.x, ly), (item.cell.right(), ly), FRAME, 0.15);
+        }
+    }
+    // Le annotazioni per ultime, sopra tutte le miniature: possono uscire dalla loro e passare
+    // sopra le altre. Solo nella griglia.
+    if print.show_annotations && print.view == winfiles_model::View::Grid {
+        let placed: HashMap<(&Path, usize), MmRect> = sheet
+            .items
+            .iter()
+            .filter_map(|item| {
+                let slot = slots.get(item.id)?;
+                Some((
+                    (project.files.get(slot.file)?.path.as_path(), slot.page),
+                    item.image,
+                ))
+            })
+            .collect();
+        let lookup = |path: &Path, page: usize| placed.get(&(path, page)).copied();
+        for item in &sheet.items {
+            let Some(slot) = slots.get(item.id) else { continue };
+            let Some(file) = project.files.get(slot.file) else {
+                continue;
+            };
+            crate::annotate::draw(
+                &mut sk,
+                item.image,
+                file.annotations(slot.page),
+                file.pages.get(slot.page),
+                project.unit,
+                &lookup,
+            );
         }
     }
     sk.page
