@@ -108,6 +108,8 @@ pub struct Style {
     pub marker: Rgba,
     /// Larghezza del tratto dell'evidenziatore, in mm.
     pub marker_width: f64,
+    /// Corpo della misura delle quote, in mm.
+    pub quote_size: f64,
 }
 
 impl Default for Style {
@@ -124,6 +126,7 @@ impl Default for Style {
             background: false,
             marker: MARKER_YELLOW.with_alpha(SOFT_ALPHA),
             marker_width: 4.0,
+            quote_size: winfiles_model::QUOTE_SIZE,
         }
     }
 }
@@ -136,6 +139,7 @@ impl Style {
         self.width = fix(self.width, 0.1, 5.0, d.width);
         self.text_size = fix(self.text_size, 1.0, 40.0, d.text_size);
         self.marker_width = fix(self.marker_width, 1.0, 20.0, d.marker_width);
+        self.quote_size = fix(self.quote_size, 1.0, 40.0, d.quote_size);
         self
     }
 
@@ -159,9 +163,12 @@ impl Style {
                 self.width = *width;
                 self.start_arrow = *start_arrow;
             }
-            Annotation::Quota { color, width, .. } => {
+            Annotation::Quota {
+                color, width, size, ..
+            } => {
                 self.color = *color;
                 self.width = *width;
+                self.quote_size = *size;
             }
             Annotation::Rettangolo { style, rounded, .. } => {
                 self.take_shape(style);
@@ -216,9 +223,12 @@ impl Style {
                 *width = self.width;
                 *start_arrow = self.start_arrow;
             }
-            Annotation::Quota { color, width, .. } => {
+            Annotation::Quota {
+                color, width, size, ..
+            } => {
                 *color = self.color;
                 *width = self.width;
+                *size = self.quote_size;
             }
             Annotation::Rettangolo { style, rounded, .. } => {
                 *style = self.shape_style();
@@ -460,6 +470,7 @@ fn draw_one(
             color,
             width,
             value,
+            size,
         } => {
             let shown = quote_value(a, page, scale);
             quote(
@@ -470,6 +481,7 @@ fn draw_one(
                 *width,
                 shown,
                 value.is_some(),
+                *size,
                 unit,
             );
         }
@@ -549,6 +561,7 @@ fn quote(
     width: f64,
     real: Option<f64>,
     master: bool,
+    size: f64,
     unit: Unit,
 ) {
     let len = (b.0 - a.0).hypot(b.1 - a.1);
@@ -577,12 +590,11 @@ fn quote(
     }
     let Some(real) = real else { return };
     let label = length_text(Some(real), unit);
-    let size = 2.8;
     let galley = sk.layout_line(&label, size, Weight::SemiBold);
     let (w, h) = Sketch::size_mm(&galley);
-    let pad = 0.6;
+    let pad = size * 0.22;
     let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
-    let off = h / 2.0 + pad + width + 0.6;
+    let off = h / 2.0 + pad + width + size * 0.2;
     let c = (mid.0 + nx * off, mid.1 + ny * off);
     let r = MmRect::new(
         c.0 - w / 2.0 - pad,
@@ -1500,6 +1512,7 @@ impl Annotator {
                 color: st.color,
                 width: st.width.min(0.5),
                 value: None,
+                size: st.quote_size,
             },
             Tool::Text => Annotation::Testo {
                 at: a,
@@ -1992,6 +2005,13 @@ impl Annotator {
                     if a || b {
                         out.arrows = Some((s, e));
                     }
+                }
+                if what == Tool::Quote {
+                    crate::app::dim_label(ui, "Corpo");
+                    mm_field(ui, &mut self.style.quote_size, 1.0, 40.0);
+                }
+                if matches!(selected, Some(Annotation::Linea { .. })) {
+                    // Le punte della linea scelta sono già sopra.
                 } else if let Some(Annotation::Quota { value, .. }) = selected {
                     if crate::icons::button(
                         ui,
@@ -2239,6 +2259,7 @@ mod tests {
             trim: None,
         };
         let q = |b: f64, value: Option<f64>| Annotation::Quota {
+            size: 2.8,
             a: (0.0, 0.5),
             b: (b, 0.5),
             color: PALETTE[3].0,

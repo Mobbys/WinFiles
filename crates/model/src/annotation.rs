@@ -111,7 +111,17 @@ pub enum Annotation {
         /// pagina si leggono in proporzione.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         value: Option<f64>,
+        /// Corpo della misura scritta, in mm.
+        #[serde(default = "quote_size")]
+        size: f64,
     },
+}
+
+/// Il corpo di partenza della misura delle quote, in mm.
+pub const QUOTE_SIZE: f64 = 2.8;
+
+fn quote_size() -> f64 {
+    QUOTE_SIZE
 }
 
 /// Un punto attaccato a un'altra miniatura: il file (per percorso, che non cambia riordinando),
@@ -182,11 +192,13 @@ impl Annotation {
                 b,
                 width: w,
                 value,
+                size,
                 ..
             } => {
                 point(a);
                 point(b);
                 width(w);
+                *size = clean(*size, QUOTE_SIZE).clamp(1.0, 40.0);
                 *value = value.filter(|v| v.is_finite() && *v > 0.0 && *v <= 1_000_000.0);
             }
             Annotation::Rettangolo { a, b, style, .. } | Annotation::Ovale { a, b, style } => {
