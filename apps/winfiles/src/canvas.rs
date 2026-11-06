@@ -53,6 +53,8 @@ pub fn fit_zoom(size: winfiles_geom::Size, avail: Vec2) -> f32 {
 pub struct Selection<'a> {
     pub marked: &'a std::collections::BTreeSet<usize>,
     pub focus: Option<(usize, usize)>,
+    /// Annota è aperta: il foglio sente anche il trascinamento, per tracciare.
+    pub annotating: bool,
 }
 
 /// Cosa è successo nell'anteprima in questo fotogramma.
@@ -64,6 +66,8 @@ pub struct CanvasOutput {
     pub secondary: Option<Option<(usize, usize)>>,
     /// Il foglio, per aprirci sopra il menu del tasto destro.
     pub response: Option<egui::Response>,
+    /// L'angolo in alto a sinistra del foglio a schermo.
+    pub origin: Pos2,
 }
 
 /// Una riga di testo che si tronca con "…" se non sta nella larghezza (`width` in mm), centrata.
@@ -266,6 +270,16 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
                 bottom,
             );
         }
+        // Le annotazioni sopra la miniatura e la didascalia, solo nella griglia.
+        if print.show_annotations && print.view == winfiles_model::View::Grid {
+            crate::annotate::draw(
+                &mut sk,
+                image,
+                file.annotations(slot.page),
+                page_info,
+                project.unit,
+            );
+        }
         // Nell'elenco un filo sottile separa una riga dalla successiva, a metà dello spazio.
         if list && let Some(next) = rows_below.get(&item.id) {
             let ly = (item.cell.bottom() + next) / 2.0;
@@ -288,7 +302,14 @@ pub fn draw(
 ) -> CanvasOutput {
     let t = Tokens::get(ui.ctx());
     let mut out = CanvasOutput::default();
-    let (response, painter, origin) = paper(ui, sheet.size, scale);
+    // Con le annotazioni il foglio sente anche il trascinamento, per tracciare.
+    let sense = if selected.annotating {
+        Sense::click_and_drag()
+    } else {
+        Sense::click()
+    };
+    let (response, painter, origin) = paper_with(ui, sheet.size, scale, sense);
+    out.origin = origin;
     crate::paint::page(&painter, origin, scale, scene, thumbs);
 
     let pointer = response.interact_pointer_pos();
@@ -402,13 +423,23 @@ pub(crate) fn paper(
     size: winfiles_geom::Size,
     scale: f32,
 ) -> (egui::Response, egui::Painter, Pos2) {
+    paper_with(ui, size, scale, Sense::click())
+}
+
+/// Come [`paper`], con il foglio che sente `sense`.
+pub(crate) fn paper_with(
+    ui: &mut egui::Ui,
+    size: winfiles_geom::Size,
+    scale: f32,
+    sense: Sense,
+) -> (egui::Response, egui::Painter, Pos2) {
     let page_size = Vec2::new(size.w as f32, size.h as f32) * scale;
     let avail = ui.available_size();
     let total = Vec2::new(
         avail.x.max(page_size.x + 2.0 * FIT_MARGIN),
         content_height(size, scale, avail.y),
     );
-    let (response, painter) = ui.allocate_painter(total, Sense::click());
+    let (response, painter) = ui.allocate_painter(total, sense);
     let origin = response.rect.center() - page_size / 2.0;
     let page = Rect::from_min_size(origin, page_size);
     painter.rect_filled(

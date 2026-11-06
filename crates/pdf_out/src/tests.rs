@@ -263,3 +263,41 @@ fn un_immagine_diventa_un_pdf_di_una_pagina_alla_sua_misura() {
     }
     std::fs::remove_dir_all(&d).unwrap();
 }
+
+#[test]
+fn ovali_frecce_ed_evidenziatore_vanno_nel_pdf() {
+    let mut page = Page::new(Size::new(210.0, 297.0));
+    let ellipse: Vec<(f64, f64)> = (0..48)
+        .map(|i| {
+            let t = f64::from(i) / 48.0 * std::f64::consts::TAU;
+            (100.0 + 30.0 * t.cos(), 100.0 + 20.0 * t.sin())
+        })
+        .collect();
+    page.push(Item::Path {
+        points: ellipse,
+        closed: true,
+        fill: Some(Color {
+            r: 255,
+            g: 221,
+            b: 0,
+            a: 102,
+        }),
+        stroke: Some((Color::rgb(37, 99, 235), 0.5)),
+    });
+    page.push(Item::Path {
+        points: vec![(20.0, 200.0), (60.0, 210.0), (100.0, 200.0)],
+        closed: false,
+        fill: None,
+        stroke: Some((Color::rgb(255, 221, 0), 4.0)),
+    });
+    // Un tracciato di un punto solo, o con numeri assurdi, non rompe niente.
+    page.push(Item::Path {
+        points: vec![(f64::NAN, 1.0), (5.0, 5.0)],
+        closed: true,
+        fill: Some(Color::rgb(0, 0, 0)),
+        stroke: None,
+    });
+    let (bytes, report) = write(&[page], &FONTS, &AtomicBool::new(false), |_| {}).unwrap();
+    assert_eq!(report.pages, 1);
+    assert!(bytes.starts_with(b"%PDF"));
+}

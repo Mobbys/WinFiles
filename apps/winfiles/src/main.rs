@@ -5,6 +5,7 @@
 // In release su Windows niente finestra di console dietro l'app.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod annotate;
 mod app;
 mod calibrate;
 mod canvas;
