@@ -355,7 +355,7 @@ impl NestingModule {
         for path in paths {
             if !matches!(
                 FileKind::from_path(path),
-                FileKind::Pdf | FileKind::Ai | FileKind::Image
+                FileKind::Pdf | FileKind::Ai | FileKind::Eps | FileKind::Image
             ) {
                 skipped += 1;
                 continue;
@@ -2020,7 +2020,7 @@ fn write_job(job: &Job, target: &Path) -> Result<(), String> {
                 Some(size) => winfiles_pdf_out::image_page(p, *size)
                     .map_err(|e| e.to_string())
                     .and_then(|b| PdfFile::from_bytes(b).map_err(|e| e.to_string())),
-                None => PdfFile::open(p).map_err(|e| e.to_string()),
+                None => open_pdf(p),
             };
             file.map_err(|e| format!("{}: {e}", file_name(p)))
         })
@@ -2119,13 +2119,27 @@ fn masked(thumb: &winfiles_thumbs::Thumb, clip: &[Vec<[f64; 2]>], page: [f64; 2]
     egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba)
 }
 
+/// Apre un PDF, un AI salvato con compatibilità PDF, o un AI "legacy" / EPS di Illustrator
+/// (PostScript, come i file da taglio): questi si traducono in una pagina PDF con i tracciati e le
+/// tinte piatte, come per le miniature.
+fn open_pdf(path: &Path) -> Result<PdfFile, String> {
+    match winfiles_thumbs::illustrator_pdf(path) {
+        Ok(Some(bytes)) => PdfFile::from_bytes(bytes).map_err(|e| e.to_string()),
+        Ok(None) => PdfFile::open(path).map_err(|e| e.to_string()),
+        Err(winfiles_thumbs::ThumbError::NoPreview) => {
+            Err("disegno di Illustrator senza un riquadro leggibile".into())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Legge un PDF: per ogni pagina la sagoma (la fustella di taglio, se c'è, o il formato finito)
 /// e l'immagine.
 fn load(path: &Path, inks: &[InkName]) -> Result<Vec<(usize, usize, Shape, winfiles_thumbs::Thumb)>, String> {
     if FileKind::from_path(path) == FileKind::Image {
         return load_image(path).map(|one| vec![one]);
     }
-    let file = PdfFile::open(path).map_err(|e| e.to_string())?;
+    let file = open_pdf(path)?;
     let count = file.page_count();
     if count == 0 {
         return Err("il PDF non ha pagine".into());
@@ -2272,7 +2286,8 @@ fn pick_pdfs() -> Vec<PathBuf> {
         .add_filter(
             "PDF, Illustrator e immagini",
             &[
-                "pdf", "PDF", "ai", "AI", "jpg", "jpeg", "png", "tif", "tiff", "webp", "bmp", "psd",
+                "pdf", "PDF", "ai", "AI", "eps", "EPS", "jpg", "jpeg", "png", "tif", "tiff", "webp", "bmp",
+                "psd",
             ],
         )
         .pick_files()

@@ -363,14 +363,17 @@ pub(crate) fn file_menu(
         }
         _ => {}
     }
-    if matches!(f.kind, FileKind::Pdf | FileKind::Ai | FileKind::Image) {
+    if matches!(
+        f.kind,
+        FileKind::Pdf | FileKind::Ai | FileKind::Eps | FileKind::Image
+    ) {
         let label = match count {
             1 => "Manda al nesting".to_string(),
             n => format!("Manda al nesting i {n} file scelti"),
         };
         if ui
             .button(label)
-            .on_hover_text("Apre la scheda Nesting con questi file (PDF, AI e immagini)")
+            .on_hover_text("Apre la scheda Nesting con questi file (PDF, AI, EPS e immagini)")
             .clicked()
         {
             action = Some(FileAction::Nest(path.clone()));
@@ -1220,7 +1223,12 @@ impl WinFilesApp {
                     .marked
                     .iter()
                     .filter_map(|i| self.project.files.get(*i))
-                    .filter(|f| matches!(f.kind, FileKind::Pdf | FileKind::Ai | FileKind::Image))
+                    .filter(|f| {
+                        matches!(
+                            f.kind,
+                            FileKind::Pdf | FileKind::Ai | FileKind::Eps | FileKind::Image
+                        )
+                    })
                     .map(|f| f.path.clone())
                     .collect();
                 let paths = if marked.contains(&path) {
