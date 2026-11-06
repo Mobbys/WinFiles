@@ -127,6 +127,9 @@ pub struct WinFilesApp {
     last_flip: f64,
     /// Dove portare lo scorrimento del foglio appena cambiato con la rotella.
     flip_to: Option<Edge>,
+    /// Dove portare lo scorrimento dell'anteprima dopo Ctrl+rotella, perché il punto sotto il
+    /// mouse resti fermo.
+    zoom_scroll: Option<Vec2>,
     /// `--pdf` sulla riga di comando: esportare qui appena i file sono letti, poi chiudere.
     batch_pdf: Option<PathBuf>,
     /// L'esportazione in corso è quella di `--pdf`.
@@ -275,6 +278,7 @@ impl WinFilesApp {
             wheel_edges: (true, true),
             last_flip: 0.0,
             flip_to: None,
+            zoom_scroll: None,
             recent: crate::recent::load(),
             ctx: ctx.clone(),
             prefs,
@@ -2281,7 +2285,13 @@ impl WinFilesApp {
         let scene = canvas::compose(ui.ctx(), sheet, &self.shown, &self.slots);
         let offset = self.flip_offset(ui, sheet.size, scale);
         let annotating = self.annot.on;
-        let scrolled = scroll_area(offset).show(ui, |ui| {
+        let mut area = scroll_area(offset);
+        if let Some(v) = self.zoom_scroll.take() {
+            area = area.scroll_offset(v);
+        }
+        let mut frame = (egui::Pos2::ZERO, Vec2::ZERO);
+        let scrolled = area.show(ui, |ui| {
+            frame = (ui.cursor().min, ui.available_size());
             let out = canvas::draw(
                 ui,
                 sheet,
@@ -2303,6 +2313,25 @@ impl WinFilesApp {
         });
         self.wheel(ui, board, count, &scrolled);
         self.zoom_with_wheel(ui, board, scale);
+        // Ctrl+rotella ingrandisce verso il mouse: il punto del foglio sotto il puntatore resta
+        // dov'è, come nei moduli di modifica.
+        if let Some(new) = self.zoom
+            && (new - scale).abs() > 1e-6
+            && let Some(p) = ui.ctx().pointer_hover_pos()
+        {
+            let at = (p - scrolled.inner.origin) / scale;
+            let page = vec2(sheet.size.w as f32, sheet.size.h as f32) * new;
+            // Il contenuto parte da `start` con lo scorrimento a zero; il foglio vi sta centrato.
+            let (cursor, avail) = frame;
+            let start = cursor + scrolled.state.offset;
+            let total = vec2(
+                avail.x.max(page.x + 2.0 * canvas::FIT_MARGIN),
+                canvas::content_height(sheet.size, new, avail.y),
+            );
+            let offset = start.to_vec2() + total / 2.0 - page / 2.0 + at * new - p.to_vec2();
+            self.zoom_scroll = Some(offset.max(Vec2::ZERO));
+            self.flip_to = None;
+        }
         for (file, page) in self.annot.take_pending() {
             self.annot.commit(&mut self.project, &self.shown, file, page);
         }

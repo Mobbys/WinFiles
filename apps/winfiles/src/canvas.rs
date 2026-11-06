@@ -21,7 +21,7 @@ use crate::theme::Tokens;
 use crate::thumbs::Thumbnails;
 
 /// Margine attorno al foglio quando l'anteprima lo adatta alla finestra, in punti schermo.
-const FIT_MARGIN: f32 = 28.0;
+pub(crate) const FIT_MARGIN: f32 = 28.0;
 pub const MIN_ZOOM: f32 = 0.1;
 pub const MAX_ZOOM: f32 = 8.0;
 
