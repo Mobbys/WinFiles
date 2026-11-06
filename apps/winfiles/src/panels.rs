@@ -668,6 +668,8 @@ impl WinFilesApp {
         }
         let unit = self.project.unit;
         let mut clicked = None;
+        // Il doppio clic su un file lo apre in Visualizza.
+        let mut double = None;
         let mut menu_on = None;
         let mut action = None;
         let marked = self.marked.len();
@@ -968,6 +970,9 @@ impl WinFilesApp {
                             if resp.clicked() {
                                 clicked = Some(*i);
                             }
+                            if resp.double_clicked() {
+                                double = Some(*i);
+                            }
                             if resp.secondary_clicked() {
                                 menu_on = Some(*i);
                             }
@@ -1111,6 +1116,9 @@ impl WinFilesApp {
                 reorder::Drag::Group(g) => group_files.get(g).into_iter().flatten().copied().collect(),
             };
             self.move_files(&moving, d.before);
+        }
+        if let Some(i) = double {
+            self.view_file(i, 0);
         }
         if let Some(i) = clicked {
             self.pick(i, mods);

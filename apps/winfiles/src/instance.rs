@@ -5,8 +5,10 @@
 //! loro percorsi e chiudono subito, così tutti i file finiscono nella stessa finestra. Anche una
 //! finestra già aperta riceve i file nello stesso modo.
 //!
-//! Il protocollo è di testo: una riga `WINFILES 1 <utente>`, un percorso per riga, una riga
-//! vuota; chi riceve risponde `OK`. Se qualcosa non va, chi manda apre la sua finestra come
+//! Il protocollo è di testo: una riga `WINFILES 2 <utente>`, una riga con la scheda che riceve i
+//! file (`miniature`, `nesting` o `visualizza`), un percorso per riga, una riga vuota; chi riceve
+//! risponde `OK`. Una finestra di una versione vecchia (`WINFILES 1`) rifiuta il messaggio, e chi
+//! manda apre la sua finestra. Se qualcosa non va, chi manda apre la sua finestra come
 //! sempre: nel caso peggiore si torna a una finestra per file, mai a file persi.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -17,7 +19,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 /// La prima riga di ogni messaggio, prima del nome utente.
-const HELLO: &str = "WINFILES 1";
+const HELLO: &str = "WINFILES 2";
 /// Quanto aspetta chi manda i percorsi prima di arrendersi e aprire la sua finestra.
 const WAIT: Duration = Duration::from_secs(3);
 /// Il tetto ai percorsi di un messaggio: Esplora file ne manda uno per avvio.
@@ -25,9 +27,40 @@ const MAX_PATHS: usize = 10_000;
 /// Il tetto alla lunghezza di una riga (un percorso lungo di Windows sta in 32 767 caratteri).
 const MAX_LINE: usize = 140_000;
 
+/// La scheda che riceve i file mandati da un'altra copia di WinFiles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Target {
+    /// "Apri in WinFiles": i file vanno nell'elenco delle miniature.
+    #[default]
+    Thumbnails,
+    /// "Invia al nesting WinFiles".
+    Nesting,
+    /// Il doppio clic su un file di cui WinFiles è il programma predefinito.
+    Viewer,
+}
+
+impl Target {
+    fn word(self) -> &'static str {
+        match self {
+            Target::Thumbnails => "miniature",
+            Target::Nesting => "nesting",
+            Target::Viewer => "visualizza",
+        }
+    }
+
+    fn from_word(word: &str) -> Option<Self> {
+        [Target::Thumbnails, Target::Nesting, Target::Viewer]
+            .into_iter()
+            .find(|t| t.word() == word)
+    }
+}
+
+/// Un invio: la scheda e i percorsi.
+pub type Delivery = (Target, Vec<PathBuf>);
+
 /// I percorsi arrivati da altre copie di WinFiles, per la finestra aperta.
 pub struct Inbox {
-    rx: Receiver<Vec<PathBuf>>,
+    rx: Receiver<Delivery>,
     ctx: Arc<OnceLock<egui::Context>>,
 }
 
@@ -37,9 +70,9 @@ impl Inbox {
         let _ = self.ctx.set(ctx.clone());
     }
 
-    /// Tutti i percorsi arrivati dall'ultima volta.
-    pub fn take(&self) -> Vec<PathBuf> {
-        self.rx.try_iter().flatten().collect()
+    /// Tutti gli invii arrivati dall'ultima volta, nell'ordine.
+    pub fn take(&self) -> Vec<Delivery> {
+        self.rx.try_iter().collect()
     }
 }
 
@@ -52,14 +85,14 @@ pub enum Start {
 }
 
 /// Prende la porta dell'utente oppure, con `forward`, manda i percorsi a chi la tiene.
-pub fn start(paths: &[PathBuf], forward: bool) -> Start {
-    start_on(port(&user()), &user(), paths, forward)
+pub fn start(paths: &[PathBuf], forward: bool, target: Target) -> Start {
+    start_on(port(&user()), &user(), paths, forward, target)
 }
 
-fn start_on(port: u16, user: &str, paths: &[PathBuf], forward: bool) -> Start {
+fn start_on(port: u16, user: &str, paths: &[PathBuf], forward: bool, target: Target) -> Start {
     match TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))) {
         Ok(listener) => Start::Window(listen(listener, user.to_string())),
-        Err(_) if forward && send(port, user, paths).is_ok() => Start::Forwarded,
+        Err(_) if forward && send(port, user, paths, target).is_ok() => Start::Forwarded,
         Err(_) => Start::Window(None),
     }
 }
@@ -87,7 +120,7 @@ fn listen(listener: TcpListener, user: String) -> Option<Inbox> {
 }
 
 /// Legge un messaggio e lo passa alla finestra.
-fn receive(stream: TcpStream, user: &str, tx: &Sender<Vec<PathBuf>>) -> std::io::Result<()> {
+fn receive(stream: TcpStream, user: &str, tx: &Sender<Delivery>) -> std::io::Result<()> {
     stream.set_read_timeout(Some(WAIT))?;
     stream.set_write_timeout(Some(WAIT))?;
     let mut reader = BufReader::new(&stream);
@@ -95,6 +128,7 @@ fn receive(stream: TcpStream, user: &str, tx: &Sender<Vec<PathBuf>>) -> std::io:
     if first != format!("{HELLO} {user}") {
         return Err(invalid("messaggio di un altro programma o di un altro utente"));
     }
+    let target = Target::from_word(&read_line(&mut reader)?).ok_or_else(|| invalid("scheda sconosciuta"))?;
     let mut paths = Vec::new();
     loop {
         let line = read_line(&mut reader)?;
@@ -107,7 +141,7 @@ fn receive(stream: TcpStream, user: &str, tx: &Sender<Vec<PathBuf>>) -> std::io:
         paths.push(PathBuf::from(line));
     }
     (&stream).write_all(b"OK\n")?;
-    tx.send(paths).map_err(|_| invalid("finestra chiusa"))
+    tx.send((target, paths)).map_err(|_| invalid("finestra chiusa"))
 }
 
 /// Una riga senza il ritorno a capo, con un tetto alla lunghezza.
@@ -121,8 +155,8 @@ fn read_line<R: BufRead>(reader: &mut R) -> std::io::Result<String> {
 }
 
 /// Manda i percorsi a chi tiene la porta e aspetta il suo `OK`.
-fn send(port: u16, user: &str, paths: &[PathBuf]) -> std::io::Result<()> {
-    let mut message = format!("{HELLO} {user}\n");
+fn send(port: u16, user: &str, paths: &[PathBuf], target: Target) -> std::io::Result<()> {
+    let mut message = format!("{HELLO} {user}\n{}\n", target.word());
     for p in paths {
         // Un percorso che non è testo valido non passerebbe intatto: meglio la propria finestra.
         let text = p.to_str().ok_or_else(|| invalid("percorso non valido"))?;
@@ -190,7 +224,7 @@ mod tests {
             .port()
     }
 
-    fn wait_for(inbox: &Inbox) -> Vec<PathBuf> {
+    fn wait_for(inbox: &Inbox) -> Vec<Delivery> {
         for _ in 0..100 {
             let got = inbox.take();
             if !got.is_empty() {
@@ -204,23 +238,26 @@ mod tests {
     #[test]
     fn la_seconda_copia_manda_i_file_alla_prima_e_chiude() {
         let port = free_port();
-        let Start::Window(Some(inbox)) = start_on(port, "michel", &[], false) else {
+        let Start::Window(Some(inbox)) = start_on(port, "michel", &[], false, Target::Thumbnails) else {
             panic!("la prima copia deve aprire la finestra e ascoltare");
         };
         let files = vec![
             PathBuf::from("C:\\Lavori\\à è.pdf"),
             PathBuf::from("C:\\Lavori\\Cartella"),
         ];
-        assert!(matches!(start_on(port, "michel", &files, true), Start::Forwarded));
-        assert_eq!(wait_for(&inbox), files);
+        assert!(matches!(
+            start_on(port, "michel", &files, true, Target::Thumbnails),
+            Start::Forwarded
+        ));
+        assert_eq!(wait_for(&inbox), vec![(Target::Thumbnails, files)]);
     }
 
     #[test]
     fn senza_aggiungi_la_seconda_copia_apre_la_sua_finestra() {
         let port = free_port();
-        let _first = start_on(port, "michel", &[], false);
+        let _first = start_on(port, "michel", &[], false, Target::Thumbnails);
         assert!(matches!(
-            start_on(port, "michel", &[PathBuf::from("a.pdf")], false),
+            start_on(port, "michel", &[PathBuf::from("a.pdf")], false, Target::Thumbnails),
             Start::Window(None)
         ));
     }
@@ -228,11 +265,11 @@ mod tests {
     #[test]
     fn un_altro_utente_non_riceve_i_file() {
         let port = free_port();
-        let Start::Window(Some(inbox)) = start_on(port, "michel", &[], false) else {
+        let Start::Window(Some(inbox)) = start_on(port, "michel", &[], false, Target::Thumbnails) else {
             panic!("la prima copia deve ascoltare");
         };
         assert!(matches!(
-            start_on(port, "anna", &[PathBuf::from("a.pdf")], true),
+            start_on(port, "anna", &[PathBuf::from("a.pdf")], true, Target::Thumbnails),
             Start::Window(None)
         ));
         assert!(inbox.take().is_empty());
@@ -249,9 +286,37 @@ mod tests {
             }
         });
         assert!(matches!(
-            start_on(port, "michel", &[PathBuf::from("a.pdf")], true),
+            start_on(port, "michel", &[PathBuf::from("a.pdf")], true, Target::Thumbnails),
             Start::Window(None)
         ));
+    }
+
+    #[test]
+    fn invia_al_nesting_arriva_con_la_sua_scheda() {
+        let port = free_port();
+        let Start::Window(Some(inbox)) = start_on(port, "michel", &[], false, Target::Thumbnails) else {
+            panic!("la prima copia deve ascoltare");
+        };
+        let files = vec![PathBuf::from("C:\\Taglio\\sagoma.pdf")];
+        assert!(matches!(start_on(port, "michel", &files, true, Target::Nesting), Start::Forwarded));
+        assert!(matches!(start_on(port, "michel", &files, true, Target::Viewer), Start::Forwarded));
+        let mut got = wait_for(&inbox);
+        for _ in 0..100 {
+            if got.len() >= 2 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            got.extend(inbox.take());
+        }
+        assert_eq!(got, vec![(Target::Nesting, files.clone()), (Target::Viewer, files)]);
+    }
+
+    #[test]
+    fn la_scheda_si_legge_come_si_scrive() {
+        for t in [Target::Thumbnails, Target::Nesting, Target::Viewer] {
+            assert_eq!(Target::from_word(t.word()), Some(t));
+        }
+        assert_eq!(Target::from_word("altro"), None);
     }
 
     #[test]

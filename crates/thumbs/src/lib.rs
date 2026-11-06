@@ -308,6 +308,65 @@ impl PdfPages {
     }
 }
 
+impl PdfPages {
+    /// Misura della pagina `page` in punti, come si vede (rotazione applicata).
+    pub fn page_size(&self, page: usize) -> Option<(f32, f32)> {
+        self.0.pages().get(page).map(|p| p.render_dimensions())
+    }
+
+    /// Solo un pezzo della pagina, per l'ingrandimento della scheda Visualizza: `scale` pixel per
+    /// punto, `region` in punti dall'angolo in alto a sinistra (`[x, y, larghezza, altezza]`).
+    /// L'immagine è grande `region × scale`, al massimo [`MAX_SIDE`] per lato.
+    pub fn render_region(&self, page: usize, scale: f32, region: [f32; 4]) -> Result<Thumb, ThumbError> {
+        catch_unwind(AssertUnwindSafe(|| self.region_inner(page, scale, region)))
+            .unwrap_or(Err(ThumbError::Crashed))
+    }
+
+    fn region_inner(&self, page: usize, scale: f32, region: [f32; 4]) -> Result<Thumb, ThumbError> {
+        use hayro::kurbo::Affine;
+        use hayro::vello_cpu::{Pixmap, RenderContext};
+        let page = self.0.pages().get(page).ok_or(ThumbError::NoPage(page + 1))?;
+        let [x, y, w, h] = region;
+        if !(scale.is_finite() && scale > 0.0 && [x, y, w, h].iter().all(|v| v.is_finite()) && w > 0.0 && h > 0.0)
+        {
+            return Err(ThumbError::Pdf);
+        }
+        let pw = ((w * scale).round() as u32).clamp(1, MAX_SIDE);
+        let ph = ((h * scale).round() as u32).clamp(1, MAX_SIDE);
+        let mut ctx = RenderContext::new(pw as u16, ph as u16);
+        let transform = Affine::translate((-f64::from(x * scale), -f64::from(y * scale)))
+            * Affine::scale(f64::from(scale))
+            * {
+                use hayro::hayro_interpret::util::TransformExt;
+                page.initial_transform(true).to_kurbo()
+            };
+        let cache = RenderCache::new();
+        hayro::render_into(
+            page,
+            &cache,
+            &InterpreterSettings::default(),
+            &RenderSettings::default(),
+            &mut ctx,
+            transform,
+        );
+        ctx.flush();
+        let mut pixmap = Pixmap::new(ctx.width(), ctx.height());
+        ctx.render_with(
+            &mut pixmap,
+            &mut hayro::vello_cpu::Resources::default(),
+            hayro::vello_cpu::RasterizerSettings {
+                target_init: hayro::vello_cpu::TargetInit::Clear(WHITE),
+                ..Default::default()
+            },
+        );
+        Ok(Thumb {
+            width: u32::from(pixmap.width()),
+            height: u32::from(pixmap.height()),
+            rgba: pixmap.data_as_u8_slice().to_vec(),
+        })
+    }
+}
+
 /// Inizio e lunghezza della parte PostScript di un EPS con intestazione DOS.
 fn dos_section(head: &[u8]) -> Option<(u64, u64)> {
     let field = |at: usize| {
