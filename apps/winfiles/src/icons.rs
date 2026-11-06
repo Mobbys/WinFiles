@@ -59,6 +59,12 @@ static ICONS: &[(&str, &[u8])] = icons![
     // specchio: "flip-vertical-2" è lo specchio sinistra-destra.
     "flip-horizontal-2",
     "flip-vertical-2",
+    // Annotazioni delle miniature.
+    "type",
+    "move-up-right",
+    "circle",
+    "square",
+    "highlighter",
 ];
 
 fn table() -> &'static SvgIconSet {

@@ -108,6 +108,8 @@ pub struct Prefs {
     pub image_die: crate::images::DieSettings,
     /// Il nome scritto l'ultima volta in Aiuto › Segnala un problema.
     pub reporter: String,
+    /// L'ultimo stile delle annotazioni delle miniature.
+    pub annotate: crate::annotate::Style,
 }
 
 impl Prefs {
@@ -127,6 +129,7 @@ impl Prefs {
         self.window = self.window.map(|[w, h]| [w.min(MAX_WINDOW), h.min(MAX_WINDOW)]);
         self.nesting = self.nesting.sanitized();
         self.image_die = self.image_die.sanitized();
+        self.annotate = self.annotate.sanitized();
         if winfiles_layout::grid(&self.print, &[]).is_err() {
             self.print = PrintSettings::default();
         }
@@ -251,6 +254,7 @@ mod tests {
                 ..crate::images::DieSettings::default()
             },
             reporter: "Mario".into(),
+            annotate: crate::annotate::Style::default(),
         };
         save_to(&file, &prefs).unwrap();
         assert_eq!(load_from(&file), prefs);

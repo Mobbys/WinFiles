@@ -127,6 +127,9 @@ pub struct WinFilesApp {
     last_flip: f64,
     /// Dove portare lo scorrimento del foglio appena cambiato con la rotella.
     flip_to: Option<Edge>,
+    /// Dove portare lo scorrimento dell'anteprima dopo Ctrl+rotella, perché il punto sotto il
+    /// mouse resti fermo.
+    zoom_scroll: Option<Vec2>,
     /// `--pdf` sulla riga di comando: esportare qui appena i file sono letti, poi chiudere.
     batch_pdf: Option<PathBuf>,
     /// L'esportazione in corso è quella di `--pdf`.
@@ -164,6 +167,8 @@ pub struct WinFilesApp {
     pub(crate) nesting: crate::nesting::NestingModule,
     /// I file mandati da "Apri in WinFiles" mentre la finestra è aperta.
     inbox: Option<crate::instance::Inbox>,
+    /// Le annotazioni delle miniature: strumenti, stile e passi da annullare.
+    pub(crate) annot: crate::annotate::Annotator,
 }
 
 /// I moduli di WinFiles, come le schede della 4.9.
@@ -273,6 +278,7 @@ impl WinFilesApp {
             wheel_edges: (true, true),
             last_flip: 0.0,
             flip_to: None,
+            zoom_scroll: None,
             recent: crate::recent::load(),
             ctx: ctx.clone(),
             prefs,
@@ -286,7 +292,9 @@ impl WinFilesApp {
             images: crate::images::ImagesModule::new(ctx),
             nesting: crate::nesting::NestingModule::new(ctx),
             inbox: None,
+            annot: crate::annotate::Annotator::default(),
         };
+        app.annot = crate::annotate::Annotator::with_style(app.prefs.annotate.clone());
         // Le stampanti si cercano subito, così Stampa le trova già pronte.
         if !app.prefs.inks.is_empty() {
             app.pdf.inks = app.prefs.inks.clone();
@@ -2095,6 +2103,36 @@ impl WinFilesApp {
                 .layout(egui::Layout::right_to_left(Align::Center)),
         );
         self.sheet_controls(&mut controls, count, &t);
+        // Annota apre la riga degli strumenti di disegno: solo nella griglia.
+        if self.project.print.view == View::Grid {
+            controls.add_space(10.0);
+            let on = self.annot.on;
+            let tint = if on { t.on_primary } else { t.text_strong };
+            let mut button = egui::Button::image_and_text(
+                icons::image("pencil", 16.0, tint),
+                egui::RichText::new("Annota").color(tint),
+            )
+            .min_size(vec2(0.0, 30.0));
+            if on {
+                button = button.fill(t.primary);
+            }
+            if controls
+                .add(button)
+                .on_hover_text(
+                    "Testo, frecce, forme ed evidenziatore sopra le miniature; si salvano nel lavoro",
+                )
+                .clicked()
+            {
+                if on {
+                    self.annot.close();
+                } else {
+                    self.annot.on = true;
+                    self.project.print.show_annotations = true;
+                }
+            }
+        } else if self.annot.on {
+            self.annot.close();
+        }
         // Il titolo nello spazio che resta: in una finestra stretta si accorcia con "…".
         let room = header.with_max_x((header.max.x - controls.min_rect().width() - 12.0).max(header.min.x));
         let mut bar = ui.new_child(
@@ -2148,8 +2186,32 @@ impl WinFilesApp {
             bar.label(egui::RichText::new(detail).color(t.text_dim));
         }
 
-        // Con la ricerca attiva nell'elenco, una striscia lo ricorda: si stampa solo quello.
         let mut top = full.top() + 48.0;
+        // La riga Annota: va a capo quando la finestra è stretta.
+        if self.annot.on {
+            let area = Rect::from_min_max(
+                egui::pos2(full.left() + 12.0, top),
+                egui::pos2(full.right() - 12.0, full.bottom()),
+            );
+            let mut row = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(area)
+                    .layout(egui::Layout::top_down(Align::Min)),
+            );
+            let selected = self.annot.selected_annotation(&self.shown).cloned();
+            let mut show = self.project.print.show_annotations;
+            let out = row
+                .horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    ui.spacing_mut().interact_size.y = 32.0;
+                    self.annot.bar(ui, selected.as_ref(), &mut show)
+                })
+                .inner;
+            self.project.print.show_annotations = show;
+            self.annot_bar(out);
+            top = row.min_rect().bottom() + 6.0;
+        }
+        // Con la ricerca attiva nell'elenco, una striscia lo ricorda: si stampa solo quello.
         if self.filter.is_active() && !self.project.files.is_empty() {
             let strip = Rect::from_min_max(
                 egui::pos2(full.left() + 8.0, top),
@@ -2222,24 +2284,63 @@ impl WinFilesApp {
         self.shown_zoom = scale;
         let scene = canvas::compose(ui.ctx(), sheet, &self.shown, &self.slots);
         let offset = self.flip_offset(ui, sheet.size, scale);
-        let scrolled = scroll_area(offset).show(ui, |ui| {
-            canvas::draw(
+        let annotating = self.annot.on;
+        let mut area = scroll_area(offset);
+        if let Some(v) = self.zoom_scroll.take() {
+            area = area.scroll_offset(v);
+        }
+        let mut frame = (egui::Pos2::ZERO, Vec2::ZERO);
+        let scrolled = area.show(ui, |ui| {
+            frame = (ui.cursor().min, ui.available_size());
+            let out = canvas::draw(
                 ui,
                 sheet,
                 &scene,
                 &self.slots,
                 &mut self.thumbs,
                 canvas::Selection {
-                    marked: &self.marked,
+                    marked: if annotating { &NONE } else { &self.marked },
                     focus: self.selected.map(|f| (f, self.selected_page)),
+                    annotating,
                 },
                 scale,
-            )
+            );
+            if annotating && let Some(resp) = &out.response {
+                self.annot
+                    .interact(ui, resp, out.origin, scale, sheet, &self.slots, &mut self.shown);
+            }
+            out
         });
         self.wheel(ui, board, count, &scrolled);
         self.zoom_with_wheel(ui, board, scale);
+        // Ctrl+rotella ingrandisce verso il mouse: il punto del foglio sotto il puntatore resta
+        // dov'è, come nei moduli di modifica.
+        if let Some(new) = self.zoom
+            && (new - scale).abs() > 1e-6
+            && let Some(p) = ui.ctx().pointer_hover_pos()
+        {
+            let at = (p - scrolled.inner.origin) / scale;
+            let page = vec2(sheet.size.w as f32, sheet.size.h as f32) * new;
+            // Il contenuto parte da `start` con lo scorrimento a zero; il foglio vi sta centrato.
+            let (cursor, avail) = frame;
+            let start = cursor + scrolled.state.offset;
+            let total = vec2(
+                avail.x.max(page.x + 2.0 * canvas::FIT_MARGIN),
+                canvas::content_height(sheet.size, new, avail.y),
+            );
+            let offset = start.to_vec2() + total / 2.0 - page / 2.0 + at * new - p.to_vec2();
+            self.zoom_scroll = Some(offset.max(Vec2::ZERO));
+            self.flip_to = None;
+        }
+        for (file, page) in self.annot.take_pending() {
+            self.annot.commit(&mut self.project, &self.shown, file, page);
+        }
+        if self.annot.on {
+            ui.ctx().request_repaint();
+        }
         let out = scrolled.inner;
-        if let Some((file, page)) = out.clicked {
+        // Con Annota aperta un clic sceglie le annotazioni, non i file.
+        if let Some((file, page)) = out.clicked.filter(|_| !annotating) {
             let mods = ui.input(|i| i.modifiers);
             self.pick(file, mods);
             self.selected_page = page;
@@ -2259,13 +2360,100 @@ impl WinFilesApp {
                 1
             };
             let mut action = None;
+            let page = self.selected_page;
+            let mut clear = false;
             if let Some(f) = self.project.files.get(i) {
                 let state = f.print_state();
-                resp.context_menu(|ui| action = crate::panels::file_menu(ui, f, count, state));
+                let annotated = !f.annotations(page).is_empty();
+                resp.context_menu(|ui| {
+                    action = crate::panels::file_menu(ui, f, count, state);
+                    if annotated {
+                        ui.separator();
+                        if ui.button("Togli le annotazioni di questa pagina").clicked() {
+                            clear = true;
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            if clear {
+                self.annot.clear_page(&mut self.project, i, page);
             }
             if let Some(a) = action {
                 self.file_action(ui.ctx(), a);
             }
+        }
+    }
+}
+
+/// Nessun file scelto: con Annota aperta i file non si scelgono dall'anteprima.
+static NONE: BTreeSet<usize> = BTreeSet::new();
+
+impl WinFilesApp {
+    /// Quello che la riga Annota chiede di fare nel lavoro.
+    fn annot_bar(&mut self, out: crate::annotate::BarOutput) {
+        if out.undo {
+            self.annot.undo(&mut self.project);
+        }
+        if out.redo {
+            self.annot.redo(&mut self.project);
+        }
+        if out.delete {
+            self.annot.delete_selected(&mut self.project);
+        }
+        if out.restyle {
+            self.annot.restyle_selected(&mut self.project);
+        }
+        if let Some((start, end)) = out.arrows {
+            self.annot.set_arrows(&mut self.project, start, end);
+        }
+        if out.true_sizes {
+            self.annot.true_sizes(&mut self.project);
+        }
+    }
+
+    /// I tasti delle annotazioni, prima di quelli dell'elenco dei file: Canc toglie
+    /// l'annotazione scelta e non il file.
+    fn annotate_keys(&mut self, ctx: &egui::Context) {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        if !self.annot.on || self.module != Module::Thumbnails {
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            self.annot.escape(&mut self.shown);
+            for (file, page) in self.annot.take_pending() {
+                self.annot.commit(&mut self.project, &self.shown, file, page);
+            }
+        }
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let pressed = |mods, key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(mods, key)));
+        if self.annot.selected.is_some()
+            && (pressed(Modifiers::NONE, Key::Delete) || pressed(Modifiers::NONE, Key::Backspace))
+        {
+            self.annot.delete_selected(&mut self.project);
+        }
+        if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z) || pressed(Modifiers::COMMAND, Key::Y) {
+            self.annot.redo(&mut self.project);
+        } else if pressed(Modifiers::COMMAND, Key::Z) {
+            self.annot.undo(&mut self.project);
+        }
+        // Copia e incolla arrivano come eventi; con un'annotazione scelta copiano lei.
+        let (copy, paste) = ctx.input(|i| {
+            (
+                i.events.iter().any(|e| matches!(e, egui::Event::Copy)),
+                i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
+                    || i.modifiers.command && i.key_pressed(Key::V),
+            )
+        });
+        if copy && self.annot.copy(&self.shown) {
+            ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Copy)));
+            // Negli appunti va un testo: con appunti vuoti Windows non manda l'Incolla.
+            ctx.copy_text("Annotazione di WinFiles".into());
+        }
+        if paste {
+            self.annot.paste(&mut self.project);
         }
     }
 }
@@ -3000,6 +3188,7 @@ impl WinFilesApp {
             nesting: self.nesting.settings.clone(),
             image_die: self.images.die.settings.clone(),
             reporter: self.reporter.clone(),
+            annotate: self.annot.style.clone(),
         }
     }
 
@@ -3085,6 +3274,7 @@ impl eframe::App for WinFilesApp {
             if let Some(p) = projects.into_iter().next() {
                 self.guard(&ctx, Then::Open(Some(p)));
             }
+            self.annotate_keys(&ctx);
             self.shortcuts(&ctx);
         }
         self.remember_prefs(&ctx, false);
