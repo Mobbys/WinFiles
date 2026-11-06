@@ -1,0 +1,25 @@
+[package]
+name = "winfiles-cad"
+description = "Disegni DXF e DWG per la scheda Visualizza: lettura e disegno con CADCraft (ADR 0033)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# Da CADCraft (MIT/Apache) solo il lettore dei DXF e il ponte per i DWG, con le loro poche
+# dipendenze: il resto (finestra, esportazione PDF) usa versioni modificate di egui, krilla e hayro
+# che si scontrerebbero con le nostre. Il ponte usa acadrust (MPL-2.0, non modificato).
+cadcraft-dxf = { git = "https://github.com/storytold/cadcraft", rev = "a655cee0c1399ca1629675605074897e2cb6850e" }
+cadcraft-dwg = { git = "https://github.com/storytold/cadcraft", rev = "a655cee0c1399ca1629675605074897e2cb6850e" }
+cadcraft-color = { git = "https://github.com/storytold/cadcraft", rev = "a655cee0c1399ca1629675605074897e2cb6850e" }
+# Comprime il contenuto della pagina PDF (già nel progetto, la usa acadrust).
+flate2 = "1"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+winfiles-thumbs = { workspace = true }

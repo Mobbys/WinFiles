@@ -105,6 +105,9 @@ public static class VoceMenu {
     $titolo = [VoceMenu]::Titolo('6E2C9B4A-3D71-4F85-A0C2-91B7E5D4F318')
     Write-Host "La DLL risponde: $titolo"
     if ($titolo -ne 'Apri in WinFiles') { throw "Titolo inatteso: $titolo" }
+    $titolo = [VoceMenu]::Titolo('6F9C432C-532B-43BB-83DA-C588E0D0110E')
+    Write-Host "La seconda voce risponde: $titolo"
+    if ($titolo -ne 'Invia al nesting WinFiles') { throw "Titolo inatteso: $titolo" }
 } finally {
     Get-AppxPackage -Name 'Winsport.WinFiles' | Remove-AppxPackage
     Remove-Item -Force "Cert:\LocalMachine\TrustedPeople\$($fidato.Thumbprint)"

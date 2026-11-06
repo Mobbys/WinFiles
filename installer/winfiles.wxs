@@ -58,6 +58,170 @@
               <RegistryValue Root="HKCU" Key="Software\Classes\Directory\Background\shell\WinFiles" Name="MultiSelectModel" Type="string" Value="Player" />
               <RegistryValue Root="HKCU" Key="Software\Classes\Directory\Background\shell\WinFiles\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --aggiungi &quot;%V&quot;" />
             </Component>
+            <!-- "Invia al nesting WinFiles" nel tasto destro dei file che il nesting sa aprire
+                 (menu classico; su Windows 11 c'è anche nel menu corto, AppxManifest.xml). -->
+            <Component Id="MenuNesting" Guid="C3A1E9D2-5B47-4E8F-9A06-1D2E3F4A5B6C">
+              <RegistryValue Root="HKCU" Key="Software\WinFiles" Name="MenuNesting" Type="integer" Value="1" KeyPath="yes" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\WinFilesNesting" Type="string" Value="Invia al nesting WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\WinFilesNesting" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\WinFilesNesting" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\WinFilesNesting\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --invia-nesting &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.ai\shell\WinFilesNesting" Type="string" Value="Invia al nesting WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.ai\shell\WinFilesNesting" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.ai\shell\WinFilesNesting" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.ai\shell\WinFilesNesting\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --invia-nesting &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.eps\shell\WinFilesNesting" Type="string" Value="Invia al nesting WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.eps\shell\WinFilesNesting" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.eps\shell\WinFilesNesting" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.eps\shell\WinFilesNesting\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --invia-nesting &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.jpg\shell\WinFilesNesting" Type="string" Value="Invia al nesting WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.jpg\shell\WinFilesNesting" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.jpg\shell\WinFilesNesting" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.jpg\shell\WinFilesNesting\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --invia-nesting &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.jpeg\shell\WinFilesNesting" Type="string" Value="Invia al nesting WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.jpeg\shell\WinFilesNesting" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.jpeg\shell\WinFilesNesting" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.jpeg\shell\WinFilesNesting\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --invia-nesting &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.png\shell\WinFilesNesting" Type="string" Value="Invia al nesting WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.png\shell\WinFilesNesting" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.png\shell\WinFilesNesting" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.png\shell\WinFilesNesting\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --invia-nesting &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.tif\shell\WinFilesNesting" Type="string" Value="Invia al nesting WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.tif\shell\WinFilesNesting" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.tif\shell\WinFilesNesting" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.tif\shell\WinFilesNesting\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --invia-nesting &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.tiff\shell\WinFilesNesting" Type="string" Value="Invia al nesting WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.tiff\shell\WinFilesNesting" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.tiff\shell\WinFilesNesting" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.tiff\shell\WinFilesNesting\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --invia-nesting &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.psd\shell\WinFilesNesting" Type="string" Value="Invia al nesting WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.psd\shell\WinFilesNesting" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.psd\shell\WinFilesNesting" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.psd\shell\WinFilesNesting\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --invia-nesting &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.webp\shell\WinFilesNesting" Type="string" Value="Invia al nesting WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.webp\shell\WinFilesNesting" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.webp\shell\WinFilesNesting" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.webp\shell\WinFilesNesting\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --invia-nesting &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.bmp\shell\WinFilesNesting" Type="string" Value="Invia al nesting WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.bmp\shell\WinFilesNesting" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.bmp\shell\WinFilesNesting" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.bmp\shell\WinFilesNesting\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --invia-nesting &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.heic\shell\WinFilesNesting" Type="string" Value="Invia al nesting WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.heic\shell\WinFilesNesting" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.heic\shell\WinFilesNesting" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.heic\shell\WinFilesNesting\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --invia-nesting &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.heif\shell\WinFilesNesting" Type="string" Value="Invia al nesting WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.heif\shell\WinFilesNesting" Name="Icon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.heif\shell\WinFilesNesting" Name="MultiSelectModel" Type="string" Value="Player" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\SystemFileAssociations\.heif\shell\WinFilesNesting\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --invia-nesting &quot;%1&quot;" />
+            </Component>
+            <!-- WinFiles come CANDIDATO per aprire questi file con il doppio clic, nella scheda
+                 Visualizza (ADR 0032): un ProgID per tipo, la voce in "Apri con" e la pagina di
+                 WinFiles in App predefinite. Nessun tipo cambia programma: lo sceglie chi usa
+                 WinFiles da Aiuto › Programma predefinito…, confermando nelle Impostazioni. -->
+            <Component Id="Visualizza" Guid="8D4F2A61-7C3B-4E95-B1A8-2F6E9C0D3B47">
+              <RegistryValue Root="HKCU" Key="Software\WinFiles" Name="Visualizza" Type="integer" Value="1" KeyPath="yes" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities" Name="ApplicationName" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities" Name="ApplicationDescription" Type="string" Value="Guarda PDF, Illustrator, EPS, immagini e disegni DXF/DWG con le misure vere e le tinte piatte" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities" Name="ApplicationIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\RegisteredApplications" Name="WinFiles" Type="string" Value="Software\WinFiles\Capabilities" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.pdf" Type="string" Value="Documento PDF (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.pdf\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.pdf\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.pdf\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.pdf\OpenWithProgids" Name="WinFiles.pdf" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".pdf" Type="string" Value="WinFiles.pdf" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.ai" Type="string" Value="File di Illustrator (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.ai\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.ai\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.ai\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.ai\OpenWithProgids" Name="WinFiles.ai" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".ai" Type="string" Value="WinFiles.ai" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.eps" Type="string" Value="File EPS (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.eps\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.eps\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.eps\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.eps\OpenWithProgids" Name="WinFiles.eps" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".eps" Type="string" Value="WinFiles.eps" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.jpg" Type="string" Value="Immagine JPEG (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.jpg\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.jpg\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.jpg\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.jpg\OpenWithProgids" Name="WinFiles.jpg" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".jpg" Type="string" Value="WinFiles.jpg" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.jpeg" Type="string" Value="Immagine JPEG (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.jpeg\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.jpeg\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.jpeg\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.jpeg\OpenWithProgids" Name="WinFiles.jpeg" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".jpeg" Type="string" Value="WinFiles.jpeg" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.png" Type="string" Value="Immagine PNG (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.png\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.png\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.png\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.png\OpenWithProgids" Name="WinFiles.png" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".png" Type="string" Value="WinFiles.png" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.tif" Type="string" Value="Immagine TIFF (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.tif\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.tif\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.tif\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.tif\OpenWithProgids" Name="WinFiles.tif" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".tif" Type="string" Value="WinFiles.tif" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.tiff" Type="string" Value="Immagine TIFF (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.tiff\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.tiff\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.tiff\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.tiff\OpenWithProgids" Name="WinFiles.tiff" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".tiff" Type="string" Value="WinFiles.tiff" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.webp" Type="string" Value="Immagine WebP (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.webp\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.webp\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.webp\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.webp\OpenWithProgids" Name="WinFiles.webp" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".webp" Type="string" Value="WinFiles.webp" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.bmp" Type="string" Value="Immagine BMP (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.bmp\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.bmp\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.bmp\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.bmp\OpenWithProgids" Name="WinFiles.bmp" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".bmp" Type="string" Value="WinFiles.bmp" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.heic" Type="string" Value="Foto HEIC (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.heic\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.heic\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.heic\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.heic\OpenWithProgids" Name="WinFiles.heic" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".heic" Type="string" Value="WinFiles.heic" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.heif" Type="string" Value="Foto HEIF (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.heif\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.heif\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.heif\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.heif\OpenWithProgids" Name="WinFiles.heif" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".heif" Type="string" Value="WinFiles.heif" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.psd" Type="string" Value="File di Photoshop (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.psd\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.psd\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.psd\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.psd\OpenWithProgids" Name="WinFiles.psd" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".psd" Type="string" Value="WinFiles.psd" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.psb" Type="string" Value="File di Photoshop (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.psb\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.psb\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.psb\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.psb\OpenWithProgids" Name="WinFiles.psb" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".psb" Type="string" Value="WinFiles.psb" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.dxf" Type="string" Value="Disegno DXF (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.dxf\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.dxf\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.dxf\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.dxf\OpenWithProgids" Name="WinFiles.dxf" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".dxf" Type="string" Value="WinFiles.dxf" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.dwg" Type="string" Value="Disegno DWG (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.dwg\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.dwg\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.dwg\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.dwg\OpenWithProgids" Name="WinFiles.dwg" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".dwg" Type="string" Value="WinFiles.dwg" />
+            </Component>
           </Directory>
         </Directory>
       </Directory>
@@ -89,6 +253,8 @@
       <ComponentRef Id="Programma" />
       <ComponentRef Id="FileWinfiles" />
       <ComponentRef Id="MenuTastoDestro" />
+      <ComponentRef Id="MenuNesting" />
+      <ComponentRef Id="Visualizza" />
       <ComponentRef Id="MenuStart" />
       <ComponentRef Id="Desktop" />
     </Feature>

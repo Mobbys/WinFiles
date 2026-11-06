@@ -242,6 +242,13 @@ impl PdfModule {
     }
 
     /// Apre un PDF al posto di quello aperto (le modifiche sono già state salvate o lasciate).
+    /// Apre lo strumento Tracciati (dalla scheda Visualizza, "Passa a › Tracciati").
+    pub fn show_paths(&mut self) {
+        self.paths.on = true;
+        self.quoting = false;
+        self.cutter.clear();
+    }
+
     pub fn open(&mut self, path: &Path) {
         match Editor::open(path) {
             Ok(e) => {

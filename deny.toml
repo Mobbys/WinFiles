@@ -47,6 +47,11 @@ allow = [
     "OFL-1.1",
     "Ubuntu-font-1.0",
 ]
+# acadrust (lettore dei DWG, ADR 0033) è MPL-2.0: copyleft per file, si usa non modificato come
+# libreria separata e si cita in ATTRIBUTION.md con il link al suo codice. Solo per lui.
+exceptions = [
+    { allow = ["MPL-2.0"], crate = "acadrust" },
+]
 
 [bans]
 multiple-versions = "allow"
@@ -59,4 +64,5 @@ unknown-git = "deny"
 # Le librerie ArtCraft, sempre a commit fissato.
 # winprint.rs è la copia del team ArtCraft usata da craft-print per stampare su Windows.
 # photocraft per il lettore HEIC (ADR 0012), pdfcraft per la modifica dei PDF (ADR 0015).
-allow-git = ["https://github.com/storytold/craft-libs", "https://github.com/storytold/winprint.rs", "https://github.com/storytold/photocraft", "https://github.com/storytold/pdfcraft"]
+# cadcraft per leggere DXF e DWG (ADR 0033).
+allow-git = ["https://github.com/storytold/craft-libs", "https://github.com/storytold/cadcraft", "https://github.com/storytold/winprint.rs", "https://github.com/storytold/photocraft", "https://github.com/storytold/pdfcraft"]
