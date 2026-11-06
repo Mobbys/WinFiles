@@ -213,7 +213,9 @@ fn open_eps_preview(path: &Path) -> Result<Opened, String> {
         facts: Facts::Pdf {
             details: Details::default(),
             spots: Ok(Vec::new()),
-            note: Some("EPS con anteprima: si vede l'anteprima salvata nel file, le tinte non si leggono".into()),
+            note: Some(
+                "EPS con anteprima: si vede l'anteprima salvata nel file, le tinte non si leggono".into(),
+            ),
         },
         bytes: 0,
         modified: None,
@@ -342,13 +344,19 @@ impl Opening {
     }
 
     /// Un disegno CAD rifatto con altre scelte (layer, fondo), senza rileggere il file.
-    pub fn cad(drawing: Arc<winfiles_cad::Drawing>, cad: CadChoice, wake: impl Fn() + Send + 'static) -> Self {
+    pub fn cad(
+        drawing: Arc<winfiles_cad::Drawing>,
+        cad: CadChoice,
+        wake: impl Fn() + Send + 'static,
+    ) -> Self {
         let (tx, rx) = channel();
-        let _ = std::thread::Builder::new().name("visualizza-cad".into()).spawn(move || {
-            let r = cad_content(drawing, &cad);
-            let _ = tx.send(r);
-            wake();
-        });
+        let _ = std::thread::Builder::new()
+            .name("visualizza-cad".into())
+            .spawn(move || {
+                let r = cad_content(drawing, &cad);
+                let _ = tx.send(r);
+                wake();
+            });
         Self { rx }
     }
 
@@ -387,9 +395,19 @@ enum Job {
 }
 
 enum Done {
-    Base { page: usize, side: u32, result: Result<Thumb, String> },
-    Tile { tile: Tile, result: Result<(Thumb, [f64; 4]), String> },
-    Scan { page: usize, result: Result<PageScan, String> },
+    Base {
+        page: usize,
+        side: u32,
+        result: Result<Thumb, String>,
+    },
+    Tile {
+        tile: Tile,
+        result: Result<(Thumb, [f64; 4]), String>,
+    },
+    Scan {
+        page: usize,
+        result: Result<PageScan, String>,
+    },
 }
 
 /// Le pagine di un file disegnate in un thread a parte.

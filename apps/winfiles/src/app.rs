@@ -3370,7 +3370,10 @@ impl eframe::App for WinFilesApp {
                 .title()
                 .unwrap_or_else(|| "Modifica immagini — WinFiles".into()),
             Module::Nesting => "Nesting — WinFiles".into(),
-            Module::Viewer => self.viewer.title().unwrap_or_else(|| "Visualizza — WinFiles".into()),
+            Module::Viewer => self
+                .viewer
+                .title()
+                .unwrap_or_else(|| "Visualizza — WinFiles".into()),
             Module::Thumbnails => self.window_title(),
         };
         if title != self.shown_title {

@@ -83,7 +83,10 @@ fn il_blocco_si_mette_al_suo_posto_girato_e_scalato() {
 #[test]
 fn la_polilinea_con_rigonfiamento_fa_mezzo_cerchio() {
     // Da (0,0) a (10,0) con rigonfiamento 1: mezzo cerchio di raggio 5 sotto la corda (antiorario).
-    let d = from_bytes(&dxf("0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n42\n1\n10\n10\n20\n0\n")).unwrap();
+    let d = from_bytes(&dxf(
+        "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n42\n1\n10\n10\n20\n0\n",
+    ))
+    .unwrap();
     let [x0, y0, x1, y1] = d.extents;
     assert!((x0 - 0.0).abs() < 1e-6 && (x1 - 10.0).abs() < 1e-6);
     assert!((y0 + 5.0).abs() < 1e-3 && y1.abs() < 1e-6, "{:?}", d.extents);
@@ -106,7 +109,10 @@ fn la_spline_passa_dagli_estremi() {
     assert!(geometry::near(*pts.last().unwrap(), [10.0, 0.0]));
     // A metà: (5, 5) per la quadratica.
     let mid = pts[pts.len() / 2];
-    assert!((mid[0] - 5.0).abs() < 1e-6 && (mid[1] - 5.0).abs() < 1e-6, "{mid:?}");
+    assert!(
+        (mid[0] - 5.0).abs() < 1e-6 && (mid[1] - 5.0).abs() < 1e-6,
+        "{mid:?}"
+    );
 }
 
 #[test]
@@ -133,7 +139,10 @@ fn la_pagina_pdf_si_apre_ed_e_della_misura_giusta() {
         hidden: vec![d.layers.iter().position(|l| l.name == "Taglio").unwrap()],
         ..o
     };
-    let img = winfiles_thumbs::PdfPages::open(d.to_pdf(&hidden).unwrap()).unwrap().render(0, 400).unwrap();
+    let img = winfiles_thumbs::PdfPages::open(d.to_pdf(&hidden).unwrap())
+        .unwrap()
+        .render(0, 400)
+        .unwrap();
     assert!(!img.rgba.chunks(4).any(|p| p[0] > 200 && p[1] < 80 && p[2] < 80));
 }
 
@@ -160,7 +169,9 @@ fn un_file_vuoto_non_e_un_disegno() {
 
 #[test]
 fn un_dwg_si_legge_come_il_suo_dxf() {
-    let src = dxf("0\nLINE\n8\nTaglio\n10\n0\n20\n0\n11\n100\n21\n50\n0\nCIRCLE\n8\nTaglio\n10\n50\n20\n25\n40\n10\n");
+    let src = dxf(
+        "0\nLINE\n8\nTaglio\n10\n0\n20\n0\n11\n100\n21\n50\n0\nCIRCLE\n8\nTaglio\n10\n50\n20\n25\n40\n10\n",
+    );
     let dwg = cadcraft_dwg::encode_as(&src, "AC1032").unwrap();
     assert!(cadcraft_dwg::is_dwg(&dwg));
     let d = from_bytes(&dwg).unwrap();

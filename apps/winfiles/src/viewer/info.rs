@@ -21,7 +21,11 @@ const CAD_UNITS: [(f64, &str); 5] = [
 fn heading(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     ui.add_space(10.0);
-    ui.label(egui::RichText::new(text).font(semibold(13.5)).color(t.text_strong));
+    ui.label(
+        egui::RichText::new(text)
+            .font(semibold(13.5))
+            .color(t.text_strong),
+    );
     ui.add_space(2.0);
 }
 
@@ -55,7 +59,11 @@ fn date_text(time: std::time::SystemTime) -> Option<String> {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
     let rest = secs % 86_400;
-    Some(format!("{d:02}/{m:02}/{y} {:02}:{:02} UTC", rest / 3600, rest / 60 % 60))
+    Some(format!(
+        "{d:02}/{m:02}/{y} {:02}:{:02} UTC",
+        rest / 3600,
+        rest / 60 % 60
+    ))
 }
 
 fn bytes_text(n: u64) -> String {
@@ -85,7 +93,14 @@ impl ViewerModule {
             return;
         };
         let name = file_name(&d.path);
-        ui.add(egui::Label::new(egui::RichText::new(&name).font(semibold(14.0)).color(t.text_strong)).wrap());
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(&name)
+                    .font(semibold(14.0))
+                    .color(t.text_strong),
+            )
+            .wrap(),
+        );
         ui.label(egui::RichText::new(d.kind.label()).size(12.0).color(t.text_dim));
         let Some(o) = d.opened() else {
             return;
@@ -93,7 +108,14 @@ impl ViewerModule {
         let page = o.pages.get(d.page).copied();
         let mut copy = None;
         if let Some(p) = page {
-            heading(ui, if o.pages.len() > 1 { "Misure della pagina" } else { "Misure" });
+            heading(
+                ui,
+                if o.pages.len() > 1 {
+                    "Misure della pagina"
+                } else {
+                    "Misure"
+                },
+            );
             let cad = matches!(o.facts, Facts::Cad(_));
             if cad {
                 if let Facts::Cad(f) = &o.facts {
@@ -103,7 +125,11 @@ impl ViewerModule {
                     row(ui, "Area", &format_area(area_m2(s)));
                     if (f.page_scale - f.unit_mm).abs() > 1e-9 {
                         let ratio = f.unit_mm / f.page_scale;
-                        row(ui, "Anteprima", &format!("ridotta 1:{}", format_number(ratio, 1, true)));
+                        row(
+                            ui,
+                            "Anteprima",
+                            &format!("ridotta 1:{}", format_number(ratio, 1, true)),
+                        );
                     }
                 }
             } else {
@@ -111,12 +137,7 @@ impl ViewerModule {
                 if let Some(tr) = p.trim {
                     let fin = Size::new(tr[2], tr[3]);
                     row(ui, "Al vivo", &format_size(fin, unit));
-                    let sides = [
-                        tr[0],
-                        tr[1],
-                        p.size.w - tr[0] - tr[2],
-                        p.size.h - tr[1] - tr[3],
-                    ];
+                    let sides = [tr[0], tr[1], p.size.w - tr[0] - tr[2], p.size.h - tr[1] - tr[3]];
                     if sides.iter().any(|s| *s > 0.05) {
                         let all_same = sides.iter().all(|s| (s - sides[0]).abs() < 0.05);
                         let text = if all_same {
@@ -141,7 +162,11 @@ impl ViewerModule {
                 }
                 if o.pages.len() > 1 {
                     let total: f64 = o.pages.iter().map(|p| area_m2(p.finished())).sum();
-                    row(ui, "Tutte le pagine", &format!("{} pagine · {}", o.pages.len(), format_area(total)));
+                    row(
+                        ui,
+                        "Tutte le pagine",
+                        &format!("{} pagine · {}", o.pages.len(), format_area(total)),
+                    );
                 }
             }
             ui.add_space(6.0);
@@ -191,7 +216,11 @@ impl ViewerModule {
                     row(ui, "Titolo", x);
                 }
                 if details.illustrator_data {
-                    row(ui, "Illustrator", "contiene la copia modificabile per Illustrator");
+                    row(
+                        ui,
+                        "Illustrator",
+                        "contiene la copia modificabile per Illustrator",
+                    );
                 }
                 if let Some(bp) = details.pages.get(d.page)
                     && bp.rotation != 0
@@ -221,7 +250,10 @@ impl ViewerModule {
                     // Quanto si può ingrandire tenendo almeno 150 DPI.
                     let mpx = f64::from(f.width) * f64::from(f.height) / 1e6;
                     row(ui, "Megapixel", &format_number(mpx, 1, true));
-                    let at150 = Size::new(f64::from(f.width) / 150.0 * 25.4, f64::from(f.height) / 150.0 * 25.4);
+                    let at150 = Size::new(
+                        f64::from(f.width) / 150.0 * 25.4,
+                        f64::from(f.height) / 150.0 * 25.4,
+                    );
                     if at150.w > p.size.w + 0.5 {
                         row(ui, "A 150 DPI", &format_size(at150, unit));
                     }
@@ -234,7 +266,12 @@ impl ViewerModule {
                 row(ui, "Layer", &f.drawing.layers.len().to_string());
                 row(ui, "Oggetti", &f.drawing.shapes.len().to_string());
                 if !f.drawing.skipped.is_empty() {
-                    let s: Vec<String> = f.drawing.skipped.iter().map(|(k, n)| format!("{k} ({n})")).collect();
+                    let s: Vec<String> = f
+                        .drawing
+                        .skipped
+                        .iter()
+                        .map(|(k, n)| format!("{k} ({n})"))
+                        .collect();
                     row(ui, "Non disegnati", &s.join(", "));
                 }
                 for n in f.drawing.notes.iter().take(5) {
@@ -277,7 +314,11 @@ impl ViewerModule {
         };
         if list.is_empty() {
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Nessuna tinta piatta").font(semibold(14.0)).color(t.text_strong));
+            ui.label(
+                egui::RichText::new("Nessuna tinta piatta")
+                    .font(semibold(14.0))
+                    .color(t.text_strong),
+            );
             ui.label(
                 egui::RichText::new("Il file usa solo quadricromia, scala di grigi o RGB.")
                     .size(12.5)
@@ -286,16 +327,23 @@ impl ViewerModule {
             return;
         }
         ui.label(
-            egui::RichText::new("Clic su una tinta: il resto si sbiadisce e la tinta resta in evidenza (Esc per tornare).")
-                .size(12.0)
-                .color(t.text_dim),
+            egui::RichText::new(
+                "Clic su una tinta: il resto si sbiadisce e la tinta resta in evidenza (Esc per tornare).",
+            )
+            .size(12.0)
+            .color(t.text_dim),
         );
         ui.add_space(6.0);
         // Le lunghezze dei tracciati della pagina, per le tinte di taglio.
         if let Some(r) = &mut d.renderer {
             r.want_scan(page);
         }
-        let scan = d.renderer.as_ref().and_then(|r| r.scans.get(&page)).and_then(|s| s.as_ref().ok()).cloned();
+        let scan = d
+            .renderer
+            .as_ref()
+            .and_then(|r| r.scans.get(&page))
+            .and_then(|s| s.as_ref().ok())
+            .cloned();
         let mut toggle = None;
         for s in &list {
             let on_page = s.pages.contains(&page);
@@ -310,7 +358,9 @@ impl ViewerModule {
                     .sum()
             });
             let filled = scan.as_ref().is_some_and(|sc| {
-                sc.paths.iter().any(|p| p.fill.as_ref().is_some_and(|f| ink_is(&f.ink, &s.raw)))
+                sc.paths
+                    .iter()
+                    .any(|p| p.fill.as_ref().is_some_and(|f| ink_is(&f.ink, &s.raw)))
             });
             let fill = if selected { t.selection } else { t.panel_darker };
             let resp = egui::Frame::NONE
@@ -322,13 +372,24 @@ impl ViewerModule {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
-                        let c = s.swatch.map_or(Color32::GRAY, |[r, g, b]| Color32::from_rgb(r, g, b));
+                        let c = s
+                            .swatch
+                            .map_or(Color32::GRAY, |[r, g, b]| Color32::from_rgb(r, g, b));
                         ui.painter().rect_filled(r, 4.0, c);
-                        ui.painter().rect_stroke(r, 4.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+                        ui.painter().rect_stroke(
+                            r,
+                            4.0,
+                            Stroke::new(1.0, t.border),
+                            egui::StrokeKind::Inside,
+                        );
                         ui.vertical(|ui| {
                             ui.add(
-                                egui::Label::new(egui::RichText::new(&s.name).font(semibold(13.0)).color(t.text_strong))
-                                    .wrap(),
+                                egui::Label::new(
+                                    egui::RichText::new(&s.name)
+                                        .font(semibold(13.0))
+                                        .color(t.text_strong),
+                                )
+                                .wrap(),
                             );
                             let pages = if s.pages.is_empty() {
                                 "nessuna pagina".to_string()
@@ -338,7 +399,7 @@ impl ViewerModule {
                                 format!("{} pagine", s.pages.len())
                             };
                             let mut info = format!("{pages} · {}", overprint_text(s.overprint));
-                            if role != Role::Other {
+                            if role != Role::Other && !role.label().eq_ignore_ascii_case(&s.name) {
                                 info.push_str(&format!(" · {}", role.label()));
                             }
                             ui.label(egui::RichText::new(info).size(12.0).color(t.text));
@@ -366,7 +427,11 @@ impl ViewerModule {
             if self.highlight.as_deref() == Some(raw.as_slice()) {
                 self.highlight = None;
             } else {
-                let pages = list.iter().find(|s| s.raw == raw).map(|s| s.pages.clone()).unwrap_or_default();
+                let pages = list
+                    .iter()
+                    .find(|s| s.raw == raw)
+                    .map(|s| s.pages.clone())
+                    .unwrap_or_default();
                 // Se la tinta non è su questa pagina si va alla prima dove c'è.
                 if !pages.contains(&page)
                     && let Some(first) = pages.first()
@@ -416,7 +481,10 @@ impl ViewerModule {
                 .width(200.0)
                 .show_ui(ui, |ui| {
                     for (mm, name) in CAD_UNITS {
-                        if ui.selectable_label((mm - choice.unit_mm).abs() < 1e-9, name).clicked() {
+                        if ui
+                            .selectable_label((mm - choice.unit_mm).abs() < 1e-9, name)
+                            .clicked()
+                        {
                             choice.unit_mm = mm;
                         }
                     }
@@ -443,7 +511,11 @@ impl ViewerModule {
                     let clicked = crate::icons::button(
                         ui,
                         eye,
-                        if hidden { "Mostra il layer" } else { "Nascondi il layer" },
+                        if hidden {
+                            "Mostra il layer"
+                        } else {
+                            "Nascondi il layer"
+                        },
                         false,
                         true,
                         26.0,
@@ -451,17 +523,26 @@ impl ViewerModule {
                     .clicked();
                     let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
                     let c = if l.aci7 {
-                        if choice.dark { Color32::WHITE } else { Color32::BLACK }
+                        if choice.dark {
+                            Color32::WHITE
+                        } else {
+                            Color32::BLACK
+                        }
                     } else {
                         let [r, g, b] = l.color;
                         Color32::from_rgb(r, g, b)
                     };
                     ui.painter().rect_filled(r, 3.0, c);
-                    ui.painter().rect_stroke(r, 3.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+                    ui.painter()
+                        .rect_stroke(r, 3.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
                     let color = if hidden { t.text_dim } else { t.text_strong };
                     ui.add(
-                        egui::Label::new(egui::RichText::new(format!("{}  ({})", l.name, l.shapes)).size(12.5).color(color))
-                            .truncate(),
+                        egui::Label::new(
+                            egui::RichText::new(format!("{}  ({})", l.name, l.shapes))
+                                .size(12.5)
+                                .color(color),
+                        )
+                        .truncate(),
                     );
                     clicked
                 })

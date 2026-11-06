@@ -64,7 +64,9 @@ fn reg(args: &[&str]) -> Option<String> {
         .creation_flags(0x0800_0000)
         .output()
         .ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 #[cfg(not(windows))]
@@ -93,7 +95,10 @@ pub fn states() -> Vec<TypeState> {
                 .iter()
                 .zip(&choices)
                 .all(|(e, c)| c.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(&prog_id(e))));
-            let other = choices.into_iter().flatten().find(|c| !c.starts_with("WinFiles."));
+            let other = choices
+                .into_iter()
+                .flatten()
+                .find(|c| !c.starts_with("WinFiles."));
             TypeState {
                 label,
                 exts,
@@ -156,10 +161,12 @@ impl DefaultsDialog {
         }
         let (tx, rx) = channel();
         let wake = ctx.clone();
-        let spawned = std::thread::Builder::new().name("predefiniti".into()).spawn(move || {
-            let _ = tx.send(states());
-            wake.request_repaint();
-        });
+        let spawned = std::thread::Builder::new()
+            .name("predefiniti".into())
+            .spawn(move || {
+                let _ = tx.send(states());
+                wake.request_repaint();
+            });
         if spawned.is_ok() {
             self.rx = Some(rx);
         }
@@ -276,7 +283,8 @@ mod tests {
 
     #[test]
     fn la_scelta_si_legge_dall_uscita_di_reg() {
-        let out = "\r\nHKEY_CURRENT_USER\\Software\\...\\UserChoice\r\n    ProgId    REG_SZ    WinFiles.pdf\r\n";
+        let out =
+            "\r\nHKEY_CURRENT_USER\\Software\\...\\UserChoice\r\n    ProgId    REG_SZ    WinFiles.pdf\r\n";
         assert_eq!(parse_choice(out).as_deref(), Some("WinFiles.pdf"));
         let out = "    ProgId    REG_SZ    Acrobat.Document.DC\n";
         assert_eq!(parse_choice(out).as_deref(), Some("Acrobat.Document.DC"));
@@ -296,14 +304,23 @@ mod tests {
         for (_, exts) in TYPES {
             for e in exts {
                 let id = prog_id(e);
-                assert!(wxs.contains(&format!(r"Software\Classes\{id}\shell\open\command")), "{id}");
-                assert!(wxs.contains(&format!(r"Software\Classes\.{e}\OpenWithProgids")), ".{e}");
+                assert!(
+                    wxs.contains(&format!(r"Software\Classes\{id}\shell\open\command")),
+                    "{id}"
+                );
+                assert!(
+                    wxs.contains(&format!(r"Software\Classes\.{e}\OpenWithProgids")),
+                    ".{e}"
+                );
             }
         }
         // Mai la voce predefinita di un'estensione: quella la sceglie chi usa WinFiles.
         for (_, exts) in TYPES {
             for e in exts {
-                assert!(!wxs.contains(&format!(r#"Key="Software\Classes\.{e}" Type="string""#)), ".{e}");
+                assert!(
+                    !wxs.contains(&format!(r#"Key="Software\Classes\.{e}" Type="string""#)),
+                    ".{e}"
+                );
             }
         }
     }

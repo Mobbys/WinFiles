@@ -37,9 +37,15 @@ pub enum Request {
     /// Aggiungere i file all'elenco delle miniature.
     ToThumbnails(Vec<PathBuf>),
     /// Aprire il file in Modifica PDF; con `paths` il pannello Tracciati aperto.
-    ToPdf { path: PathBuf, paths: bool },
+    ToPdf {
+        path: PathBuf,
+        paths: bool,
+    },
     /// Aprire il file in Modifica immagini; con `die` la fustella aperta.
-    ToImages { path: PathBuf, die: bool },
+    ToImages {
+        path: PathBuf,
+        die: bool,
+    },
     ToNesting(Vec<PathBuf>),
     /// Tornare all'anteprima delle miniature, dove si era.
     BackToThumbnails,
@@ -174,7 +180,8 @@ impl ViewerModule {
 
     /// Il titolo della finestra con il file aperto.
     pub fn title(&self) -> Option<String> {
-        self.doc().map(|d| format!("{} — Visualizza — WinFiles", file_name(&d.path)))
+        self.doc()
+            .map(|d| format!("{} — Visualizza — WinFiles", file_name(&d.path)))
     }
 
     fn doc(&self) -> Option<&Doc> {
@@ -195,6 +202,9 @@ impl ViewerModule {
     pub fn open(&mut self, paths: &[PathBuf]) {
         let mut first = None;
         for p in paths {
+            // Un percorso relativo (dalla riga di comando) diventa completo, per la cartella e le
+            // frecce.
+            let p = &std::path::absolute(p).unwrap_or_else(|_| p.clone());
             if p.is_dir() {
                 continue;
             }
@@ -215,6 +225,11 @@ impl ViewerModule {
     /// Apre un file che arriva dalle miniature: le frecce scorrono `job` (i file del lavoro
     /// nell'ordine dell'elenco).
     pub fn open_from_job(&mut self, path: &Path, page: usize, job: Vec<PathBuf>) {
+        let path = &std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let job: Vec<PathBuf> = job
+            .into_iter()
+            .map(|p| std::path::absolute(&p).unwrap_or(p))
+            .collect();
         let at = self.open_one(
             path,
             Browse {
@@ -232,10 +247,10 @@ impl ViewerModule {
     /// Apre il file in una linguetta nuova, o ritrova quella dove è già aperto.
     fn open_one(&mut self, path: &Path, browse: Browse) -> usize {
         if let Some(i) = self.docs.iter().position(|d| d.path == path) {
-            if let Some(d) = self.docs.get_mut(i) {
-                if browse.from_job || d.browse.files.is_empty() {
-                    d.browse = browse;
-                }
+            if let Some(d) = self.docs.get_mut(i)
+                && (browse.from_job || d.browse.files.is_empty())
+            {
+                d.browse = browse;
             }
             return i;
         }
@@ -245,7 +260,9 @@ impl ViewerModule {
             ..CadChoice::default()
         };
         let wake = self.ctx.clone();
-        let opening = Opening::start(path.to_path_buf(), kind, cad.clone(), move || wake.request_repaint());
+        let opening = Opening::start(path.to_path_buf(), kind, cad.clone(), move || {
+            wake.request_repaint()
+        });
         self.next_id += 1;
         self.docs.push(Doc {
             path: path.to_path_buf(),
@@ -511,8 +528,9 @@ impl ViewerModule {
             .add_filter(
                 "File che WinFiles mostra",
                 &[
-                    "pdf", "ai", "eps", "jpg", "jpeg", "png", "tif", "tiff", "webp", "bmp", "gif", "heic", "heif",
-                    "psd", "psb", "dng", "cr2", "cr3", "nef", "arw", "orf", "rw2", "raf", "dxf", "dwg",
+                    "pdf", "ai", "eps", "jpg", "jpeg", "png", "tif", "tiff", "webp", "bmp", "gif", "heic",
+                    "heif", "psd", "psb", "dng", "cr2", "cr3", "nef", "arw", "orf", "rw2", "raf", "dxf",
+                    "dwg",
                 ],
             )
             .pick_files()
@@ -545,7 +563,15 @@ impl ViewerModule {
             self.status = "Aspetta che il file sia aperto".into();
             return;
         };
-        self.print = Some(print::PrintPage::new(&self.ctx, &d.path, d.kind, o, d.page, &d.cad, self.print_choice.clone()));
+        self.print = Some(print::PrintPage::new(
+            &self.ctx,
+            &d.path,
+            d.kind,
+            o,
+            d.page,
+            &d.cad,
+            self.print_choice.clone(),
+        ));
     }
 
     /// Le voci di "Passa a", nell'ordine: nome, se vale per questo file, la richiesta.
@@ -555,14 +581,37 @@ impl ViewerModule {
             .doc()
             .is_some_and(|d| matches!(kind, ViewKind::Pdf) || (kind == ViewKind::Ai && is_pdf_file(&d.path)));
         let image = kind == ViewKind::Image;
-        let nestable = matches!(kind, ViewKind::Pdf | ViewKind::Ai | ViewKind::Eps | ViewKind::Image);
+        let nestable = matches!(
+            kind,
+            ViewKind::Pdf | ViewKind::Ai | ViewKind::Eps | ViewKind::Image
+        );
         let listed = kind != ViewKind::Unsupported && kind != ViewKind::Cad;
         vec![
-            ("Miniature", "Aggiunge il file all'elenco delle miniature (Ctrl+1)", listed),
-            ("Modifica PDF", "Apre il file in Modifica PDF (Ctrl+2)", pdf_inside),
-            ("Tracciati", "Apre Modifica PDF con lo strumento Tracciati (Ctrl+3)", pdf_inside),
-            ("Modifica immagini", "Apre l'immagine in Modifica immagini (Ctrl+4)", image),
-            ("Fustella", "Apre Modifica immagini con la fustella (Ctrl+5)", image),
+            (
+                "Miniature",
+                "Aggiunge il file all'elenco delle miniature (Ctrl+1)",
+                listed,
+            ),
+            (
+                "Modifica PDF",
+                "Apre il file in Modifica PDF (Ctrl+2)",
+                pdf_inside,
+            ),
+            (
+                "Tracciati",
+                "Apre Modifica PDF con lo strumento Tracciati (Ctrl+3)",
+                pdf_inside,
+            ),
+            (
+                "Modifica immagini",
+                "Apre l'immagine in Modifica immagini (Ctrl+4)",
+                image,
+            ),
+            (
+                "Fustella",
+                "Apre Modifica immagini con la fustella (Ctrl+5)",
+                image,
+            ),
             ("Nesting", "Aggiunge il file al nesting (Ctrl+6)", nestable),
         ]
     }
@@ -626,7 +675,9 @@ impl ViewerModule {
                     .min_size(vec2(112.0, 34.0));
                     if ui
                         .add_enabled(can, b)
-                        .on_hover_text("Stampa il file a misura vera, adattato o in scala, con l'anteprima (Ctrl+P)")
+                        .on_hover_text(
+                            "Stampa il file a misura vera, adattato o in scala, con l'anteprima (Ctrl+P)",
+                        )
                         .clicked()
                     {
                         self.open_print();
@@ -671,26 +722,54 @@ impl ViewerModule {
                         self.reveal();
                     }
                     separator(ui);
-                    if icons::button(ui, "info", "Misure e informazioni", self.side_open && self.side_tab == SideTab::Info, has, 32.0)
-                        .clicked()
+                    if icons::button(
+                        ui,
+                        "info",
+                        "Misure e informazioni",
+                        self.side_open && self.side_tab == SideTab::Info,
+                        has,
+                        32.0,
+                    )
+                    .clicked()
                     {
                         self.toggle_side(SideTab::Info);
                     }
                     let kind = self.doc().map(|d| d.kind);
                     if matches!(kind, Some(ViewKind::Pdf | ViewKind::Ai | ViewKind::Eps))
-                        && icons::button(ui, "palette", "Tinte piatte", self.side_open && self.side_tab == SideTab::Spots, true, 32.0)
-                            .clicked()
+                        && icons::button(
+                            ui,
+                            "palette",
+                            "Tinte piatte",
+                            self.side_open && self.side_tab == SideTab::Spots,
+                            true,
+                            32.0,
+                        )
+                        .clicked()
                     {
                         self.toggle_side(SideTab::Spots);
                     }
                     if kind == Some(ViewKind::Cad)
-                        && icons::button(ui, "layers", "Layer del disegno", self.side_open && self.side_tab == SideTab::Layers, true, 32.0)
-                            .clicked()
+                        && icons::button(
+                            ui,
+                            "layers",
+                            "Layer del disegno",
+                            self.side_open && self.side_tab == SideTab::Layers,
+                            true,
+                            32.0,
+                        )
+                        .clicked()
                     {
                         self.toggle_side(SideTab::Layers);
                     }
-                    if icons::button(ui, "ruler", "Quote: misura sul file", self.side_open && self.side_tab == SideTab::Quotes, has, 32.0)
-                        .clicked()
+                    if icons::button(
+                        ui,
+                        "ruler",
+                        "Quote: misura sul file",
+                        self.side_open && self.side_tab == SideTab::Quotes,
+                        has,
+                        32.0,
+                    )
+                    .clicked()
                     {
                         self.toggle_side(SideTab::Quotes);
                     }
@@ -725,7 +804,11 @@ impl ViewerModule {
         } else {
             "–".into()
         };
-        ui.label(egui::RichText::new(text).font(semibold(13.0)).color(t.text_strong));
+        ui.label(
+            egui::RichText::new(text)
+                .font(semibold(13.0))
+                .color(t.text_strong),
+        );
         let tip_next = if self.doc().is_some_and(|d| d.browse.from_job) {
             "File seguente del lavoro (→)"
         } else {
@@ -787,7 +870,7 @@ impl ViewerModule {
             egui::containers::menu::MenuButton::from_button(
                 egui::Button::image_and_text(
                     icons::image("send", 16.0, if has { t.text_strong } else { t.text_disabled }),
-                    egui::RichText::new("Passa a ▾").color(if has { t.text_strong } else { t.text_disabled }),
+                    egui::RichText::new("Passa a…").color(if has { t.text_strong } else { t.text_disabled }),
                 )
                 .min_size(vec2(0.0, 32.0)),
             )
@@ -841,8 +924,10 @@ impl ViewerModule {
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         if !self.status.is_empty() {
                             ui.add(
-                                egui::Label::new(egui::RichText::new(&self.status).size(12.0).color(t.text_dim))
-                                    .truncate(),
+                                egui::Label::new(
+                                    egui::RichText::new(&self.status).size(12.0).color(t.text_dim),
+                                )
+                                .truncate(),
                             );
                         }
                     });
@@ -880,8 +965,22 @@ impl ViewerModule {
         let strip = Rect::from_min_size(rest.min, vec2(strip_w, rest.height()));
         let side = Rect::from_min_max(pos2(rest.right() - side_w, rest.top()), rest.max);
         let view = Rect::from_min_max(
-            pos2(if strip_w > 0.0 { strip.right() + 10.0 } else { rest.left() }, rest.top()),
-            pos2(if side_w > 0.0 { side.left() - 10.0 } else { rest.right() }, rest.bottom()),
+            pos2(
+                if strip_w > 0.0 {
+                    strip.right() + 10.0
+                } else {
+                    rest.left()
+                },
+                rest.top(),
+            ),
+            pos2(
+                if side_w > 0.0 {
+                    side.left() - 10.0
+                } else {
+                    rest.right()
+                },
+                rest.bottom(),
+            ),
         );
         if strip_w > 0.0 {
             self.page_strip(ui, strip);
@@ -920,7 +1019,9 @@ impl ViewerModule {
             .add(
                 egui::Button::image_and_text(
                     icons::image("folder-open", 17.0, t.on_primary),
-                    egui::RichText::new("Apri un file…").font(semibold(13.5)).color(t.on_primary),
+                    egui::RichText::new("Apri un file…")
+                        .font(semibold(13.5))
+                        .color(t.on_primary),
                 )
                 .fill(t.primary)
                 .min_size(vec2(150.0, 34.0)),
@@ -972,21 +1073,39 @@ impl ViewerModule {
                         };
                         ui.painter().rect_filled(r, t.radius, fill);
                         if active {
-                            ui.painter().rect_stroke(r, t.radius, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+                            ui.painter().rect_stroke(
+                                r,
+                                t.radius,
+                                Stroke::new(1.0, t.border),
+                                egui::StrokeKind::Inside,
+                            );
                             ui.painter().hline(
                                 r.x_range().shrink(6.0),
                                 r.bottom() - 1.5,
                                 Stroke::new(2.0, t.accent),
                             );
                         }
-                        ui.painter()
-                            .galley(pos2(r.left() + 10.0, r.center().y - galley.size().y / 2.0), galley, color);
-                        let x = Rect::from_center_size(pos2(r.right() - 14.0, r.center().y), Vec2::splat(18.0));
+                        ui.painter().galley(
+                            pos2(r.left() + 10.0, r.center().y - galley.size().y / 2.0),
+                            galley,
+                            color,
+                        );
+                        let x =
+                            Rect::from_center_size(pos2(r.right() - 14.0, r.center().y), Vec2::splat(18.0));
                         let x_resp = ui.interact(x, ui.id().with(("chiudi", i)), Sense::click());
                         if x_resp.hovered() {
                             ui.painter().rect_filled(x, 4.0, t.pressed);
                         }
-                        icons::paint(ui, "x", x.shrink(3.0), if x_resp.hovered() { t.text_strong } else { t.text_dim });
+                        icons::paint(
+                            ui,
+                            "x",
+                            x.shrink(3.0),
+                            if x_resp.hovered() {
+                                t.text_strong
+                            } else {
+                                t.text_dim
+                            },
+                        );
                         if x_resp.clicked() {
                             close = Some(i);
                         } else if resp.clicked() {
@@ -1028,7 +1147,8 @@ impl ViewerModule {
                     let th = (tw * aspect).min(tw * 1.6);
                     let tw = th / aspect;
                     let (r, resp) = ui.allocate_exact_size(vec2(w, th + 26.0), Sense::click());
-                    let paper = Rect::from_center_size(pos2(r.center().x, r.top() + 4.0 + th / 2.0), vec2(tw, th));
+                    let paper =
+                        Rect::from_center_size(pos2(r.center().x, r.top() + 4.0 + th / 2.0), vec2(tw, th));
                     if ui.is_rect_visible(r)
                         && let Some(rend) = &mut d.renderer
                     {
@@ -1042,7 +1162,10 @@ impl ViewerModule {
                     ui.painter().rect_stroke(
                         paper.expand(if selected { 2.0 } else { 0.5 }),
                         2.0,
-                        Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { t.accent } else { t.border }),
+                        Stroke::new(
+                            if selected { 2.0 } else { 1.0 },
+                            if selected { t.accent } else { t.border },
+                        ),
                         egui::StrokeKind::Outside,
                     );
                     ui.painter().text(
@@ -1067,8 +1190,15 @@ impl ViewerModule {
     fn preview(&mut self, ui: &mut egui::Ui, rect: Rect, unit: Unit) {
         let t = Tokens::get(ui.ctx());
         card(ui, rect);
-        let ruler = if self.show_rulers { 22.0 } else { 0.0 };
-        let board = Rect::from_min_max(rect.min + vec2(6.0 + ruler, 6.0 + ruler), rect.max - vec2(6.0, 6.0));
+        let (ruler_top, ruler_left) = if self.show_rulers {
+            (22.0, 34.0)
+        } else {
+            (0.0, 0.0)
+        };
+        let board = Rect::from_min_max(
+            rect.min + vec2(6.0 + ruler_left, 6.0 + ruler_top),
+            rect.max - vec2(6.0, 6.0),
+        );
         let pasteboard = if self.doc().is_some_and(|d| d.kind == ViewKind::Cad && d.cad.dark) {
             Color32::from_rgb(16, 16, 18)
         } else {
@@ -1089,7 +1219,10 @@ impl ViewerModule {
             State::Failed(e) => {
                 let mut child = ui.new_child(
                     egui::UiBuilder::new()
-                        .max_rect(Rect::from_center_size(board.center(), vec2(board.width().min(520.0), 160.0)))
+                        .max_rect(Rect::from_center_size(
+                            board.center(),
+                            vec2(board.width().min(520.0), 160.0),
+                        ))
                         .layout(egui::Layout::top_down(Align::Center)),
                 );
                 child.add(icons::image("triangle-alert", 32.0, t.warning));
@@ -1113,7 +1246,9 @@ impl ViewerModule {
         };
         let size = page.size;
         let (pw, ph) = (size.w.max(1e-3) as f32, size.h.max(1e-3) as f32);
-        let fit = ((board.width() - 40.0) / pw).min((board.height() - 40.0) / ph).max(MIN_SCALE);
+        let fit = ((board.width() - 40.0) / pw)
+            .min((board.height() - 40.0) / ph)
+            .max(MIN_SCALE);
         let width_fit = ((board.width() - 40.0) / pw).max(MIN_SCALE);
         let mut scale = match self.zoom {
             Zoom::Fit => fit,
@@ -1166,7 +1301,11 @@ impl ViewerModule {
             return;
         };
         let painter = ui.painter_at(board);
-        painter.rect_filled(paper.translate(vec2(0.0, 2.0)).expand(1.0), 2.0, Color32::from_black_alpha(50));
+        painter.rect_filled(
+            paper.translate(vec2(0.0, 2.0)).expand(1.0),
+            2.0,
+            Color32::from_black_alpha(50),
+        );
         painter.rect_filled(paper, 0.0, Color32::WHITE);
         let ppp = ui.ctx().pixels_per_point();
         let needed = (shown.x.max(shown.y) * ppp).ceil() as u32;
@@ -1195,21 +1334,28 @@ impl ViewerModule {
             if needed > base_side.max(1) + base_side / 5 {
                 let visible = paper.intersect(board);
                 if visible.is_positive() {
-                    let to_mm = |p: Pos2| [f64::from((p.x - paper.left()) / scale), f64::from((p.y - paper.top()) / scale)];
+                    let to_mm = |p: Pos2| {
+                        [
+                            f64::from((p.x - paper.left()) / scale),
+                            f64::from((p.y - paper.top()) / scale),
+                        ]
+                    };
                     let a = to_mm(visible.min);
                     let b = to_mm(visible.max);
                     let px_per_mm = f64::from(scale * ppp);
                     let region = [a[0], a[1], b[0] - a[0], b[1] - a[1]];
-                    let covered = rend.tile.as_ref().is_some_and(|(tl, _, _)| tl.covers(page_no, region, px_per_mm));
-                    let still = !resp.dragged() && hand.is_none_or(|v| v == Vec2::ZERO) && wheel == Vec2::ZERO;
+                    let covered = rend
+                        .tile
+                        .as_ref()
+                        .is_some_and(|(tl, _, _)| tl.covers(page_no, region, px_per_mm));
+                    let still =
+                        !resp.dragged() && hand.is_none_or(|v| v == Vec2::ZERO) && wheel == Vec2::ZERO;
                     if !covered && still {
                         // Un po' di margine attorno, entro il lato massimo.
-                        let grow_w = (region[2] * 0.25).min(
-                            ((f64::from(load::MAX_SIDE) / px_per_mm) - region[2]).max(0.0) / 2.0,
-                        );
-                        let grow_h = (region[3] * 0.25).min(
-                            ((f64::from(load::MAX_SIDE) / px_per_mm) - region[3]).max(0.0) / 2.0,
-                        );
+                        let grow_w = (region[2] * 0.25)
+                            .min(((f64::from(load::MAX_SIDE) / px_per_mm) - region[2]).max(0.0) / 2.0);
+                        let grow_h = (region[3] * 0.25)
+                            .min(((f64::from(load::MAX_SIDE) / px_per_mm) - region[3]).max(0.0) / 2.0);
                         let x0 = (region[0] - grow_w).max(0.0);
                         let y0 = (region[1] - grow_h).max(0.0);
                         let x1 = (region[0] + region[2] + grow_w).min(size.w);
@@ -1227,13 +1373,17 @@ impl ViewerModule {
                         && (tl.px_per_mm / px_per_mm - 1.0).abs() < 0.6
                     {
                         let r = Rect::from_min_size(
-                            pos2(paper.left() + actual[0] as f32 * scale, paper.top() + actual[1] as f32 * scale),
+                            pos2(
+                                paper.left() + actual[0] as f32 * scale,
+                                paper.top() + actual[1] as f32 * scale,
+                            ),
                             vec2(actual[2] as f32 * scale, actual[3] as f32 * scale),
                         );
                         painter.image(tex.id(), r, unit_rect(), Color32::WHITE);
                     }
                     if rend.tile_pending() {
-                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_millis(60));
                     }
                 }
             }
@@ -1260,7 +1410,10 @@ impl ViewerModule {
                             continue;
                         }
                         if fill {
-                            painter.add(egui::Shape::closed_line(pts.clone(), Stroke::new(w.max(2.0), swatch)));
+                            painter.add(egui::Shape::closed_line(
+                                pts.clone(),
+                                Stroke::new(w.max(2.0), swatch),
+                            ));
                         }
                         if line.is_some() {
                             if part.closed {
@@ -1279,7 +1432,13 @@ impl ViewerModule {
                 let a = mm_to(r[0], r[1]);
                 let b = mm_to(r[0] + r[2], r[1] + r[3]);
                 let rr = Rect::from_two_pos(a, b);
-                let pts = [rr.left_top(), rr.right_top(), rr.right_bottom(), rr.left_bottom(), rr.left_top()];
+                let pts = [
+                    rr.left_top(),
+                    rr.right_top(),
+                    rr.right_bottom(),
+                    rr.left_bottom(),
+                    rr.left_top(),
+                ];
                 for w in pts.windows(2) {
                     if let [p, q] = w {
                         painter.extend(egui::Shape::dashed_line(&[*p, *q], Stroke::new(1.2, c), 6.0, 4.0));
@@ -1294,15 +1453,23 @@ impl ViewerModule {
             }
         }
         // Il puntatore in mm, dall'angolo in alto a sinistra della pagina.
-        self.pointer_mm = ui.input(|i| i.pointer.hover_pos()).filter(|p| board.contains(*p)).map(|p| {
-            [f64::from((p.x - paper.left()) / scale), f64::from((p.y - paper.top()) / scale)]
-        });
+        // I disegni CAD grandi si guardano ridotti: righelli, puntatore e quote dicono i mm veri.
+        let real_k = match d.opened().map(|o| &o.facts) {
+            Some(Facts::Cad(f)) => f.unit_mm / f.page_scale,
+            _ => 1.0,
+        };
+        self.pointer_mm = ui
+            .input(|i| i.pointer.hover_pos())
+            .filter(|p| board.contains(*p))
+            .map(|p| {
+                [
+                    f64::from((p.x - paper.left()) / scale) * real_k,
+                    f64::from((p.y - paper.top()) / scale) * real_k,
+                ]
+            });
         // Le quote.
         if self.quoting {
-            let mm_per_unit = match d.opened().map(|o| &o.facts) {
-                Some(Facts::Cad(f)) => f.unit_mm / f.page_scale,
-                _ => 1.0,
-            };
+            let mm_per_unit = real_k;
             self.quotes.prepare(d.id * 10_000 + page_no as u64, mm_per_unit);
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(board));
             child.set_clip_rect(board);
@@ -1313,7 +1480,15 @@ impl ViewerModule {
             self.quotes.paint(&child, paper, pw, unit);
         }
         if self.show_rulers {
-            rulers(ui, rect, board, paper, scale, unit, self.pointer_mm);
+            rulers(
+                ui,
+                rect,
+                board,
+                paper,
+                scale / real_k as f32,
+                unit,
+                self.pointer_mm,
+            );
         }
         // Il doppio clic rimette la pagina intera.
         if resp.double_clicked() && !self.quoting {
@@ -1354,8 +1529,15 @@ impl ViewerModule {
                 self.quoting = false;
             }
         });
-        let body = Rect::from_min_max(pos2(rect.left() + 14.0, header.bottom() + 6.0), rect.max - vec2(14.0, 10.0));
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body).layout(egui::Layout::top_down(Align::Min)));
+        let body = Rect::from_min_max(
+            pos2(rect.left() + 14.0, header.bottom() + 6.0),
+            rect.max - vec2(14.0, 10.0),
+        );
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(body)
+                .layout(egui::Layout::top_down(Align::Min)),
+        );
         egui::ScrollArea::vertical()
             .id_salt(("visualizza-lato", self.side_tab as u8))
             .auto_shrink([false, false])
@@ -1368,7 +1550,9 @@ impl ViewerModule {
                         match a {
                             crate::quotes::PanelAction::Print => self.open_print(),
                             crate::quotes::PanelAction::Save => {
-                                self.status = "Per salvare le quote apri il file in Modifica PDF o Modifica immagini".into();
+                                self.status =
+                                    "Per salvare le quote apri il file in Modifica PDF o Modifica immagini"
+                                        .into();
                             }
                         }
                     }
@@ -1422,21 +1606,56 @@ fn spot_swatch(d: &Doc, raw: &[u8]) -> Color32 {
 }
 
 /// I righelli in alto e a sinistra, in mm (o cm) dall'angolo della pagina.
-fn rulers(ui: &egui::Ui, rect: Rect, board: Rect, paper: Rect, scale: f32, unit: Unit, pointer: Option<[f64; 2]>) {
+fn rulers(
+    ui: &egui::Ui,
+    rect: Rect,
+    board: Rect,
+    paper: Rect,
+    scale: f32,
+    unit: Unit,
+    pointer: Option<[f64; 2]>,
+) {
     let t = Tokens::get(ui.ctx());
-    let top = Rect::from_min_max(pos2(board.left(), rect.top() + 6.0), pos2(board.right(), board.top() - 2.0));
-    let left = Rect::from_min_max(pos2(rect.left() + 6.0, board.top()), pos2(board.left() - 2.0, board.bottom()));
+    let top = Rect::from_min_max(
+        pos2(board.left(), rect.top() + 6.0),
+        pos2(board.right(), board.top() - 2.0),
+    );
+    let left = Rect::from_min_max(
+        pos2(rect.left() + 6.0, board.top()),
+        pos2(board.left() - 2.0, board.bottom()),
+    );
     let painter = ui.painter();
     painter.rect_filled(top, 3.0, t.panel_darker);
     painter.rect_filled(left, 3.0, t.panel_darker);
     // Il passo delle tacche: il primo che lascia almeno 60 punti fra due numeri.
-    let steps = [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0];
-    let step = steps.iter().copied().find(|s| s * scale >= 60.0).unwrap_or(10000.0);
-    let minor = step / if step >= 10.0 && (step / 10.0).fract() == 0.0 { 10.0 } else { 5.0 };
+    let steps = [
+        1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10_000.0, 20_000.0,
+        50_000.0, 100_000.0,
+    ];
+    let step = steps
+        .iter()
+        .copied()
+        .find(|s| s * scale >= 60.0)
+        .unwrap_or(100_000.0);
+    let minor = step
+        / if step >= 10.0 && (step / 10.0).fract() == 0.0 {
+            10.0
+        } else {
+            5.0
+        };
     let font = egui::FontId::proportional(10.0);
+    // Dal metro in su i numeri sono metri: "12 m" sta nel righello, "12.000" no.
     let label = |v: f32| {
         let mm = f64::from(v);
-        format_number(mm / unit.mm(), if unit == Unit::Cm && step < 10.0 { 1 } else { 0 }, true)
+        if step >= 1000.0 {
+            format!("{} m", format_number(mm / 1000.0, 0, true))
+        } else {
+            format_number(
+                mm / unit.mm(),
+                if unit == Unit::Cm && step < 10.0 { 1 } else { 0 },
+                true,
+            )
+        }
     };
     let tp = ui.painter_at(top);
     let start = ((board.left() - paper.left()) / scale / minor).floor() * minor;
@@ -1447,7 +1666,13 @@ fn rulers(ui: &egui::Ui, rect: Rect, board: Rect, paper: Rect, scale: f32, unit:
         let h = if major { 9.0 } else { 4.0 };
         tp.vline(x, (top.bottom() - h)..=top.bottom(), Stroke::new(1.0, t.text_dim));
         if major {
-            tp.text(pos2(x + 2.0, top.top() + 1.0), egui::Align2::LEFT_TOP, label(v), font.clone(), t.text_dim);
+            tp.text(
+                pos2(x + 2.0, top.top() + 1.0),
+                egui::Align2::LEFT_TOP,
+                label(v),
+                font.clone(),
+                t.text_dim,
+            );
         }
         v += minor;
     }
@@ -1460,7 +1685,13 @@ fn rulers(ui: &egui::Ui, rect: Rect, board: Rect, paper: Rect, scale: f32, unit:
         let w = if major { 9.0 } else { 4.0 };
         lp.hline((left.right() - w)..=left.right(), y, Stroke::new(1.0, t.text_dim));
         if major {
-            lp.text(pos2(left.left() + 2.0, y + 2.0), egui::Align2::LEFT_TOP, label(v), font.clone(), t.text_dim);
+            lp.text(
+                pos2(left.left() + 2.0, y + 2.0),
+                egui::Align2::LEFT_TOP,
+                label(v),
+                font.clone(),
+                t.text_dim,
+            );
         }
         v += minor;
     }
@@ -1479,7 +1710,8 @@ fn unit_rect() -> Rect {
 fn separator(ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(13.0, 24.0), Sense::hover());
-    ui.painter().vline(r.center().x, r.y_range(), Stroke::new(1.0, t.divider));
+    ui.painter()
+        .vline(r.center().x, r.y_range(), Stroke::new(1.0, t.divider));
 }
 
 fn text_button(ui: &mut egui::Ui, icon: &str, text: &str, enabled: bool) -> egui::Response {
@@ -1487,8 +1719,11 @@ fn text_button(ui: &mut egui::Ui, icon: &str, text: &str, enabled: bool) -> egui
     let tint = if enabled { t.text_strong } else { t.text_disabled };
     ui.add_enabled(
         enabled,
-        egui::Button::image_and_text(icons::image(icon, 17.0, tint), egui::RichText::new(text).color(tint))
-            .min_size(vec2(0.0, 32.0)),
+        egui::Button::image_and_text(
+            icons::image(icon, 17.0, tint),
+            egui::RichText::new(text).color(tint),
+        )
+        .min_size(vec2(0.0, 32.0)),
     )
 }
 
@@ -1561,10 +1796,7 @@ fn measures_text(name: &str, page: &PageView, unit: Unit) -> String {
     if page.trim.is_some() {
         s.push_str(&format!("\nAl vivo: {}", format_size(page.finished(), unit)));
     }
-    s.push_str(&format!(
-        "\nArea: {}",
-        format_area(area_m2(page.finished()))
-    ));
+    s.push_str(&format!("\nArea: {}", format_area(area_m2(page.finished()))));
     s
 }
 

@@ -327,7 +327,11 @@ impl PdfPages {
         use hayro::vello_cpu::{Pixmap, RenderContext};
         let page = self.0.pages().get(page).ok_or(ThumbError::NoPage(page + 1))?;
         let [x, y, w, h] = region;
-        if !(scale.is_finite() && scale > 0.0 && [x, y, w, h].iter().all(|v| v.is_finite()) && w > 0.0 && h > 0.0)
+        if !(scale.is_finite()
+            && scale > 0.0
+            && [x, y, w, h].iter().all(|v| v.is_finite())
+            && w > 0.0
+            && h > 0.0)
         {
             return Err(ThumbError::Pdf);
         }

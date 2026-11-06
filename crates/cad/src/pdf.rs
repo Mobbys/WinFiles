@@ -53,7 +53,11 @@ impl Drawing {
     pub fn fit_scale(&self, long: f64) -> f64 {
         let (w, h) = self.size_mm(1.0);
         let side = w.max(h);
-        if side > 0.0 && side.is_finite() { long / side } else { 1.0 }
+        if side > 0.0 && side.is_finite() {
+            long / side
+        } else {
+            1.0
+        }
     }
 
     /// La pagina PDF del disegno.
@@ -73,14 +77,26 @@ impl Drawing {
         let (pw, ph) = (pw.max(1.0), ph.max(1.0));
         let mut ops = String::new();
         if o.dark {
-            let _ = writeln!(ops, "0.06 0.06 0.07 rg 0 0 {} {} re f", n(pw * PT_PER_MM), n(ph * PT_PER_MM));
+            let _ = writeln!(
+                ops,
+                "0.06 0.06 0.07 rg 0 0 {} {} re f",
+                n(pw * PT_PER_MM),
+                n(ph * PT_PER_MM)
+            );
         }
         // Dalle unità del disegno ai punti della pagina, con l'angolo in basso a sinistra
         // dell'ingombro sul margine.
         let s = k * PT_PER_MM;
         let [x0, y0, _, _] = self.extents;
         let m = o.margin_mm * PT_PER_MM;
-        let _ = writeln!(ops, "q {} 0 0 {} {} {} cm 1 J 1 j", n(s), n(s), n(m - x0 * s), n(m - y0 * s));
+        let _ = writeln!(
+            ops,
+            "q {} 0 0 {} {} {} cm 1 J 1 j",
+            n(s),
+            n(s),
+            n(m - x0 * s),
+            n(m - y0 * s)
+        );
         let mut last_color: Option<[u8; 3]> = None;
         let mut last_width: Option<f64> = None;
         for shape in &self.shapes {
@@ -161,7 +177,14 @@ pub fn text_page(w: f64, h: f64, texts: &[TextLine], lines: &[[f64; 4]]) -> Resu
     if !lines.is_empty() {
         ops.push_str("0.25 w 0.4 G\n");
         for l in lines {
-            let _ = writeln!(ops, "{} {} m {} {} l S", n(l[0] * PT_PER_MM), n(y(l[1])), n(l[2] * PT_PER_MM), n(y(l[3])));
+            let _ = writeln!(
+                ops,
+                "{} {} m {} {} l S",
+                n(l[0] * PT_PER_MM),
+                n(y(l[1])),
+                n(l[2] * PT_PER_MM),
+                n(y(l[3]))
+            );
         }
     }
     for t in texts {
@@ -208,7 +231,11 @@ fn n(v: f64) -> String {
     }
     let s = format!("{v:.5}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s == "-0" || s.is_empty() { "0".into() } else { s.into() }
+    if s == "-0" || s.is_empty() {
+        "0".into()
+    } else {
+        s.into()
+    }
 }
 
 /// Un testo fra parentesi in WinAnsi: le lettere accentate ci stanno, gli altri segni diventano `?`.

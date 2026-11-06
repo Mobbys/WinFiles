@@ -32,8 +32,16 @@ impl PageBoxes {
     pub fn bleed_sides(&self) -> Option<[f64; 4]> {
         let t = self.trim?;
         let b = self.bleed.unwrap_or([0.0, 0.0, self.size.w, self.size.h]);
-        let sides = [t[0] - b[0], t[1] - b[1], b[0] + b[2] - t[0] - t[2], b[1] + b[3] - t[1] - t[3]];
-        sides.iter().any(|v| *v > 0.05).then_some(sides.map(|v| v.max(0.0)))
+        let sides = [
+            t[0] - b[0],
+            t[1] - b[1],
+            b[0] + b[2] - t[0] - t[2],
+            b[1] + b[3] - t[1] - t[3],
+        ];
+        sides
+            .iter()
+            .any(|v| *v > 0.05)
+            .then_some(sides.map(|v| v.max(0.0)))
     }
 }
 
@@ -82,14 +90,18 @@ pub(crate) fn read(doc: &Document) -> Details {
             _ => None,
         });
     let output_intent = intent.and_then(|d| {
-        [b"OutputConditionIdentifier".as_slice(), b"Info", b"OutputCondition"]
-            .iter()
-            .find_map(|k| {
-                d.get(k)
-                    .map(|o| doc.resolve(o))
-                    .and_then(|o| o.as_string().map(|s| s.to_text()))
-                    .filter(|s| !s.trim().is_empty())
-            })
+        [
+            b"OutputConditionIdentifier".as_slice(),
+            b"Info",
+            b"OutputCondition",
+        ]
+        .iter()
+        .find_map(|k| {
+            d.get(k)
+                .map(|o| doc.resolve(o))
+                .and_then(|o| o.as_string().map(|s| s.to_text()))
+                .filter(|s| !s.trim().is_empty())
+        })
     });
     Details {
         pages: pages(doc),
@@ -141,7 +153,10 @@ fn boxes_of(crop: [f64; 4], bleed: [f64; 4], trim: [f64; 4], rotation: i64) -> P
     };
     let differs = |r: [f64; 4]| {
         let p = place(r);
-        (p[0].abs() > 0.01 || p[1].abs() > 0.01 || (p[2] - size.w).abs() > 0.01 || (p[3] - size.h).abs() > 0.01)
+        (p[0].abs() > 0.01
+            || p[1].abs() > 0.01
+            || (p[2] - size.w).abs() > 0.01
+            || (p[3] - size.h).abs() > 0.01)
             .then_some(p)
     };
     PageBoxes {

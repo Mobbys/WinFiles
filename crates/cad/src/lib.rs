@@ -45,7 +45,9 @@ pub enum CadError {
     Dxf(String),
     #[error("DWG non leggibile: {0}")]
     Dwg(String),
-    #[error("questo DWG è di una versione troppo vecchia (prima di AutoCAD R13): salvalo di nuovo da AutoCAD")]
+    #[error(
+        "questo DWG è di una versione troppo vecchia (prima di AutoCAD R13): salvalo di nuovo da AutoCAD"
+    )]
     OldDwg,
     #[error("il disegno è vuoto")]
     Empty,
@@ -118,9 +120,14 @@ pub struct Text {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Geometry {
     /// Una linea spezzata, chiusa o aperta.
-    Line { points: Vec<[f64; 2]>, closed: bool },
+    Line {
+        points: Vec<[f64; 2]>,
+        closed: bool,
+    },
     /// Un'area piena (retino pieno, solido): uno o più contorni, pari-dispari.
-    Fill { contours: Vec<Vec<[f64; 2]>> },
+    Fill {
+        contours: Vec<Vec<[f64; 2]>>,
+    },
     Text(Text),
 }
 
@@ -316,7 +323,10 @@ fn first(tags: &[Tag], code: i32) -> Option<&Tag> {
 }
 
 fn real(tags: &[Tag], code: i32, default: f64) -> f64 {
-    first(tags, code).map(Tag::f64).filter(|v| v.is_finite()).unwrap_or(default)
+    first(tags, code)
+        .map(Tag::f64)
+        .filter(|v| v.is_finite())
+        .unwrap_or(default)
 }
 
 fn int(tags: &[Tag], code: i32, default: i64) -> i64 {
@@ -324,7 +334,9 @@ fn int(tags: &[Tag], code: i32, default: i64) -> i64 {
 }
 
 fn text(tags: &[Tag], code: i32) -> String {
-    first(tags, code).map(|t| t.str().trim_end().to_string()).unwrap_or_default()
+    first(tags, code)
+        .map(|t| t.str().trim_end().to_string())
+        .unwrap_or_default()
 }
 
 fn point(tags: &[Tag], x: i32) -> [f64; 2] {
@@ -576,9 +588,24 @@ impl Reader {
                     }
                     let contour: Vec<[f64; 2]> = q.iter().map(|p| tf.apply(*p)).collect();
                     if kind == "3DFACE" {
-                        self.push(layer, paint, weight, Geometry::Line { points: contour, closed: true });
+                        self.push(
+                            layer,
+                            paint,
+                            weight,
+                            Geometry::Line {
+                                points: contour,
+                                closed: true,
+                            },
+                        );
                     } else {
-                        self.push(layer, paint, weight, Geometry::Fill { contours: vec![contour] });
+                        self.push(
+                            layer,
+                            paint,
+                            weight,
+                            Geometry::Fill {
+                                contours: vec![contour],
+                            },
+                        );
                     }
                 }
                 "HATCH" => {
@@ -595,7 +622,15 @@ impl Reader {
                     } else {
                         // Il motivo del retino non si disegna: solo il bordo.
                         for c in contours {
-                            self.push(layer, paint, weight, Geometry::Line { points: c, closed: true });
+                            self.push(
+                                layer,
+                                paint,
+                                weight,
+                                Geometry::Line {
+                                    points: c,
+                                    closed: true,
+                                },
+                            );
                         }
                     }
                 }
@@ -634,7 +669,11 @@ impl Reader {
                         let angle = first(tags, 50).map_or_else(
                             || {
                                 let d = point(tags, 11);
-                                if d == [0.0, 0.0] { 0.0 } else { d[1].atan2(d[0]).to_degrees() }
+                                if d == [0.0, 0.0] {
+                                    0.0
+                                } else {
+                                    d[1].atan2(d[0]).to_degrees()
+                                }
                             },
                             Tag::f64,
                         );
@@ -807,8 +846,18 @@ fn mtext_raw(tags: &[Tag]) -> String {
 /// passaggio uniti da linee.
 fn spline(tags: &[Tag]) -> Vec<[f64; 2]> {
     let degree = usize::try_from(int(tags, 71, 3).clamp(1, 10)).unwrap_or(3);
-    let knots: Vec<f64> = tags.iter().filter(|t| t.code == 40).map(Tag::f64).take(MAX_POINTS).collect();
-    let weights: Vec<f64> = tags.iter().filter(|t| t.code == 41).map(Tag::f64).take(MAX_POINTS).collect();
+    let knots: Vec<f64> = tags
+        .iter()
+        .filter(|t| t.code == 40)
+        .map(Tag::f64)
+        .take(MAX_POINTS)
+        .collect();
+    let weights: Vec<f64> = tags
+        .iter()
+        .filter(|t| t.code == 41)
+        .map(Tag::f64)
+        .take(MAX_POINTS)
+        .collect();
     let pick = |x: i32| {
         let mut pts: Vec<[f64; 2]> = Vec::new();
         for t in tags {
@@ -878,7 +927,10 @@ fn hatch_boundaries(tags: &[Tag]) -> Vec<Vec<[f64; 2]>> {
             contour = geometry::bulged(&verts, true);
         } else {
             // Lati: 93 quanti, poi per ciascuno 72 tipo e i suoi numeri.
-            let edges = get(i).filter(|t| t.code == 93).map_or(0, Tag::i64).clamp(0, 100_000);
+            let edges = get(i)
+                .filter(|t| t.code == 93)
+                .map_or(0, Tag::i64)
+                .clamp(0, 100_000);
             if edges > 0 {
                 i += 1;
             }
@@ -911,7 +963,8 @@ fn hatch_boundaries(tags: &[Tag]) -> Vec<Vec<[f64; 2]>> {
                     3 => {
                         let ccw = vals.get(&73).and_then(|l| l.first()).is_none_or(|f| *f != 0.0);
                         let (a, b) = (v(50, 0).to_radians(), v(51, 0).to_radians());
-                        let mut p = geometry::ellipse([v(10, 0), v(20, 0)], [v(11, 0), v(21, 0)], v(40, 0), a, b);
+                        let mut p =
+                            geometry::ellipse([v(10, 0), v(20, 0)], [v(11, 0), v(21, 0)], v(40, 0), a, b);
                         if !ccw {
                             p.reverse();
                         }
@@ -923,15 +976,19 @@ fn hatch_boundaries(tags: &[Tag]) -> Vec<Vec<[f64; 2]>> {
                         let weights = vals.get(&42).cloned().unwrap_or_default();
                         let xs = vals.get(&10).cloned().unwrap_or_default();
                         let ys = vals.get(&20).cloned().unwrap_or_default();
-                        let control: Vec<[f64; 2]> = xs.iter().zip(ys.iter()).map(|(x, y)| [*x, *y]).collect();
+                        let control: Vec<[f64; 2]> =
+                            xs.iter().zip(ys.iter()).map(|(x, y)| [*x, *y]).collect();
                         geometry::nurbs(&control, &knots, &weights, degree)
                     }
                     _ => Vec::new(),
                 };
                 // Un lato attacca dove finisce il precedente: il primo punto non si ripete.
-                let skip = usize::from(contour.last().zip(pts.first()).is_some_and(|(a, b)| {
-                    (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9
-                }));
+                let skip = usize::from(
+                    contour
+                        .last()
+                        .zip(pts.first())
+                        .is_some_and(|(a, b)| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9),
+                );
                 if contour.len() + pts.len() <= MAX_POINTS {
                     contour.extend(pts.into_iter().skip(skip));
                 }

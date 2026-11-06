@@ -257,7 +257,13 @@ mod tests {
         let port = free_port();
         let _first = start_on(port, "michel", &[], false, Target::Thumbnails);
         assert!(matches!(
-            start_on(port, "michel", &[PathBuf::from("a.pdf")], false, Target::Thumbnails),
+            start_on(
+                port,
+                "michel",
+                &[PathBuf::from("a.pdf")],
+                false,
+                Target::Thumbnails
+            ),
             Start::Window(None)
         ));
     }
@@ -286,7 +292,13 @@ mod tests {
             }
         });
         assert!(matches!(
-            start_on(port, "michel", &[PathBuf::from("a.pdf")], true, Target::Thumbnails),
+            start_on(
+                port,
+                "michel",
+                &[PathBuf::from("a.pdf")],
+                true,
+                Target::Thumbnails
+            ),
             Start::Window(None)
         ));
     }
@@ -298,8 +310,14 @@ mod tests {
             panic!("la prima copia deve ascoltare");
         };
         let files = vec![PathBuf::from("C:\\Taglio\\sagoma.pdf")];
-        assert!(matches!(start_on(port, "michel", &files, true, Target::Nesting), Start::Forwarded));
-        assert!(matches!(start_on(port, "michel", &files, true, Target::Viewer), Start::Forwarded));
+        assert!(matches!(
+            start_on(port, "michel", &files, true, Target::Nesting),
+            Start::Forwarded
+        ));
+        assert!(matches!(
+            start_on(port, "michel", &files, true, Target::Viewer),
+            Start::Forwarded
+        ));
         let mut got = wait_for(&inbox);
         for _ in 0..100 {
             if got.len() >= 2 {
@@ -308,7 +326,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
             got.extend(inbox.take());
         }
-        assert_eq!(got, vec![(Target::Nesting, files.clone()), (Target::Viewer, files)]);
+        assert_eq!(
+            got,
+            vec![(Target::Nesting, files.clone()), (Target::Viewer, files)]
+        );
     }
 
     #[test]

@@ -49,7 +49,10 @@ pub fn ellipse(c: [f64; 2], major: [f64; 2], ratio: f64, a: f64, b: f64) -> Vec<
     sample(sweep.to_degrees(), |t| {
         let ang = a + sweep * t;
         let (s, co) = ang.sin_cos();
-        [c[0] + major[0] * co + minor[0] * s, c[1] + major[1] * co + minor[1] * s]
+        [
+            c[0] + major[0] * co + minor[0] * s,
+            c[1] + major[1] * co + minor[1] * s,
+        ]
     })
 }
 
@@ -139,11 +142,17 @@ pub fn nurbs(control: &[[f64; 2]], knots: &[f64], weights: &[f64], degree: usize
             })
             .collect()
     };
-    let w = |i: usize| weights.get(i).copied().filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0);
+    let w = |i: usize| {
+        weights
+            .get(i)
+            .copied()
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(1.0)
+    };
     let (Some(&t0), Some(&t1)) = (knots.get(degree), knots.get(n)) else {
         return control.to_vec();
     };
-    if !(t1 > t0) {
+    if t1.partial_cmp(&t0) != Some(std::cmp::Ordering::Greater) {
         return control.to_vec();
     }
     let steps = (n * 16).clamp(16, 4096);

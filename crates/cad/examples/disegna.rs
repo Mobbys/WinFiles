@@ -7,7 +7,10 @@ fn main() {
     };
     match winfiles_cad::open(std::path::Path::new(&input)) {
         Ok(d) => {
-            println!("{} · unità {} · ingombro {:?}", d.version, d.units.name, d.extents);
+            println!(
+                "{} · unità {} · ingombro {:?}",
+                d.version, d.units.name, d.extents
+            );
             for l in &d.layers {
                 println!("  layer {:20} {:?} forme {}", l.name, l.color, l.shapes);
             }

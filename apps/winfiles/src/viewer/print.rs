@@ -135,7 +135,10 @@ fn sheet(paper: Paper, landscape: bool) -> Size {
 /// L'area stampabile del foglio: senza il bordo e, con la didascalia, la riga in fondo.
 fn printable(s: Size, margin: f64, caption: bool) -> Size {
     let bottom = if caption { CAPTION_MM } else { 0.0 };
-    Size::new((s.w - 2.0 * margin).max(1.0), (s.h - 2.0 * margin - bottom).max(1.0))
+    Size::new(
+        (s.w - 2.0 * margin).max(1.0),
+        (s.h - 2.0 * margin - bottom).max(1.0),
+    )
 }
 
 /// La scala (mm sul foglio per mm della pagina) e l'orientamento per `content`.
@@ -202,7 +205,14 @@ pub fn plan(page: usize, content: Size, true_mm: f64, c: &Choice) -> Vec<SheetPl
                 (((len - area) / step).ceil() as usize).saturating_add(1)
             }
         };
-        (size, p, step_w, step_h, count(shown.w, p.w, step_w), count(shown.h, p.h, step_h))
+        (
+            size,
+            p,
+            step_w,
+            step_h,
+            count(shown.w, p.w, step_w),
+            count(shown.h, p.h, step_h),
+        )
     };
     let p_now = printable(sheet(c.paper, landscape), c.margin, c.caption);
     let fits = shown.w <= p_now.w + 0.05 && shown.h <= p_now.h + 0.05;
@@ -337,11 +347,41 @@ impl PrintPage {
                     choice.mode = Mode::Real;
                 }
                 let size = opened.pages.first().map_or(Size::new(100.0, 100.0), |p| p.size);
-                (Source::Image(Arc::clone(img), size), opened.content.clone(), vec![size])
+                (
+                    Source::Image(Arc::clone(img), size),
+                    opened.content.clone(),
+                    vec![size],
+                )
             }
         };
+        // Un disegno più grande del foglio a 1:1 (una casa, un capannone) parte adattato.
+        if cad_unit_mm > 0.0
+            && matches!(opened.facts, Facts::Cad(_))
+            && choice.mode == Mode::Real
+            && let Some(size) = pages.first()
+        {
+            let one = plan(
+                0,
+                *size,
+                true_mm,
+                &Choice {
+                    tiles: false,
+                    ..choice.clone()
+                },
+            );
+            let (s, _) = scale_for(*size, true_mm, &choice);
+            let fits = one.first().is_some_and(|p| {
+                let area = printable(p.size, choice.margin, choice.caption);
+                size.w * s <= area.w + 0.05 && size.h * s <= area.h + 0.05
+            });
+            if !fits {
+                choice.mode = Mode::Fit;
+            }
+        }
         let wake = ctx.clone();
-        let renderer = Renderer::start(content, "stampa-visualizza".into(), move || wake.request_repaint());
+        let renderer = Renderer::start(content, "stampa-visualizza".into(), move || {
+            wake.request_repaint()
+        });
         let mut printers = PrinterScan::default();
         let wake = ctx.clone();
         printers.start(move || wake.request_repaint());
@@ -442,18 +482,35 @@ impl PrintPage {
         let mut out = Outcome::Keep;
         self.preview(ui, view, &sheets, unit);
         crate::app::card(ui, side);
+        let inner = side.shrink2(vec2(16.0, 12.0));
+        let foot = Rect::from_min_max(pos2(inner.left(), inner.bottom() - 82.0), inner.max);
+        ui.painter()
+            .hline(side.x_range(), foot.top() - 6.0, Stroke::new(1.0, t.divider));
+        let mut foot_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(foot)
+                .layout(egui::Layout::top_down(Align::Min)),
+        );
+        if let Some(o) = self.footer(&mut foot_ui, calibrations, &sheets, unit) {
+            out = o;
+        }
         let mut child = ui.new_child(
             egui::UiBuilder::new()
-                .max_rect(side.shrink2(vec2(16.0, 12.0)))
+                .max_rect(inner.with_max_y(foot.top() - 12.0))
                 .layout(egui::Layout::top_down(Align::Min)),
         );
         egui::ScrollArea::vertical()
             .id_salt("visualizza-stampa")
             .auto_shrink([false, false])
             .show(&mut child, |ui| {
-                ui.label(egui::RichText::new("Stampa").font(semibold(18.0)).color(t.text_strong));
+                ui.label(
+                    egui::RichText::new("Stampa")
+                        .font(semibold(18.0))
+                        .color(t.text_strong),
+                );
                 ui.add(
-                    egui::Label::new(egui::RichText::new(super::file_name(&self.path)).color(t.text_dim)).wrap(),
+                    egui::Label::new(egui::RichText::new(super::file_name(&self.path)).color(t.text_dim))
+                        .wrap(),
                 );
                 ui.add_space(8.0);
                 if let Some(o) = self.settings(ui, unit, calibrations, &sheets) {
@@ -461,7 +518,8 @@ impl PrintPage {
                 }
             });
         if matches!(out, Outcome::Keep) && self.sending.is_some() {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(200));
         }
         out
     }
@@ -498,7 +556,10 @@ impl PrintPage {
                     } else {
                         p.name.clone()
                     };
-                    if ui.selectable_label(self.choice.printer.as_deref() == Some(&p.name), text).clicked() {
+                    if ui
+                        .selectable_label(self.choice.printer.as_deref() == Some(&p.name), text)
+                        .clicked()
+                    {
                         self.choice.printer = Some(p.name.clone());
                     }
                 }
@@ -512,22 +573,39 @@ impl PrintPage {
 
         label(ui, "Foglio");
         ui.horizontal(|ui| {
-            segmented(ui, "visualizza-stampa-carta", &mut self.choice.paper, &[(Paper::A4, "A4"), (Paper::A3, "A3")]);
+            segmented(
+                ui,
+                "visualizza-stampa-carta",
+                &mut self.choice.paper,
+                &[(Paper::A4, "A4"), (Paper::A3, "A3")],
+            );
         });
         ui.add_space(4.0);
         segmented(
             ui,
             "visualizza-stampa-verso",
             &mut self.choice.turn,
-            &[(Turn::Auto, "Automatico"), (Turn::Portrait, "Verticale"), (Turn::Landscape, "Orizzontale")],
+            &[
+                (Turn::Auto, "Automatico"),
+                (Turn::Portrait, "Verticale"),
+                (Turn::Landscape, "Orizzontale"),
+            ],
         );
 
         label(ui, "Scala");
         let cad = self.cad();
         let modes: Vec<(Mode, &str)> = if cad {
-            vec![(Mode::Real, "1:1"), (Mode::Ratio, "1:N"), (Mode::Fit, "Adatta al foglio")]
+            vec![
+                (Mode::Real, "1:1"),
+                (Mode::Ratio, "1:N"),
+                (Mode::Fit, "Adatta al foglio"),
+            ]
         } else {
-            vec![(Mode::Real, "Misura vera"), (Mode::Percent, "Percentuale"), (Mode::Fit, "Adatta al foglio")]
+            vec![
+                (Mode::Real, "Misura vera"),
+                (Mode::Percent, "Percentuale"),
+                (Mode::Fit, "Adatta al foglio"),
+            ]
         };
         segmented(ui, "visualizza-stampa-scala", &mut self.choice.mode, &modes);
         ui.add_space(4.0);
@@ -555,9 +633,11 @@ impl PrintPage {
                     crate::fluent::number(
                         ui,
                         80.0,
-                        egui::DragValue::new(&mut self.choice.ratio).range(1.0..=100_000.0).speed(1.0),
+                        egui::DragValue::new(&mut self.choice.ratio)
+                            .range(1.0..=100_000.0)
+                            .speed(1.0),
                     );
-                    for n in [20.0, 50.0, 100.0, 200.0] {
+                    for n in [20.0, 50.0, 100.0] {
                         if ui.small_button(format!("1:{n:.0}")).clicked() {
                             self.choice.ratio = n;
                         }
@@ -580,16 +660,26 @@ impl PrintPage {
                 .color(t.text),
             );
             if self.choice.mode != Mode::Fit {
-                let one = plan(page, *size, self.true_mm, &Choice { tiles: false, ..self.choice.clone() });
+                let one = plan(
+                    page,
+                    *size,
+                    self.true_mm,
+                    &Choice {
+                        tiles: false,
+                        ..self.choice.clone()
+                    },
+                );
                 let too_big = one.first().is_some_and(|p| {
                     let area = printable(p.size, self.choice.margin, self.choice.caption);
                     printed.w > area.w + 0.05 || printed.h > area.h + 0.05
                 });
                 if too_big && !self.choice.tiles {
                     ui.label(
-                        egui::RichText::new("Più grande del foglio: attiva i tasselli o scegli Adatta al foglio.")
-                            .size(12.5)
-                            .color(t.warning),
+                        egui::RichText::new(
+                            "Più grande del foglio: attiva i tasselli o scegli Adatta al foglio.",
+                        )
+                        .size(12.5)
+                        .color(t.warning),
                     );
                 }
             }
@@ -622,17 +712,27 @@ impl PrintPage {
                     .speed(0.5)
                     .suffix(" mm"),
             )
-            .on_hover_text("Il bordo del foglio che la stampante lascia bianco: Adatta e tasselli ne stanno dentro");
+            .on_hover_text(
+                "Il bordo del foglio che la stampante lascia bianco: Adatta e tasselli ne stanno dentro",
+            );
         });
 
         label(ui, "Opzioni");
         if self.pages.len() > 1 {
             ui.horizontal(|ui| {
-                if crate::fluent::radio(ui, !self.all_pages, format!("Pagina {}", self.current_page + 1)).clicked() {
+                if crate::fluent::radio(ui, !self.all_pages, format!("Pagina {}", self.current_page + 1))
+                    .clicked()
+                {
                     self.all_pages = false;
                     self.sheet = 0;
                 }
-                if crate::fluent::radio(ui, self.all_pages, format!("Tutte le {} pagine", self.pages.len())).clicked() {
+                if crate::fluent::radio(
+                    ui,
+                    self.all_pages,
+                    format!("Tutte le {} pagine", self.pages.len()),
+                )
+                .clicked()
+                {
                     self.all_pages = true;
                     self.sheet = 0;
                 }
@@ -642,18 +742,36 @@ impl PrintPage {
             ui.label(egui::RichText::new("Copie").color(t.text));
             stepper(ui, &mut self.copies, 1, 999);
         });
-        ui.add(crate::fluent::checkbox(&mut self.choice.caption, "Didascalia in fondo al foglio"))
-            .on_hover_text("Nome del file, pagina, scala e tassello, in piccolo sotto il disegno");
+        ui.add(crate::fluent::checkbox(
+            &mut self.choice.caption,
+            "Didascalia in fondo al foglio",
+        ))
+        .on_hover_text("Nome del file, pagina, scala e tassello, in piccolo sotto il disegno");
         ui.add(crate::fluent::checkbox(&mut self.choice.gray, "Bianco e nero"));
         if cad {
             let before = self.choice.cad_black;
-            ui.add(crate::fluent::checkbox(&mut self.choice.cad_black, "Disegno tutto in nero"));
+            ui.add(crate::fluent::checkbox(
+                &mut self.choice.cad_black,
+                "Disegno tutto in nero",
+            ));
             if before != self.choice.cad_black {
                 self.remake_cad();
             }
         }
 
-        ui.add_space(14.0);
+        None
+    }
+
+    /// Il riepilogo e i pulsanti, sempre in vista in fondo al pannello.
+    fn footer(
+        &mut self,
+        ui: &mut egui::Ui,
+        calibrations: &BTreeMap<String, Calibration>,
+        sheets: &[SheetPlan],
+        unit: Unit,
+    ) -> Option<Outcome> {
+        let t = Tokens::get(ui.ctx());
+        let calibration = self.calibration(calibrations);
         let count = sheets.len();
         let summary = if count == 0 {
             format!("Troppi fogli (oltre {MAX_SHEETS}): scegli una scala più piccola")
@@ -663,16 +781,28 @@ impl PrintPage {
                 "{count} {} {}{}",
                 if count == 1 { "foglio" } else { "fogli" },
                 self.choice.paper.name(),
-                if self.copies > 1 { format!(" × {} copie = {total}", self.copies) } else { String::new() }
+                if self.copies > 1 {
+                    format!(" × {} copie = {total}", self.copies)
+                } else {
+                    String::new()
+                }
             )
         };
-        ui.label(egui::RichText::new(summary).font(semibold(13.5)).color(t.text_strong));
+        ui.label(
+            egui::RichText::new(summary)
+                .font(semibold(13.5))
+                .color(t.text_strong),
+        );
         ui.add_space(8.0);
         let mut result = None;
         let busy = self.sending.is_some();
         ui.horizontal(|ui| {
             let can = count > 0 && !busy;
-            let (fill, ink) = if can { (t.primary, t.on_primary) } else { (t.button, t.text_disabled) };
+            let (fill, ink) = if can {
+                (t.primary, t.on_primary)
+            } else {
+                (t.button, t.text_disabled)
+            };
             let b = egui::Button::image_and_text(
                 crate::icons::image("printer", 18.0, ink),
                 egui::RichText::new(if busy { "Stampo…" } else { "Stampa" })
@@ -687,7 +817,10 @@ impl PrintPage {
             if busy {
                 ui.add(egui::Spinner::new().color(t.accent));
             }
-            if ui.add(egui::Button::new("Chiudi").min_size(vec2(90.0, 40.0))).clicked() {
+            if ui
+                .add(egui::Button::new("Chiudi").min_size(vec2(90.0, 40.0)))
+                .clicked()
+            {
                 result = Some(Outcome::Close);
             }
         });
@@ -718,7 +851,10 @@ impl PrintPage {
         let t = Tokens::get(ui.ctx());
         crate::app::card(ui, rect);
         let bar = Rect::from_min_size(rect.min + vec2(12.0, 8.0), vec2(rect.width() - 24.0, 34.0));
-        let board = Rect::from_min_max(pos2(rect.left() + 12.0, bar.bottom() + 6.0), rect.max - vec2(12.0, 12.0));
+        let board = Rect::from_min_max(
+            pos2(rect.left() + 12.0, bar.bottom() + 6.0),
+            rect.max - vec2(12.0, 12.0),
+        );
         ui.painter().rect_filled(board, t.radius, t.pasteboard);
         let mut bar_ui = ui.new_child(
             egui::UiBuilder::new()
@@ -726,51 +862,108 @@ impl PrintPage {
                 .layout(egui::Layout::left_to_right(Align::Center)),
         );
         let n = sheets.len();
-        if crate::icons::button(&mut bar_ui, "chevron-left", "Foglio precedente", false, self.sheet > 0, 30.0).clicked() {
+        if crate::icons::button(
+            &mut bar_ui,
+            "chevron-left",
+            "Foglio precedente",
+            false,
+            self.sheet > 0,
+            30.0,
+        )
+        .clicked()
+        {
             self.sheet = self.sheet.saturating_sub(1);
         }
         let current = sheets.get(self.sheet);
-        let mut text = if n == 0 { "Nessun foglio".to_string() } else { format!("Foglio {} di {n}", self.sheet + 1) };
+        let mut text = if n == 0 {
+            "Nessun foglio".to_string()
+        } else {
+            format!("Foglio {} di {n}", self.sheet + 1)
+        };
         if let Some([r, c, rows, cols]) = current.and_then(|s| s.tile) {
-            text.push_str(&format!("  ·  tassello {} ({rows} righe × {cols} colonne)", tile_name(r, c)));
+            text.push_str(&format!(
+                "  ·  tassello {} ({rows} righe × {cols} colonne)",
+                tile_name(r, c)
+            ));
         }
-        bar_ui.label(egui::RichText::new(text).font(semibold(13.0)).color(t.text_strong));
-        if crate::icons::button(&mut bar_ui, "chevron-right", "Foglio seguente", false, self.sheet + 1 < n, 30.0).clicked() {
+        bar_ui.label(
+            egui::RichText::new(text)
+                .font(semibold(13.0))
+                .color(t.text_strong),
+        );
+        if crate::icons::button(
+            &mut bar_ui,
+            "chevron-right",
+            "Foglio seguente",
+            false,
+            self.sheet + 1 < n,
+            30.0,
+        )
+        .clicked()
+        {
             self.sheet = (self.sheet + 1).min(n.saturating_sub(1));
         }
         let Some(sp) = current.cloned() else {
             return;
         };
-        let k = ((board.width() - 60.0) / sp.size.w as f32).min((board.height() - 60.0) / sp.size.h as f32).max(0.05);
+        let k = ((board.width() - 60.0) / sp.size.w as f32)
+            .min((board.height() - 60.0) / sp.size.h as f32)
+            .max(0.05);
         let paper = Rect::from_center_size(board.center(), vec2(sp.size.w as f32 * k, sp.size.h as f32 * k));
         let painter = ui.painter_at(board);
-        painter.rect_filled(paper.translate(vec2(0.0, 3.0)).expand(1.0), 2.0, Color32::from_black_alpha(60));
+        painter.rect_filled(
+            paper.translate(vec2(0.0, 3.0)).expand(1.0),
+            2.0,
+            Color32::from_black_alpha(60),
+        );
         painter.rect_filled(paper, 0.0, Color32::WHITE);
         let to = |x: f64, y: f64| pos2(paper.left() + x as f32 * k, paper.top() + y as f32 * k);
         // L'area stampabile, tratteggiata.
         let m = self.choice.margin;
         let area = printable(sp.size, m, self.choice.caption);
         let ar = Rect::from_min_max(to(m, m), to(m + area.w, m + area.h));
-        let dashes = [ar.left_top(), ar.right_top(), ar.right_bottom(), ar.left_bottom(), ar.left_top()];
+        let dashes = [
+            ar.left_top(),
+            ar.right_top(),
+            ar.right_bottom(),
+            ar.left_bottom(),
+            ar.left_top(),
+        ];
         for w in dashes.windows(2) {
             if let [a, b] = w {
-                painter.extend(egui::Shape::dashed_line(&[*a, *b], Stroke::new(1.0, Color32::from_gray(190)), 5.0, 4.0));
+                painter.extend(egui::Shape::dashed_line(
+                    &[*a, *b],
+                    Stroke::new(1.0, Color32::from_gray(190)),
+                    5.0,
+                    4.0,
+                ));
             }
         }
         // La pagina (o il suo pezzo) dove va sul foglio.
         let [s, e, f] = sp.place;
         let page_rect = Rect::from_min_max(
             to(e, f),
-            to(e + s * self.pages.get(sp.page).map_or(0.0, |p| p.w), f + s * self.pages.get(sp.page).map_or(0.0, |p| p.h)),
+            to(
+                e + s * self.pages.get(sp.page).map_or(0.0, |p| p.w),
+                f + s * self.pages.get(sp.page).map_or(0.0, |p| p.h),
+            ),
         );
         let c = sp.clip;
-        let clip_rect = Rect::from_min_max(to(e + s * c[0], f + s * c[1]), to(e + s * (c[0] + c[2]), f + s * (c[1] + c[3])))
-            .intersect(paper);
+        let clip_rect = Rect::from_min_max(
+            to(e + s * c[0], f + s * c[1]),
+            to(e + s * (c[0] + c[2]), f + s * (c[1] + c[3])),
+        )
+        .intersect(paper);
         self.renderer.want_base(sp.page, 2048);
         let clipped = ui.painter_at(clip_rect.intersect(board));
         match self.renderer.base.get(&sp.page) {
             Some((_, tex)) => {
-                clipped.image(tex.id(), page_rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+                clipped.image(
+                    tex.id(),
+                    page_rect,
+                    Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
             }
             None => {
                 clipped.rect_filled(page_rect, 0.0, Color32::from_gray(235));
@@ -839,20 +1032,30 @@ impl PrintPage {
         };
         let (tx, rx) = channel();
         let wake = self.ctx.clone();
-        let spawned = std::thread::Builder::new().name("stampa-visualizza".into()).spawn(move || {
-            let r = build(&source, &sheets, &captions, calibration, true_mm, cad_unit_mm, margin).and_then(|pdf| {
-                craft_print::submit_with_progress(&pdf, &job, &mut |_, _| {})
-                    .map(|_| sheets.len())
-                    .map_err(|e| e.to_string())
+        let spawned = std::thread::Builder::new()
+            .name("stampa-visualizza".into())
+            .spawn(move || {
+                let r = build(
+                    &source,
+                    &sheets,
+                    &captions,
+                    calibration,
+                    true_mm,
+                    cad_unit_mm,
+                    margin,
+                )
+                .and_then(|pdf| {
+                    craft_print::submit_with_progress(&pdf, &job, &mut |_, _| {})
+                        .map(|_| sheets.len())
+                        .map_err(|e| e.to_string())
+                });
+                let _ = tx.send(r);
+                wake.request_repaint();
             });
-            let _ = tx.send(r);
-            wake.request_repaint();
-        });
         if spawned.is_ok() {
             self.sending = Some(rx);
         }
     }
-
 }
 
 /// Il PDF di stampa: per ogni foglio la pagina messa al suo posto, ritagliata al tassello, con la
@@ -891,7 +1094,14 @@ fn build(
     let cal = calibration.unwrap_or(Calibration::IDENTITY);
     // x' = sx·(s·x + e) + ox
     let matrix = |s: f64, e: f64, f: f64| {
-        [cal.scale_x * s, 0.0, 0.0, cal.scale_y * s, cal.scale_x * e + cal.offset_x, cal.scale_y * f + cal.offset_y]
+        [
+            cal.scale_x * s,
+            0.0,
+            0.0,
+            cal.scale_y * s,
+            cal.scale_x * e + cal.offset_x,
+            cal.scale_y * f + cal.offset_y,
+        ]
     };
     let mut caption_files = Vec::new();
     for (sp, text) in sheets.iter().zip(captions) {
@@ -935,7 +1145,12 @@ fn build(
     for (sp, cap) in sheets.iter().zip(&caption_files) {
         let [s, e, f] = sp.place;
         let c = sp.clip;
-        let clip = vec![vec![[c[0], c[1]], [c[0] + c[2], c[1]], [c[0] + c[2], c[1] + c[3]], [c[0], c[1] + c[3]]]];
+        let clip = vec![vec![
+            [c[0], c[1]],
+            [c[0] + c[2], c[1]],
+            [c[0] + c[2], c[1] + c[3]],
+            [c[0], c[1] + c[3]],
+        ]];
         let mut pieces = vec![SheetPiece {
             source: 0,
             page: sp.page,
@@ -988,7 +1203,10 @@ mod tests {
 
     #[test]
     fn adatta_sceglie_il_verso_che_ingrandisce_di_piu() {
-        let c = Choice { mode: Mode::Fit, ..a4() };
+        let c = Choice {
+            mode: Mode::Fit,
+            ..a4()
+        };
         let (s, landscape) = scale_for(Size::new(1000.0, 500.0), 1.0, &c);
         assert!(landscape);
         assert!((s - (297.0 - 8.0) / 1000.0).abs() < 1e-9);

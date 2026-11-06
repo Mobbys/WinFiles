@@ -154,7 +154,10 @@ mod tests {
     #[test]
     fn ogni_voce_ha_la_sua_classe_e_la_sua_opzione() {
         assert_eq!(Verb::of(CLSID), Some(Verb::Open));
-        assert_eq!(Verb::of(&format!("{{{}}}", NEST_CLSID.to_lowercase())), Some(Verb::Nest));
+        assert_eq!(
+            Verb::of(&format!("{{{}}}", NEST_CLSID.to_lowercase())),
+            Some(Verb::Nest)
+        );
         assert_eq!(Verb::of("00000000-0000-0000-0000-000000000000"), None);
         assert_eq!(Verb::Nest.arg(), "--invia-nesting");
         assert_ne!(CLSID, NEST_CLSID);
