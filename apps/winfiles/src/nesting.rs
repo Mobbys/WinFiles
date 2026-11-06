@@ -1643,7 +1643,10 @@ impl NestingModule {
                 let old = fit * self.zoom;
                 let min = room.center() + self.pan - vec2(sw as f32, sh as f32) * old / 2.0;
                 let q = (p - min) / old;
-                self.zoom = (self.zoom * z).clamp(1.0, 400.0);
+                // Su un rotolo lungo il foglio intero è una striscia: si deve poter ingrandire
+                // fino a qualche pixel per millimetro.
+                let most = 400.0_f32.max(6.0 / fit);
+                self.zoom = (self.zoom * z).clamp(1.0, most);
                 let new = fit * self.zoom;
                 let new_min = p - q * new;
                 self.pan = new_min + vec2(sw as f32, sh as f32) * new / 2.0 - room.center();
@@ -1651,6 +1654,20 @@ impl NestingModule {
         }
         if resp.dragged() {
             self.pan += resp.drag_delta();
+        }
+        // La rotella da sola scorre il foglio ingrandito (un rotolo da 50 m si percorre così);
+        // con le Maiuscole va di lato.
+        if resp.hovered() {
+            let scroll = ui.input(|i| {
+                if i.modifiers.command {
+                    Vec2::ZERO
+                } else {
+                    i.smooth_scroll_delta
+                }
+            });
+            if scroll != Vec2::ZERO {
+                self.pan += scroll;
+            }
         }
         if resp.double_clicked() {
             self.zoom = 1.0;
@@ -1745,7 +1762,7 @@ impl NestingModule {
         if let Some(tip) = tip {
             resp.on_hover_text(tip);
         } else if self.zoom <= 1.0 {
-            resp.on_hover_text("Ctrl+rotella per ingrandire, trascina per spostare");
+            resp.on_hover_text("Ctrl+rotella per ingrandire, rotella o trascina per spostare");
         }
         // La misura del foglio sotto.
         let caption = format_size(Size::new(sw, sh), Unit::Cm);
@@ -1792,7 +1809,7 @@ impl NestingModule {
                     hint(
                         ui,
                         "Il rotolo si taglia alla lunghezza usata; oltre la lunghezza massima si passa a un altro \
-                         pezzo (un PDF non va oltre 5,08 m).",
+                         pezzo (anche 50 m e oltre).",
                     );
                 }
                 ui.add_space(12.0);
