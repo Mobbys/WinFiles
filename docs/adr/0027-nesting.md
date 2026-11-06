@@ -37,8 +37,11 @@ Alternativa 3.
   (`page_as_form` di PdfCraft) e si disegna in ogni copia con la sua matrice, ritagliata sulla
   sagoma più l'abbondanza (almeno 0,5 mm, per non tagliare a metà la linea di taglio). Le risorse
   restano quelle del file: la tinta Taglio arriva a Onyx con il suo nome. Una pagina per foglio,
-  TrimBox uguale alla pagina; un rotolo è lungo quanto serve, al massimo 5,08 m per pagina (limite
-  del PDF senza `UserUnit`): oltre si passa a un'altra pagina.
+  TrimBox uguale alla pagina; un rotolo è lungo quanto serve, fino alla lunghezza massima scelta
+  (al più 1 km), poi si passa a un'altra pagina. Aggiornamento 0.2.27: oltre i 5,08 m (200 pollici,
+  il lato massimo di una pagina in punti) la pagina dichiara una `UserUnit` intera (PDF 1.6) e il
+  disegno si rimpicciolisce dello stesso fattore con un `cm`; i lettori (e Miniature, che ora legge
+  la `UserUnit`) la riportano a misura vera.
 - Il modulo è una scheda "Nesting" con l'elenco delle sagome e le copie («x20» o «20pz» nel nome
   del file le imposta, come nel pannello), le scelte a destra (ricordate) e l'anteprima dei fogli
   con le pagine ritagliate sulla sagoma.

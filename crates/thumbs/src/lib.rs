@@ -318,6 +318,39 @@ fn dos_section(head: &[u8]) -> Option<(u64, u64)> {
     Some((u64::from(field(4)?), u64::from(field(8)?)))
 }
 
+/// Il disegno di un AI "legacy" (PostScript, come i file da taglio salvati in Illustrator 3–8) o
+/// di un EPS di Illustrator, tradotto in un PDF di una pagina: tracciati, colori e tinte piatte
+/// (vedi `legacy_ai`). `None` se il file è un PDF o un PostScript che non viene da Illustrator.
+pub fn illustrator_pdf(path: &Path) -> Result<Option<Vec<u8>>, ThumbError> {
+    let mut file = std::fs::File::open(path)?;
+    let mut head = [0u8; 1024];
+    let n = read_up_to(&mut file, &mut head)?;
+    let head = head.get(..n).unwrap_or_default();
+    let section = if head.starts_with(&[0xC5, 0xD0, 0xD3, 0xC6]) {
+        dos_section(head)
+    } else if head.starts_with(b"%!") && !head.windows(5).any(|w| w == b"%PDF-") {
+        Some((0, file.metadata()?.len()))
+    } else {
+        None
+    };
+    let Some((start, len)) = section else {
+        return Ok(None);
+    };
+    if len > MAX_PDF_BYTES {
+        return Err(ThumbError::TooLarge(len));
+    }
+    file.seek(SeekFrom::Start(start))?;
+    let mut ps = Vec::new();
+    file.take(len).read_to_end(&mut ps)?;
+    if !legacy_ai::is_illustrator(&ps) {
+        return Ok(None);
+    }
+    catch_unwind(AssertUnwindSafe(|| legacy_ai::to_pdf(&ps)))
+        .map_err(|_| ThumbError::Crashed)?
+        .ok_or(ThumbError::NoPreview)
+        .map(Some)
+}
+
 /// Il disegno di un file PostScript di Illustrator (`section`: inizio e lunghezza), tradotto in
 /// PDF; gli altri PostScript non hanno anteprima.
 fn illustrator(
