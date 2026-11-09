@@ -5,6 +5,8 @@
 # menu corto di Windows 11 (ADR 0022). La cartella-convertitori, se c'è, contiene i quattro
 # convertitori dei documenti (wordcraft-cli.exe, gridcraft-cli.exe, deckcraft-cli.exe,
 # designcraft-cli.exe, ADR 0035), che vanno nella sottocartella "convertitori".
+# Se accanto a winfiles.exe c'è winfiles_preview.dll, l'MSI la installa e la registra per le
+# anteprime in Esplora file (ADR 0036).
 # Serve wixl (pacchetto "wixl" di Debian e Ubuntu, da msitools). La versione è quella del
 # workspace in Cargo.toml.
 set -eu
@@ -25,7 +27,11 @@ if [ $# -ge 4 ]; then
     done
     conv="-D Convertitori=$c"
 fi
+prev=""
+if [ -f "$(dirname "$exe")/winfiles_preview.dll" ]; then
+    prev="-D Anteprime=$(dirname "$exe")/winfiles_preview.dll"
+fi
 # shellcheck disable=SC2086
 wixl -D Version="$version" -D Exe="$exe" -D Icon="$dir/../apps/winfiles/assets/icon/icona.ico" \
-    $menu $conv -o "$out" "$dir/winfiles.wxs"
-echo "$out: WinFiles $version${menu:+ con il menu di Windows 11}${conv:+ con i convertitori dei documenti}"
+    $menu $conv $prev -o "$out" "$dir/winfiles.wxs"
+echo "$out: WinFiles $version${menu:+ con il menu di Windows 11}${conv:+ con i convertitori dei documenti}${prev:+ con le anteprime in Esplora file}"

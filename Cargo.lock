@@ -6823,6 +6823,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "winfiles-preview"
+version = "0.2.31"
+dependencies = [
+ "windows",
+ "windows-core",
+ "winfiles-cad",
+ "winfiles-model",
+ "winfiles-thumbs",
+]
+
+[[package]]
 name = "winfiles-scene"
 version = "0.2.31"
 dependencies = [

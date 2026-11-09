@@ -46,6 +46,43 @@
               </Component>
             </Directory>
 <?endif ?>
+<?ifdef var.Anteprime ?>
+            <!-- Le anteprime in Esplora file (ADR 0036): la DLL che disegna PDF, AI, EPS, PSD, RAW,
+                 HEIC, SVG, DXF, DWG e PLT nelle cartelle a icone grandi. Solo l'anteprima: il
+                 programma predefinito di ogni file non cambia. -->
+            <Component Id="Anteprime" Guid="4D6F2A93-1C8E-4B5D-A7F0-3E9B1C2D5A68">
+              <File Id="AnteprimeDll" Name="winfiles_preview.dll" Source="$(var.Anteprime)" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles" Name="Anteprime" Type="integer" Value="1" KeyPath="yes" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\CLSID\{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" Type="string" Value="Anteprime di WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\CLSID\{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}\InprocServer32" Type="string" Value="[INSTALLDIR]winfiles_preview.dll" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\CLSID\{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}\InprocServer32" Name="ThreadingModel" Type="string" Value="Apartment" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.pdf\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.ai\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.eps\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.psd\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.psb\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.heic\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.heif\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.webp\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.tga\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.dng\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.cr2\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.cr3\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.nef\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.nrw\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.arw\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.orf\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.rw2\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.raf\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.pef\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.svg\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.svgz\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.dxf\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.dwg\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.plt\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.hpgl\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}" Type="string" Value="{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}" />
+            </Component>
+<?endif ?>
             <Component Id="FileWinfiles" Guid="7C2A9E41-3F6B-4D18-B0A5-9E4C2D7F1B36">
               <RegistryValue Root="HKCU" Key="Software\Classes\.winfiles" Type="string" Value="WinFiles.Lavoro" KeyPath="yes" />
               <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.Lavoro" Type="string" Value="Lavoro WinFiles" />
@@ -384,6 +421,9 @@
       <ComponentRef Id="Visualizza" />
 <?ifdef var.Convertitori ?>
       <ComponentRef Id="Convertitori" />
+<?endif ?>
+<?ifdef var.Anteprime ?>
+      <ComponentRef Id="Anteprime" />
 <?endif ?>
       <ComponentRef Id="MenuStart" />
       <ComponentRef Id="Desktop" />
