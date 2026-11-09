@@ -1,0 +1,46 @@
+# I convertitori dei documenti di Word, Excel, PowerPoint e InDesign (ADR 0035): le versioni a riga
+# di comando di WordCraft, GridCraft, DeckCraft e DesignCraft, compilate per Windows dal commit
+# fissato in installer/convertitori.txt. Si compilano una volta sola per commit (cache): di solito
+# il job dura pochi secondi.
+name: Convertitori
+
+on:
+  workflow_call:
+
+jobs:
+  compila:
+    name: Convertitore ${{ matrix.nome }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        nome: [wordcraft, gridcraft, deckcraft, designcraft]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Commit fissato
+        id: rev
+        shell: bash
+        run: |
+          read -r _ repo rev < <(grep "^${{ matrix.nome }} " installer/convertitori.txt)
+          echo "repo=${repo}" >> "$GITHUB_OUTPUT"
+          echo "rev=${rev}" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: convertitori
+          key: convertitore-${{ matrix.nome }}-${{ steps.rev.outputs.rev }}
+      - name: Compila
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          git init -q sorgente
+          git -C sorgente fetch -q --depth 1 "https://github.com/${{ steps.rev.outputs.repo }}" "${{ steps.rev.outputs.rev }}"
+          git -C sorgente checkout -q FETCH_HEAD
+          cargo build --release --manifest-path sorgente/Cargo.toml -p "${{ matrix.nome }}-cli"
+          mkdir -p convertitori
+          cp "sorgente/target/release/${{ matrix.nome }}-cli.exe" convertitori/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: convertitore-${{ matrix.nome }}
+          path: convertitori/
+          if-no-files-found: error

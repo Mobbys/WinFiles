@@ -435,3 +435,12 @@ fn raw_without_preview_is_measured_from_the_sensor() {
     assert_eq!((i.width_px, i.height_px), (32, 64));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn pdf_page_with_user_unit_has_true_size() {
+    // Un rotolo del nesting di 160 cm × 50 m: MediaBox in unità da 10 punti.
+    let media = "0 0 453.5433 14173.2283] /UserUnit 10 /WFTest [0";
+    let p = run(&pdf(&[(media, None, 0)]), FileKind::Pdf).unwrap();
+    let s = p.pages[0].size;
+    assert!(close(s.w, 1600.0) && close(s.h, 50_000.0), "{s:?}");
+}

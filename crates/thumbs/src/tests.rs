@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use winfiles_model::FileKind;
 
-use crate::{ThumbError, render};
+use crate::{ThumbError, illustrator_pdf, render};
 
 /// Un file temporaneo che si cancella da solo.
 struct Temp(PathBuf);
@@ -294,4 +294,56 @@ fn psd_and_raw_have_a_thumbnail() {
     assert_eq!(FileKind::from_path(&f.0), FileKind::Image);
     let t = render(&f.0, FileKind::Image, 0, 32).unwrap();
     assert_eq!((t.width, t.height), (32, 16));
+}
+
+#[test]
+fn ai_in_postscript_diventa_un_pdf_per_il_nesting() {
+    // L'AI "legacy" e l'EPS di Illustrator danno una pagina PDF di 200 × 100 punti; un PDF e un
+    // PostScript di un altro programma no.
+    let ps = legacy_ai();
+    let f = Temp::new("nesting.ai", &ps);
+    let pdf = illustrator_pdf(&f.0).unwrap().expect("pagina PDF");
+    assert!(pdf.starts_with(b"%PDF-"));
+    let doc = hayro::hayro_syntax::Pdf::new(pdf).unwrap();
+    let mb = doc.pages()[0].media_box();
+    assert!(((mb.x1 - mb.x0) - 200.0).abs() < 0.5 && ((mb.y1 - mb.y0) - 100.0).abs() < 0.5);
+    let mut dos = vec![0xC5, 0xD0, 0xD3, 0xC6];
+    dos.extend(30u32.to_le_bytes());
+    dos.extend((ps.len() as u32).to_le_bytes());
+    dos.extend([0; 18]);
+    dos.extend(&ps);
+    let f = Temp::new("nesting.eps", &dos);
+    assert!(illustrator_pdf(&f.0).unwrap().is_some());
+    let f = Temp::new(
+        "corel-nesting.eps",
+        b"%!PS-Adobe-3.0 EPSF-3.0\n%%Creator: CorelDRAW\n",
+    );
+    assert!(illustrator_pdf(&f.0).unwrap().is_none());
+    let f = Temp::new("vero.pdf", b"%PDF-1.7\n%...");
+    assert!(illustrator_pdf(&f.0).unwrap().is_none());
+}
+
+#[test]
+fn il_testo_della_pagina_si_legge_con_le_posizioni() {
+    use crate::{PdfPages, TextGlyph, assemble};
+    let data = pdf_page(
+        "BT /F1 20 Tf 10 60 Td (Ciao mondo) Tj 0 -30 Td (Riga due) Tj ET",
+        300,
+        "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>",
+    );
+    let pages = PdfPages::open(data).unwrap();
+    let glyphs = pages.text(0).unwrap();
+    assert!(glyphs.len() >= 16, "{}", glyphs.len());
+    let first = &glyphs[0];
+    assert_eq!(first.text, "C");
+    // In alto a sinistra: x 10 pt, la riga a 100 - 60 = 40 pt dall'alto (base del testo).
+    assert!((first.rect[0] - 10.0).abs() < 0.5, "{:?}", first.rect);
+    assert!(
+        first.rect[1] < 40.0 && first.rect[1] + first.rect[3] > 40.0,
+        "{:?}",
+        first.rect
+    );
+    let all: Vec<&TextGlyph> = glyphs.iter().collect();
+    assert_eq!(assemble(&all), "Ciao mondo\nRiga due");
+    assert!(pages.text(5).is_err());
 }

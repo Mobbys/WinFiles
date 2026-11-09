@@ -14,12 +14,14 @@ use pdfcraft_cos::{CosError, Document, SaveOptions};
 use pdfcraft_organize::{self as organize, BoxSpec, OrganizeError, PageBox};
 use winfiles_geom::{Paper, Size, pt_to_mm};
 
+mod details;
 mod frame;
 mod illustrator;
 mod nesting;
 mod paths;
 mod spots;
 
+pub use details::{Details, PageBoxes};
 pub use frame::{BleedMode, BleedSpec};
 pub use nesting::{
     Contours, MAX_SHEET_MM, NestSheet, SheetPiece, die_shape, grow_shape, nest_document, shape_area,
@@ -142,6 +144,16 @@ impl PdfFile {
     }
 
     /// I tracciati della pagina `page` (da 0).
+    /// Riquadri delle pagine, programma che l'ha creato, PDF/X (scheda Visualizza).
+    pub fn details(&self) -> Details {
+        details::read(&self.0)
+    }
+
+    /// Le tinte piatte del documento, come nel pannello di Modifica PDF.
+    pub fn spots(&self) -> Result<Vec<Spot>, EditError> {
+        spots::list(&self.0)
+    }
+
     pub fn scan_page(&self, page: usize) -> Result<PageScan, EditError> {
         paths::scan(&self.0, page)
     }

@@ -17,8 +17,8 @@ use windows::Win32::UI::Shell::{
 };
 use windows_core::{BOOL, GUID, HRESULT, HSTRING, IUnknown, Interface, PWSTR, Ref, Result, implement};
 
-fn clsid() -> GUID {
-    GUID::try_from(crate::CLSID).unwrap_or_default()
+fn clsid(verb: crate::Verb) -> GUID {
+    GUID::try_from(verb.clsid()).unwrap_or_default()
 }
 
 /// La cartella di WinFiles che l'installer scrive in `HKCU\Software\WinFiles`.
@@ -59,11 +59,11 @@ fn shell_string(s: &str) -> Result<PWSTR> {
 }
 
 #[implement(IExplorerCommand)]
-struct OpenCommand;
+struct OpenCommand(crate::Verb);
 
 impl IExplorerCommand_Impl for OpenCommand_Impl {
     fn GetTitle(&self, _items: Ref<IShellItemArray>) -> Result<PWSTR> {
-        shell_string(crate::TITLE)
+        shell_string(self.0.title())
     }
 
     fn GetIcon(&self, _items: Ref<IShellItemArray>) -> Result<PWSTR> {
@@ -76,7 +76,7 @@ impl IExplorerCommand_Impl for OpenCommand_Impl {
     }
 
     fn GetCanonicalName(&self) -> Result<GUID> {
-        Ok(clsid())
+        Ok(clsid(self.0))
     }
 
     fn GetState(&self, _items: Ref<IShellItemArray>, _slow: BOOL) -> Result<u32> {
@@ -88,7 +88,7 @@ impl IExplorerCommand_Impl for OpenCommand_Impl {
         let exe = exe().ok_or(windows_core::Error::from(E_NOTIMPL))?;
         for group in crate::batches(&paths(items), crate::MAX_COMMAND) {
             // Il primo avvio apre la finestra (se non c'è già), gli altri le mandano i file.
-            let _ = Command::new(&exe).arg("--aggiungi").args(group).spawn();
+            let _ = Command::new(&exe).arg(self.0.arg()).args(group).spawn();
         }
         Ok(())
     }
@@ -103,7 +103,7 @@ impl IExplorerCommand_Impl for OpenCommand_Impl {
 }
 
 #[implement(IClassFactory)]
-struct Factory;
+struct Factory(crate::Verb);
 
 impl IClassFactory_Impl for Factory_Impl {
     fn CreateInstance(
@@ -120,7 +120,7 @@ impl IClassFactory_Impl for Factory_Impl {
         if !outer.is_null() {
             return Err(CLASS_E_NOAGGREGATION.into());
         }
-        let command: IExplorerCommand = OpenCommand.into();
+        let command: IExplorerCommand = OpenCommand(self.0).into();
         // SAFETY: `riid` e `object` sono puntatori validi controllati sopra.
         unsafe { command.query(riid, object) }.ok()
     }
@@ -130,7 +130,7 @@ impl IClassFactory_Impl for Factory_Impl {
     }
 }
 
-/// Esplora file chiede la fabbrica della classe [`crate::CLSID`].
+/// Esplora file chiede la fabbrica della classe [`crate::CLSID`] o [`crate::NEST_CLSID`].
 ///
 /// # Safety
 /// Chiamata da COM con puntatori validi o nulli; quelli nulli si rifiutano.
@@ -146,10 +146,13 @@ pub unsafe extern "system" fn DllGetClassObject(
     // SAFETY: puntatori controllati sopra.
     unsafe {
         *object = core::ptr::null_mut();
-        if *rclsid != clsid() {
+        let Some(verb) = [crate::Verb::Open, crate::Verb::Nest]
+            .into_iter()
+            .find(|v| *rclsid == clsid(*v))
+        else {
             return CLASS_E_CLASSNOTAVAILABLE;
-        }
-        let factory: IClassFactory = Factory.into();
+        };
+        let factory: IClassFactory = Factory(verb).into();
         factory.query(riid, object)
     }
 }

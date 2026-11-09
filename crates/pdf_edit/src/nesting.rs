@@ -22,8 +22,16 @@ pub type Contours = Vec<Vec<[f64; 2]>>;
 
 /// Lo spessore con cui si chiudono le fustelle fatte di tratti aperti (mm).
 const OPEN_DIE_MM: f64 = 0.2;
-/// La pagina più lunga che un PDF tiene senza `UserUnit` (200 pollici).
-pub const MAX_SHEET_MM: f64 = 5080.0;
+/// Il lato più lungo che un PDF tiene in punti normali (200 pollici, 508 cm). Oltre, la pagina
+/// dichiara una `UserUnit` più grande (PDF 1.6): i lettori la moltiplicano per le sue misure.
+const MAX_PLAIN_PT: f64 = 14_400.0;
+/// Il foglio o rotolo più lungo che si accetta: 1 km, in pratica nessun limite.
+pub const MAX_SHEET_MM: f64 = 1_000_000.0;
+
+/// La `UserUnit` intera più piccola con cui un foglio di `w`×`h` punti sta nei 200 pollici.
+pub fn user_unit(w: f64, h: f64) -> f64 {
+    (w.max(h) / MAX_PLAIN_PT).ceil().max(1.0)
+}
 /// Pagine di partenza diverse in un PDF di fogli.
 const MAX_FORMS: usize = 2000;
 
@@ -194,13 +202,22 @@ pub fn nest_document(
         let ok = |v: f64| v.is_finite() && (1.0..=MAX_SHEET_MM).contains(&v);
         if !ok(sheet.width) || !ok(sheet.height) {
             return Err(EditError::Invalid(format!(
-                "il foglio {} è troppo grande per un PDF (al massimo {:.0} cm)",
+                "il foglio {} è troppo grande per un PDF (al massimo {:.0} m)",
                 n + 1,
-                MAX_SHEET_MM / 10.0
+                MAX_SHEET_MM / 1000.0
             )));
         }
         let (sw, sh) = (mm_to_pt(sheet.width), mm_to_pt(sheet.height));
+        // Oltre i 508 cm la pagina conta in unità più grandi: il disegno si rimpicciolisce dello
+        // stesso fattore e i lettori lo rimettono a misura vera.
+        let unit = user_unit(sw, sh);
         let mut ops = String::new();
+        if unit > 1.0 {
+            // Con tutte le cifre: su 50 m anche un decimillesimo farebbe 5 mm.
+            let k = format!("{:.12}", 1.0 / unit);
+            let k = k.trim_end_matches('0');
+            ops.push_str(&format!("q {k} 0 0 {k} 0 0 cm\n"));
+        }
         let mut used = Dict::new();
         for piece in &sheet.pieces {
             let key = (piece.source, piece.page, !piece.hide.is_empty());
@@ -297,7 +314,11 @@ pub fn nest_document(
             }
             ops.push_str("S Q\n");
         }
-        let page = organize::insert_blank_page(&mut doc, n, sw, sh)?;
+        if unit > 1.0 {
+            ops.push_str("Q\n");
+        }
+        let (pw, ph) = (sw / unit, sh / unit);
+        let page = organize::insert_blank_page(&mut doc, n, pw, ph)?;
         let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), ops.as_bytes())));
         doc.update_dict(page, |p| {
             let mut resources = Dict::new();
@@ -312,7 +333,10 @@ pub fn nest_document(
             resources.set(b"XObject".to_vec(), Object::Dict(used));
             p.set(b"Resources".to_vec(), Object::Dict(resources));
             p.set(b"Contents".to_vec(), Object::Ref(contents));
-            p.set(b"TrimBox".to_vec(), rect_object([0.0, 0.0, sw, sh]));
+            p.set(b"TrimBox".to_vec(), rect_object([0.0, 0.0, pw, ph]));
+            if unit > 1.0 {
+                p.set(b"UserUnit".to_vec(), Object::Real(unit));
+            }
         })?;
     }
     Ok(PdfFile(doc))
