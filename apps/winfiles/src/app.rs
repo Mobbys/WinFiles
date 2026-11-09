@@ -528,7 +528,7 @@ impl WinFilesApp {
                         .into();
                     self.menu11 = None;
                 }
-                Status::Ready | Status::Unavailable => self.menu11 = None,
+                Status::Ready | Status::Unavailable | Status::Busy => self.menu11 = None,
                 other if self.menu11_later && !asked => drop(other),
                 other => self.menu11 = Some(other),
             }
