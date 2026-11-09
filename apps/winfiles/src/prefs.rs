@@ -110,6 +110,17 @@ pub struct Prefs {
     pub reporter: String,
     /// L'ultimo stile delle annotazioni delle miniature.
     pub annotate: crate::annotate::Style,
+    /// Le scelte della scheda Visualizza.
+    pub viewer: ViewerPrefs,
+}
+
+/// Le scelte della scheda Visualizza da ricordare.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ViewerPrefs {
+    pub print: crate::viewer::print::Choice,
+    /// I disegni CAD su fondo bianco invece che nero.
+    pub cad_light: bool,
 }
 
 impl Prefs {
@@ -130,6 +141,7 @@ impl Prefs {
         self.nesting = self.nesting.sanitized();
         self.image_die = self.image_die.sanitized();
         self.annotate = self.annotate.sanitized();
+        self.viewer.print = std::mem::take(&mut self.viewer.print).sanitized();
         if winfiles_layout::grid(&self.print, &[]).is_err() {
             self.print = PrintSettings::default();
         }
@@ -255,6 +267,15 @@ mod tests {
             },
             reporter: "Mario".into(),
             annotate: crate::annotate::Style::default(),
+            viewer: ViewerPrefs {
+                print: crate::viewer::print::Choice {
+                    paper: winfiles_geom::Paper::A3,
+                    tiles: true,
+                    ratio: 100.0,
+                    ..crate::viewer::print::Choice::default()
+                },
+                cad_light: true,
+            },
         };
         save_to(&file, &prefs).unwrap();
         assert_eq!(load_from(&file), prefs);

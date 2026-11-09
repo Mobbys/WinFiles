@@ -61,3 +61,14 @@ Il font dell'interfaccia è Inter (SIL OFL); le icone sono Lucide (ISC), le stes
 | `apps/winfiles/assets/icons/circle.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v0.469.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
 | `apps/winfiles/assets/icons/square.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v0.469.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
 | `apps/winfiles/assets/icons/highlighter.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v0.469.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/zoom-out.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/external-link.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/arrow-left.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/eye.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/eye-off.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/send.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/copy.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `cadcraft-dxf`, `cadcraft-dwg`, `cadcraft-color` (codice, dipendenze) | storytold | https://github.com/storytold/cadcraft (commit fissato in `crates/cad/Cargo.toml`) | MIT o Apache-2.0 |
+| `acadrust` 0.6.6 (codice, dipendenza non modificata, lettore dei DWG) | autori di acadrust | https://crates.io/crates/acadrust | MPL-2.0 (ADR 0033) |
+| `svg2pdf` 0.13 (codice, dipendenza, SVG in PDF) | typst | https://github.com/typst/svg2pdf | MIT o Apache-2.0 (ADR 0034) |
+| `wordcraft-cli`, `gridcraft-cli`, `deckcraft-cli`, `designcraft-cli` (programmi, convertitori dei documenti nell'MSI) | storytold | https://github.com/storytold/wordcraft, gridcraft, deckcraft, designcraft (commit in `installer/convertitori.txt`) | MIT o Apache-2.0 (ADR 0035) |

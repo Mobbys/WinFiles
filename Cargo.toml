@@ -6,7 +6,7 @@ default-members = ["crates/*", "apps/winfiles", "xtask"]
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.2.26"
+version = "0.2.33"
 edition = "2024"
 license = "LicenseRef-WinFiles-Proprietary"
 rust-version = "1.95"
@@ -25,6 +25,7 @@ winfiles-pdf-edit = { path = "crates/pdf_edit", version = "0.2.3" }
 winfiles-image-edit = { path = "crates/image_edit", version = "0.2.3" }
 winfiles-photo = { path = "crates/photo", version = "0.2.3" }
 winfiles-nest = { path = "crates/nest", version = "0.2.3" }
+winfiles-cad = { path = "crates/cad", version = "0.2.3" }
 
 # base
 serde = { version = "1", features = ["derive"] }
@@ -36,7 +37,7 @@ proptest = "1"
 hayro-syntax = { version = "0.8", default-features = false, features = ["std"] }
 # miniature (vedi docs/adr/0006-miniature.md)
 hayro = "0.8"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "gif", "bmp", "webp"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "gif", "bmp", "webp", "tga", "ico"] }
 # Modifica delle immagini (Fase 8, ADR 0016): il codificatore TIFF di `image` non scrive la
 # risoluzione né il profilo ICC, e un TIFF senza risoluzione in tipografia si stampa alla misura
 # sbagliata. È la stessa libreria che `image` usa per i TIFF, quindi nessuna copia in più. MIT.

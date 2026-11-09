@@ -181,6 +181,12 @@ impl ImagesModule {
 
     /// Apre le immagini in un thread a parte; arrivano con [`Self::receive`] e si mostra la
     /// prima appena è pronta.
+    /// Apre il pannello Fustella (dalla scheda Visualizza, "Passa a › Fustella").
+    pub fn show_die(&mut self) {
+        self.die.open = true;
+        self.quoting = false;
+    }
+
     pub fn open(&mut self, paths: &[PathBuf]) {
         if paths.is_empty() {
             return;

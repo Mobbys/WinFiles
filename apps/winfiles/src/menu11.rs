@@ -21,6 +21,9 @@ pub enum Status {
     NeedCert,
     /// Non c'entra: Windows 10, copia portatile, pacchetto assente.
     Unavailable,
+    /// Windows ha la versione di prima in uso (Esplora file l'ha caricata): si riprova al
+    /// prossimo avvio, senza disturbare; intanto la voce di prima continua a funzionare.
+    Busy,
     /// La conferma dell'amministratore è stata annullata.
     Cancelled,
     /// Errore di Windows, da mostrare.
@@ -58,8 +61,10 @@ try {{
   Add-AppxPackage -Path $pkg -ExternalLocation $dir -ForceUpdateFromAnyVersion
   'OK'
 }} catch {{
-  $m = $_.Exception.Message
-  if ($m -match '0x800B0109|0x800B010A|0x800B0100') {{ 'CERT' }} else {{ 'ERR ' + $m }}
+  $m = ($_.Exception.Message -replace '\s+', ' ').Trim()
+  if ($m -match '0x800B0109|0x800B010A|0x800B0100') {{ 'CERT' }}
+  elseif ($m -match '0x80073D02|0x80073D05|0x80073D06|0x80073CF6') {{ 'BUSY' }}
+  else {{ 'ERR ' + $m }}
 }}"#,
         dir = quoted(dir),
         msix = quoted(MSIX),
@@ -117,6 +122,7 @@ pub fn parse(out: &str) -> Status {
     match line {
         "OK" => Status::Ready,
         "CERT" => Status::NeedCert,
+        "BUSY" => Status::Busy,
         "NO" | "" => Status::Unavailable,
         "ANNULLATO" => Status::Cancelled,
         other => Status::Failed(other.strip_prefix("ERR ").unwrap_or(other).to_string()),
@@ -218,6 +224,7 @@ mod tests {
         assert_eq!(parse(""), Status::Unavailable);
         assert_eq!(parse("FATTO\nOK"), Status::Ready);
         assert_eq!(parse("ANNULLATO"), Status::Cancelled);
+        assert_eq!(parse("BUSY"), Status::Busy);
         assert_eq!(
             parse("ERR Accesso negato"),
             Status::Failed("Accesso negato".into())
@@ -232,6 +239,10 @@ mod tests {
         );
         assert!(s.contains("$dir = 'C:\\Users\\D''Amico\\AppData\\Local\\Programs\\WinFiles\\'"));
         assert!(s.contains("-eq '0.2.13.0'"));
+        // Il pacchetto di prima in uso non è un errore da mostrare, e il messaggio di Windows
+        // arriva intero su una riga (prima si vedeva solo l'ultima, la "NOTA").
+        assert!(s.contains("0x80073D02"));
+        assert!(s.contains(r"-replace '\s+', ' '"));
         assert!(s.contains("'Winsport.WinFiles'"));
         let c = certificate_script("C:\\Users\\D'Amico\\WinFiles\\");
         assert!(c.contains("-Verb RunAs"));

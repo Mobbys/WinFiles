@@ -484,3 +484,33 @@ fn le_curve_semplificate_non_allontanano_i_lati_dritti() {
         cut.after
     );
 }
+
+#[test]
+fn un_rotolo_di_50_metri_si_riempie() {
+    // 150 rettangoli da 50×30 cm su un rotolo da 160 cm: circa 15 m, tutto su un pezzo solo.
+    let items = vec![item(vec![rect(500.0, 300.0)], 150)];
+    let o = opts(roll(1600.0, 50_000.0), 10.0, 5.0, 90.0, 0);
+    let t = Instant::now();
+    let res = run(&items, &o);
+    eprintln!("rotolo 50 m: {:?}", t.elapsed());
+    assert!(res.unplaced.is_empty());
+    assert_eq!(res.sheets.len(), 1);
+    let used = res.sheets[0].height;
+    assert!(used > 10_000.0 && used <= 50_000.0, "{used}");
+    assert_valid(&items, &res, &o);
+}
+
+#[test]
+fn un_rotolo_lunghissimo_regge_i_conti() {
+    // Al limite di 1 km i conti interi non traboccano: i pezzi stanno nel rotolo, a distanza.
+    let items = vec![item(vec![rect(500.0, 300.0)], 30), item(letter_o(), 10)];
+    let o = opts(roll(1600.0, crate::MAX_MM), 10.0, 5.0, 90.0, 0);
+    let res = run(&items, &o);
+    assert!(res.unplaced.is_empty());
+    assert_eq!(res.sheets.len(), 1);
+    assert_valid(&items, &res, &o);
+    let o = opts(sheet(crate::MAX_MM, crate::MAX_MM), 10.0, 5.0, 90.0, 0);
+    let res = run(&items, &o);
+    assert!(res.unplaced.is_empty());
+    assert_valid(&items, &res, &o);
+}
