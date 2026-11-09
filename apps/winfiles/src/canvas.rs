@@ -62,6 +62,8 @@ pub struct Selection<'a> {
 pub struct CanvasOutput {
     /// File e pagina della miniatura cliccata.
     pub clicked: Option<(usize, usize)>,
+    /// File e pagina della miniatura con il doppio clic: si apre in Visualizza.
+    pub double: Option<(usize, usize)>,
     /// Il tasto destro: file e pagina sotto il puntatore, o niente fuori dalle miniature.
     pub secondary: Option<Option<(usize, usize)>>,
     /// Il foglio, per aprirci sopra il menu del tasto destro.
@@ -357,6 +359,9 @@ pub fn draw(
         }
         if response.clicked() && pointer.is_some_and(|p| cell.contains(p)) {
             out.clicked = Some((slot.file, slot.page));
+        }
+        if response.double_clicked() && pointer.is_some_and(|p| cell.contains(p)) {
+            out.double = Some((slot.file, slot.page));
         }
         if response.secondary_clicked() && pointer.is_some_and(|p| cell.contains(p)) {
             out.secondary = Some(Some((slot.file, slot.page)));

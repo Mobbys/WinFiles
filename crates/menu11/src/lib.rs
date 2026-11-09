@@ -3,7 +3,8 @@
 //! Windows 11 mette nel menu corto solo i comandi di un pacchetto firmato: il pacchetto
 //! (`installer/menu-win11/AppxManifest.xml`) dichiara questa DLL come server COM della classe
 //! [`CLSID`], ed Esplora file la carica per sapere il titolo, l'icona e cosa fare al clic. Al clic
-//! si avvia `WinFiles.exe --aggiungi` con tutti i file selezionati in una volta sola.
+//! si avvia `WinFiles.exe --aggiungi` con tutti i file selezionati in una volta sola. La seconda
+//! voce, "Invia al nesting WinFiles" (classe [`NEST_CLSID`]), avvia `--invia-nesting`.
 //!
 //! Qui sta solo ciò che si prova anche fuori da Windows; la parte COM è in `com`.
 
@@ -15,6 +16,57 @@ pub const TITLE: &str = "Apri in WinFiles";
 
 /// La classe COM della voce: la stessa in `AppxManifest.xml`. Non cambia mai.
 pub const CLSID: &str = "6E2C9B4A-3D71-4F85-A0C2-91B7E5D4F318";
+
+/// La seconda voce: manda i file scelti alla scheda Nesting.
+pub const NEST_TITLE: &str = "Invia al nesting WinFiles";
+
+/// La classe COM della seconda voce: la stessa in `AppxManifest.xml`. Non cambia mai.
+pub const NEST_CLSID: &str = "6F9C432C-532B-43BB-83DA-C588E0D0110E";
+
+/// I file che il nesting sa aprire: la voce "Invia al nesting WinFiles" c'è solo su questi.
+pub const NEST_TYPES: [&str; 13] = [
+    "pdf", "ai", "eps", "jpg", "jpeg", "png", "tif", "tiff", "psd", "webp", "bmp", "heic", "heif",
+];
+
+/// Le due voci del menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verb {
+    /// "Apri in WinFiles": i file vanno in Miniature.
+    Open,
+    /// "Invia al nesting WinFiles".
+    Nest,
+}
+
+impl Verb {
+    pub const fn title(self) -> &'static str {
+        match self {
+            Verb::Open => TITLE,
+            Verb::Nest => NEST_TITLE,
+        }
+    }
+
+    pub const fn clsid(self) -> &'static str {
+        match self {
+            Verb::Open => CLSID,
+            Verb::Nest => NEST_CLSID,
+        }
+    }
+
+    /// L'opzione con cui si avvia WinFiles.
+    pub const fn arg(self) -> &'static str {
+        match self {
+            Verb::Open => "--aggiungi",
+            Verb::Nest => "--invia-nesting",
+        }
+    }
+
+    /// La voce della classe `clsid` (senza graffe, maiuscole o minuscole).
+    pub fn of(clsid: &str) -> Option<Verb> {
+        [Verb::Open, Verb::Nest]
+            .into_iter()
+            .find(|v| v.clsid().eq_ignore_ascii_case(clsid.trim_matches(['{', '}'])))
+    }
+}
 
 /// Il tetto di una riga di comando di Windows è 32 767 caratteri: si resta ben sotto.
 pub const MAX_COMMAND: usize = 30_000;
@@ -92,5 +144,22 @@ mod tests {
     fn la_classe_e_quella_del_pacchetto() {
         let manifest = include_str!("../../../installer/menu-win11/AppxManifest.xml");
         assert_eq!(manifest.matches(CLSID).count(), 3);
+        // Una volta come classe e una per ogni tipo di file del nesting.
+        assert_eq!(manifest.matches(NEST_CLSID).count(), 1 + NEST_TYPES.len());
+        for ext in NEST_TYPES {
+            assert!(manifest.contains(&format!("Type=\".{ext}\"")), "manca .{ext}");
+        }
+    }
+
+    #[test]
+    fn ogni_voce_ha_la_sua_classe_e_la_sua_opzione() {
+        assert_eq!(Verb::of(CLSID), Some(Verb::Open));
+        assert_eq!(
+            Verb::of(&format!("{{{}}}", NEST_CLSID.to_lowercase())),
+            Some(Verb::Nest)
+        );
+        assert_eq!(Verb::of("00000000-0000-0000-0000-000000000000"), None);
+        assert_eq!(Verb::Nest.arg(), "--invia-nesting");
+        assert_ne!(CLSID, NEST_CLSID);
     }
 }

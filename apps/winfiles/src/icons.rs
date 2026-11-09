@@ -65,6 +65,14 @@ static ICONS: &[(&str, &[u8])] = icons![
     "circle",
     "square",
     "highlighter",
+    // Scheda Visualizza.
+    "zoom-out",
+    "external-link",
+    "arrow-left",
+    "eye",
+    "send",
+    "copy",
+    "eye-off",
 ];
 
 fn table() -> &'static SvgIconSet {

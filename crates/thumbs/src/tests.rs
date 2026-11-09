@@ -322,3 +322,28 @@ fn ai_in_postscript_diventa_un_pdf_per_il_nesting() {
     let f = Temp::new("vero.pdf", b"%PDF-1.7\n%...");
     assert!(illustrator_pdf(&f.0).unwrap().is_none());
 }
+
+#[test]
+fn il_testo_della_pagina_si_legge_con_le_posizioni() {
+    use crate::{PdfPages, TextGlyph, assemble};
+    let data = pdf_page(
+        "BT /F1 20 Tf 10 60 Td (Ciao mondo) Tj 0 -30 Td (Riga due) Tj ET",
+        300,
+        "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>",
+    );
+    let pages = PdfPages::open(data).unwrap();
+    let glyphs = pages.text(0).unwrap();
+    assert!(glyphs.len() >= 16, "{}", glyphs.len());
+    let first = &glyphs[0];
+    assert_eq!(first.text, "C");
+    // In alto a sinistra: x 10 pt, la riga a 100 - 60 = 40 pt dall'alto (base del testo).
+    assert!((first.rect[0] - 10.0).abs() < 0.5, "{:?}", first.rect);
+    assert!(
+        first.rect[1] < 40.0 && first.rect[1] + first.rect[3] > 40.0,
+        "{:?}",
+        first.rect
+    );
+    let all: Vec<&TextGlyph> = glyphs.iter().collect();
+    assert_eq!(assemble(&all), "Ciao mondo\nRiga due");
+    assert!(pages.text(5).is_err());
+}

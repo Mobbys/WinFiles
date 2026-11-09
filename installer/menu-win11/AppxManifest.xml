@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Il pacchetto "con posizione esterna" che mette "Apri in WinFiles" nel menu corto di Esplora file
+<!-- Il pacchetto "con posizione esterna" che mette "Apri in WinFiles" (e, su PDF, AI, EPS e
+     immagini, "Invia al nesting WinFiles") nel menu corto di Esplora file
      di Windows 11 (ADR 0022). Non contiene il programma: punta alla cartella dove l'MSI ha
      installato WinFiles.exe e winfiles_menu11.dll. La CI sostituisce la versione 0.0.0.0, lo crea con
      MakeAppx e lo firma con il certificato Winsport; WinFiles lo registra al primo avvio.
@@ -46,6 +47,45 @@
             <desktop5:ItemType Type="*">
               <desktop5:Verb Id="ApriInWinFiles" Clsid="6E2C9B4A-3D71-4F85-A0C2-91B7E5D4F318" />
             </desktop5:ItemType>
+            <desktop5:ItemType Type=".pdf">
+              <desktop5:Verb Id="InviaAlNesting" Clsid="6F9C432C-532B-43BB-83DA-C588E0D0110E" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type=".ai">
+              <desktop5:Verb Id="InviaAlNesting" Clsid="6F9C432C-532B-43BB-83DA-C588E0D0110E" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type=".eps">
+              <desktop5:Verb Id="InviaAlNesting" Clsid="6F9C432C-532B-43BB-83DA-C588E0D0110E" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type=".jpg">
+              <desktop5:Verb Id="InviaAlNesting" Clsid="6F9C432C-532B-43BB-83DA-C588E0D0110E" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type=".jpeg">
+              <desktop5:Verb Id="InviaAlNesting" Clsid="6F9C432C-532B-43BB-83DA-C588E0D0110E" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type=".png">
+              <desktop5:Verb Id="InviaAlNesting" Clsid="6F9C432C-532B-43BB-83DA-C588E0D0110E" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type=".tif">
+              <desktop5:Verb Id="InviaAlNesting" Clsid="6F9C432C-532B-43BB-83DA-C588E0D0110E" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type=".tiff">
+              <desktop5:Verb Id="InviaAlNesting" Clsid="6F9C432C-532B-43BB-83DA-C588E0D0110E" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type=".psd">
+              <desktop5:Verb Id="InviaAlNesting" Clsid="6F9C432C-532B-43BB-83DA-C588E0D0110E" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type=".webp">
+              <desktop5:Verb Id="InviaAlNesting" Clsid="6F9C432C-532B-43BB-83DA-C588E0D0110E" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type=".bmp">
+              <desktop5:Verb Id="InviaAlNesting" Clsid="6F9C432C-532B-43BB-83DA-C588E0D0110E" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type=".heic">
+              <desktop5:Verb Id="InviaAlNesting" Clsid="6F9C432C-532B-43BB-83DA-C588E0D0110E" />
+            </desktop5:ItemType>
+            <desktop5:ItemType Type=".heif">
+              <desktop5:Verb Id="InviaAlNesting" Clsid="6F9C432C-532B-43BB-83DA-C588E0D0110E" />
+            </desktop5:ItemType>
             <desktop5:ItemType Type="Directory">
               <desktop5:Verb Id="ApriInWinFiles" Clsid="6E2C9B4A-3D71-4F85-A0C2-91B7E5D4F318" />
             </desktop5:ItemType>
@@ -55,6 +95,7 @@
           <com:ComServer>
             <com:SurrogateServer DisplayName="Apri in WinFiles">
               <com:Class Id="6E2C9B4A-3D71-4F85-A0C2-91B7E5D4F318" Path="winfiles_menu11.dll" ThreadingModel="STA" />
+              <com:Class Id="6F9C432C-532B-43BB-83DA-C588E0D0110E" Path="winfiles_menu11.dll" ThreadingModel="STA" />
             </com:SurrogateServer>
           </com:ComServer>
         </com:Extension>

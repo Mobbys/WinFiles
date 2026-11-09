@@ -56,9 +56,8 @@ impl FileKind {
             .unwrap_or("")
             .to_ascii_lowercase();
         match ext.as_str() {
-            "jpg" | "jpeg" | "png" | "tif" | "tiff" | "webp" | "bmp" | "gif" | "heic" | "heif" | "hif" => {
-                FileKind::Image
-            }
+            "jpg" | "jpeg" | "png" | "tif" | "tiff" | "webp" | "bmp" | "gif" | "heic" | "heif" | "hif"
+            | "tga" | "ico" => FileKind::Image,
             // File di Photoshop e foto RAW delle fotocamere (le stesse estensioni di PhotoCraft).
             "psd" | "psb" | "dng" | "cr2" | "cr3" | "nef" | "nrw" | "arw" | "srf" | "sr2" | "pef" | "orf"
             | "rw2" | "raf" => FileKind::Image,
