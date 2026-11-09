@@ -27,6 +27,8 @@ pub enum ViewKind {
     Eps,
     Image,
     Cad,
+    /// Disegno SVG, mostrato come PDF vettoriale.
+    Svg,
     Unsupported,
 }
 
@@ -34,6 +36,13 @@ impl ViewKind {
     pub fn of(path: &Path) -> Self {
         if winfiles_cad::is_cad_path(path) {
             return ViewKind::Cad;
+        }
+        if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("svg") || e.eq_ignore_ascii_case("svgz"))
+        {
+            return ViewKind::Svg;
         }
         match FileKind::from_path(path) {
             FileKind::Pdf => ViewKind::Pdf,
@@ -44,6 +53,19 @@ impl ViewKind {
         }
     }
 
+    /// Il nome per il file: i PLT sono disegni del plotter, non del CAD.
+    pub fn label_for(self, path: &Path) -> &'static str {
+        let plotter = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| ["plt", "hpgl", "hpg"].iter().any(|x| e.eq_ignore_ascii_case(x)));
+        if self == ViewKind::Cad && plotter {
+            "File del plotter"
+        } else {
+            self.label()
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             ViewKind::Pdf => "PDF",
@@ -51,6 +73,7 @@ impl ViewKind {
             ViewKind::Eps => "EPS",
             ViewKind::Image => "Immagine",
             ViewKind::Cad => "Disegno CAD",
+            ViewKind::Svg => "SVG",
             ViewKind::Unsupported => "Non supportato",
         }
     }
@@ -130,6 +153,13 @@ pub fn open(path: &Path, kind: ViewKind, cad: &CadChoice) -> Result<Opened, Stri
     let mut opened = match kind {
         ViewKind::Pdf | ViewKind::Ai | ViewKind::Eps => open_pdf_like(path, kind)?,
         ViewKind::Image => open_image(path)?,
+        ViewKind::Svg => {
+            let (pdf, _) = winfiles_cad::svg::open(path).map_err(|e| e.to_string())?;
+            pdf_opened(
+                pdf,
+                Some("SVG: misura dalle unità del file (i pixel a 96 per pollice)".into()),
+            )?
+        }
         ViewKind::Cad => {
             let drawing = winfiles_cad::open(path).map_err(|e| e.to_string())?;
             cad_content(Arc::new(drawing), cad)?
@@ -171,6 +201,11 @@ fn open_pdf_like(path: &Path, kind: ViewKind) -> Result<Opened, String> {
             (std::fs::read(path).map_err(|e| io_text(&e))?, None)
         }
     };
+    pdf_opened(data, note)
+}
+
+/// Un PDF in memoria con le sue pagine, misure e tinte.
+fn pdf_opened(data: Vec<u8>, note: Option<String>) -> Result<Opened, String> {
     let file = PdfFile::from_bytes(data.clone()).map_err(|e| e.to_string())?;
     let details = file.details();
     let spots = file.spots().map_err(|e| e.to_string());

@@ -221,6 +221,84 @@
               <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.dwg\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
               <RegistryValue Root="HKCU" Key="Software\Classes\.dwg\OpenWithProgids" Name="WinFiles.dwg" Type="string" Value="WinFiles" />
               <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".dwg" Type="string" Value="WinFiles.dwg" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.svg" Type="string" Value="Disegno SVG (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.svg\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.svg\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.svg\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.svg\OpenWithProgids" Name="WinFiles.svg" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".svg" Type="string" Value="WinFiles.svg" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.plt" Type="string" Value="File del plotter PLT (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.plt\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.plt\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.plt\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.plt\OpenWithProgids" Name="WinFiles.plt" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".plt" Type="string" Value="WinFiles.plt" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.hpgl" Type="string" Value="File del plotter HPGL (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.hpgl\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.hpgl\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.hpgl\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.hpgl\OpenWithProgids" Name="WinFiles.hpgl" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".hpgl" Type="string" Value="WinFiles.hpgl" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.dng" Type="string" Value="Foto RAW DNG (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.dng\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.dng\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.dng\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.dng\OpenWithProgids" Name="WinFiles.dng" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".dng" Type="string" Value="WinFiles.dng" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.cr2" Type="string" Value="Foto RAW CR2 (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.cr2\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.cr2\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.cr2\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.cr2\OpenWithProgids" Name="WinFiles.cr2" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".cr2" Type="string" Value="WinFiles.cr2" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.cr3" Type="string" Value="Foto RAW CR3 (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.cr3\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.cr3\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.cr3\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.cr3\OpenWithProgids" Name="WinFiles.cr3" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".cr3" Type="string" Value="WinFiles.cr3" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.nef" Type="string" Value="Foto RAW NEF (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.nef\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.nef\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.nef\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.nef\OpenWithProgids" Name="WinFiles.nef" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".nef" Type="string" Value="WinFiles.nef" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.nrw" Type="string" Value="Foto RAW NRW (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.nrw\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.nrw\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.nrw\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.nrw\OpenWithProgids" Name="WinFiles.nrw" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".nrw" Type="string" Value="WinFiles.nrw" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.arw" Type="string" Value="Foto RAW ARW (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.arw\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.arw\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.arw\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.arw\OpenWithProgids" Name="WinFiles.arw" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".arw" Type="string" Value="WinFiles.arw" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.pef" Type="string" Value="Foto RAW PEF (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.pef\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.pef\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.pef\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.pef\OpenWithProgids" Name="WinFiles.pef" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".pef" Type="string" Value="WinFiles.pef" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.orf" Type="string" Value="Foto RAW ORF (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.orf\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.orf\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.orf\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.orf\OpenWithProgids" Name="WinFiles.orf" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".orf" Type="string" Value="WinFiles.orf" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.rw2" Type="string" Value="Foto RAW RW2 (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.rw2\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.rw2\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.rw2\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.rw2\OpenWithProgids" Name="WinFiles.rw2" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".rw2" Type="string" Value="WinFiles.rw2" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.raf" Type="string" Value="Foto RAW RAF (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.raf\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.raf\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.raf\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.raf\OpenWithProgids" Name="WinFiles.raf" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".raf" Type="string" Value="WinFiles.raf" />
             </Component>
           </Directory>
         </Directory>

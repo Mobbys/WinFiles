@@ -529,8 +529,8 @@ impl ViewerModule {
                 "File che WinFiles mostra",
                 &[
                     "pdf", "ai", "eps", "jpg", "jpeg", "png", "tif", "tiff", "webp", "bmp", "gif", "heic",
-                    "heif", "psd", "psb", "dng", "cr2", "cr3", "nef", "arw", "orf", "rw2", "raf", "dxf",
-                    "dwg",
+                    "heif", "psd", "psb", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2",
+                    "raf", "dxf", "dwg", "plt", "hpgl", "hpg", "svg", "svgz", "tga", "ico",
                 ],
             )
             .pick_files()
@@ -897,7 +897,7 @@ impl ViewerModule {
             .fill(t.app_bar)
             .inner_margin(egui::Margin::symmetric(16, 0));
         let text = self.doc().map(|d| {
-            let mut s = format!("{}  ·  {}", file_name(&d.path), d.kind.label());
+            let mut s = format!("{}  ·  {}", file_name(&d.path), d.kind.label_for(&d.path));
             let n = d.page_count();
             if n > 1 {
                 s.push_str(&format!("  ·  pagina {} di {n}", d.page + 1));

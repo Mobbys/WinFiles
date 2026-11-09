@@ -101,7 +101,11 @@ impl ViewerModule {
             )
             .wrap(),
         );
-        ui.label(egui::RichText::new(d.kind.label()).size(12.0).color(t.text_dim));
+        ui.label(
+            egui::RichText::new(d.kind.label_for(&d.path))
+                .size(12.0)
+                .color(t.text_dim),
+        );
         let Some(o) = d.opened() else {
             return;
         };

@@ -20,7 +20,9 @@ use cadcraft_color::{Rgb, aci_rgb};
 use cadcraft_dxf::{Tag, records, sections};
 
 mod geometry;
+pub mod hpgl;
 mod pdf;
+pub mod svg;
 
 pub use pdf::{MAX_PAGE_MM, PdfOptions, TextLine, text_page};
 
@@ -49,6 +51,8 @@ pub enum CadError {
         "questo DWG è di una versione troppo vecchia (prima di AutoCAD R13): salvalo di nuovo da AutoCAD"
     )]
     OldDwg,
+    #[error("SVG non leggibile: {0}")]
+    Svg(String),
     #[error("il disegno è vuoto")]
     Empty,
 }
@@ -165,11 +169,20 @@ impl Drawing {
     }
 }
 
+/// Le estensioni dei disegni: DXF, DWG e i file dei plotter (HPGL).
+pub const EXTENSIONS: &[&str] = &["dxf", "dwg", "plt", "hpgl", "hpg"];
+
 /// Il tipo del file dal nome.
 pub fn is_cad_path(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("dxf") || e.eq_ignore_ascii_case("dwg"))
+        .is_some_and(|e| EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
+}
+
+fn is_hpgl_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| ["plt", "hpgl", "hpg"].iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
 /// Il lettore dei DWG gira in una copia di WinFiles: da chiamare all'avvio del programma.
@@ -191,6 +204,10 @@ pub fn open(path: &Path) -> Result<Drawing, CadError> {
         return Err(CadError::TooLarge(len));
     }
     let bytes = std::fs::read(path)?;
+    // Un .plt può essere anche un DXF rinominato: decide il contenuto.
+    if is_hpgl_path(path) && !bytes.starts_with(b"AC") && hpgl::looks_like_hpgl(&bytes) {
+        return hpgl::parse(&bytes);
+    }
     from_bytes(&bytes)
 }
 

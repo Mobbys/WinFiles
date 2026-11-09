@@ -37,7 +37,7 @@ proptest = "1"
 hayro-syntax = { version = "0.8", default-features = false, features = ["std"] }
 # miniature (vedi docs/adr/0006-miniature.md)
 hayro = "0.8"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "gif", "bmp", "webp"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "gif", "bmp", "webp", "tga", "ico"] }
 # Modifica delle immagini (Fase 8, ADR 0016): il codificatore TIFF di `image` non scrive la
 # risoluzione né il profilo ICC, e un TIFF senza risoluzione in tipografia si stampa alla misura
 # sbagliata. È la stessa libreria che `image` usa per i TIFF, quindi nessuna copia in più. MIT.

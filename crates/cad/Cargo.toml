@@ -1,6 +1,6 @@
 [package]
 name = "winfiles-cad"
-description = "Disegni DXF e DWG per la scheda Visualizza: lettura e disegno con CADCraft (ADR 0033)"
+description = "Disegni DXF, DWG, PLT e SVG per la scheda Visualizza (ADR 0033, 0034)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -19,6 +19,10 @@ cadcraft-dwg = { git = "https://github.com/storytold/cadcraft", rev = "a655cee0c
 cadcraft-color = { git = "https://github.com/storytold/cadcraft", rev = "a655cee0c1399ca1629675605074897e2cb6850e" }
 # Comprime il contenuto della pagina PDF (già nel progetto, la usa acadrust).
 flate2 = "1"
+# Gli SVG in PDF vettoriale (MIT/Apache, dello stesso gruppo di krilla); usvg è già nel progetto
+# con egui_extras: qui servono anche i testi con i caratteri del sistema.
+svg2pdf = "0.13"
+usvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 thiserror = { workspace = true }
 
 [dev-dependencies]

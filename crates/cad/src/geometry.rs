@@ -311,7 +311,6 @@ pub fn extents(shapes: &[Shape]) -> Option<[f64; 4]> {
 }
 
 /// Due punti uguali entro un'inezia.
-#[cfg(test)]
 pub fn near(a: [f64; 2], b: [f64; 2]) -> bool {
     (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6
 }

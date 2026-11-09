@@ -201,3 +201,40 @@ fn la_pagina_di_testo_e_un_pdf_della_misura_giusta() {
     assert!((w - 595.28).abs() < 0.1 && (h - 841.89).abs() < 0.1);
     assert!(crate::text_page(0.0, 10.0, &[], &[]).is_err());
 }
+
+#[test]
+fn un_file_del_plotter_diventa_un_disegno_a_misura_vera() {
+    let plt =
+        b"\x1b%-12345X@PJL ENTER LANGUAGE=HPGL2\r\n\x1bE\x1b%1BIN;SP1;PU0,0;PD4000,0,4000,4000,0,4000,0,0;\
+PU;SP2;PU8000,0;CI400;VS10;LBciao\x03;PU;";
+    assert!(crate::hpgl::looks_like_hpgl(plt));
+    let d = crate::hpgl::parse(plt).unwrap();
+    assert_eq!(d.layers.len(), 2);
+    assert_eq!(d.layers[0].name, "Penna 1");
+    assert_eq!(d.layers[1].name, "Penna 2");
+    let (w, h) = d.size_mm(d.units.mm.unwrap());
+    assert!((w - 210.0).abs() < 0.01, "{w}");
+    assert!((h - 110.0).abs() < 0.01, "{h}");
+    // Il quadrato è chiuso.
+    assert!(matches!(&d.shapes[0].geometry, Geometry::Line { closed: true, points } if points.len() == 5));
+    // Coordinate relative e archi.
+    let d = crate::hpgl::parse(b"IN;PA0,0;PD;PR400,0,0,400;AA0,400,90;").unwrap();
+    let (w, _) = d.size_mm(0.025);
+    assert!(w > 9.9, "{w}");
+    assert!(crate::hpgl::parse(b"IN;SP1;").is_err());
+    assert!(!crate::hpgl::looks_like_hpgl(b"\x89PNG qualcosa"));
+}
+
+#[test]
+fn un_svg_diventa_un_pdf_alla_sua_misura() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="50mm" viewBox="0 0 100 50">
+      <rect x="5" y="5" width="90" height="40" fill="#e33" stroke="#000"/>
+      <circle cx="50" cy="25" r="10" fill="none" stroke="#00f"/>
+    </svg>"##;
+    let (pdf, (w, h)) = crate::svg::to_pdf(svg).unwrap();
+    assert!((w - 100.0).abs() < 0.01 && (h - 50.0).abs() < 0.01, "{w} {h}");
+    assert!(pdf.starts_with(b"%PDF"));
+    let pages = winfiles_thumbs::PdfPages::open(pdf).unwrap();
+    assert_eq!(pages.len(), 1);
+    assert!(crate::svg::to_pdf(b"non sono un svg").is_err());
+}

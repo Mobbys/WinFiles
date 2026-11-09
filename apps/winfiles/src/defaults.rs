@@ -15,7 +15,7 @@ use std::sync::mpsc::{Receiver, channel};
 use crate::theme::Tokens;
 
 /// I tipi che WinFiles sa mostrare, con le estensioni.
-pub const TYPES: [(&str, &[&str]); 12] = [
+pub const TYPES: [(&str, &[&str]); 15] = [
     ("PDF", &["pdf"]),
     ("Illustrator", &["ai"]),
     ("EPS", &["eps"]),
@@ -28,6 +28,14 @@ pub const TYPES: [(&str, &[&str]); 12] = [
     ("Photoshop", &["psd", "psb"]),
     ("DXF", &["dxf"]),
     ("DWG", &["dwg"]),
+    ("SVG", &["svg"]),
+    ("Plotter (PLT, HPGL)", &["plt", "hpgl"]),
+    (
+        "Foto RAW",
+        &[
+            "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf",
+        ],
+    ),
 ];
 
 /// Il ProgID di WinFiles per un'estensione (lo stesso dell'installer).
@@ -295,7 +303,7 @@ mod tests {
     fn ogni_estensione_ha_il_suo_progid() {
         assert_eq!(prog_id("pdf"), "WinFiles.pdf");
         let all: Vec<&str> = TYPES.iter().flat_map(|(_, e)| e.iter().copied()).collect();
-        assert_eq!(all.len(), 16);
+        assert_eq!(all.len(), 29);
     }
 
     #[test]
