@@ -270,6 +270,60 @@ pub enum Outcome {
     Status(String),
 }
 
+/// Quali pagine stampare di un file a più pagine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PagesMode {
+    Current,
+    All,
+    /// Quelle scritte nel campo "Pagine".
+    Range,
+}
+
+/// Le pagine scritte a mano ("2-6, 8", "2 5 8", "3-", "-4"), numerate da 1, in indici da 0
+/// ordinati e senza doppioni; `count` è il numero di pagine del file.
+pub fn parse_pages(text: &str, count: usize) -> Result<Vec<usize>, String> {
+    let mut set = std::collections::BTreeSet::new();
+    let mut text = text.replace(['–', '—'], "-");
+    // "6 - 4" è un intervallo, non tre pezzi.
+    while text.contains(" -") || text.contains("- ") {
+        text = text.replace(" -", "-").replace("- ", "-");
+    }
+    let number = |s: &str| -> Result<usize, String> {
+        let n: usize = s
+            .trim()
+            .parse()
+            .map_err(|_| format!("Non capisco «{}»: scrivi per esempio 2-6, 8", s.trim()))?;
+        if n == 0 || n > count {
+            return Err(format!("La pagina {n} non c'è: il file va da 1 a {count}"));
+        }
+        Ok(n - 1)
+    };
+    for part in text
+        .split([',', ';', ' '])
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        match part.split_once('-') {
+            Some((a, b)) => {
+                let a = if a.trim().is_empty() { 0 } else { number(a)? };
+                let b = if b.trim().is_empty() {
+                    count.saturating_sub(1)
+                } else {
+                    number(b)?
+                };
+                set.extend(a.min(b)..=a.max(b));
+            }
+            None => {
+                set.insert(number(part)?);
+            }
+        }
+    }
+    if set.is_empty() {
+        return Err("Scrivi le pagine, per esempio 2-6 oppure 2, 5, 8".into());
+    }
+    Ok(set.into_iter().collect())
+}
+
 pub struct PrintPage {
     path: PathBuf,
     kind: ViewKind,
@@ -281,7 +335,9 @@ pub struct PrintPage {
     renderer: Renderer,
     pub choice: Choice,
     copies: u32,
-    all_pages: bool,
+    pages_mode: PagesMode,
+    /// Le pagine scritte a mano: "2-6, 8".
+    range_text: String,
     current_page: usize,
     sheet: usize,
     printers: PrinterScan,
@@ -394,7 +450,8 @@ impl PrintPage {
             renderer,
             choice,
             copies: 1,
-            all_pages: false,
+            pages_mode: PagesMode::Current,
+            range_text: String::new(),
             current_page: page,
             sheet: 0,
             printers,
@@ -410,10 +467,10 @@ impl PrintPage {
 
     /// I fogli di tutta la stampa.
     fn sheets(&self) -> Vec<SheetPlan> {
-        let pages: Vec<usize> = if self.all_pages {
-            (0..self.pages.len()).collect()
-        } else {
-            vec![self.current_page.min(self.pages.len().saturating_sub(1))]
+        let pages: Vec<usize> = match self.pages_mode {
+            PagesMode::All => (0..self.pages.len()).collect(),
+            PagesMode::Current => vec![self.current_page.min(self.pages.len().saturating_sub(1))],
+            PagesMode::Range => parse_pages(&self.range_text, self.pages.len()).unwrap_or_default(),
         };
         let mut out = Vec::new();
         for p in pages {
@@ -571,6 +628,68 @@ impl PrintPage {
         };
         ui.label(egui::RichText::new(cal_text).size(12.0).color(t.text_dim));
 
+        if self.pages.len() > 1 {
+            label(ui, "Pagine");
+            let before = (self.pages_mode, self.range_text.clone());
+            ui.horizontal_wrapped(|ui| {
+                if crate::fluent::radio(
+                    ui,
+                    self.pages_mode == PagesMode::Current,
+                    format!("Pagina {}", self.current_page + 1),
+                )
+                .clicked()
+                {
+                    self.pages_mode = PagesMode::Current;
+                }
+                if crate::fluent::radio(
+                    ui,
+                    self.pages_mode == PagesMode::All,
+                    format!("Tutte ({})", self.pages.len()),
+                )
+                .clicked()
+                {
+                    self.pages_mode = PagesMode::All;
+                }
+            });
+            ui.horizontal(|ui| {
+                if crate::fluent::radio(ui, self.pages_mode == PagesMode::Range, "Solo").clicked() {
+                    self.pages_mode = PagesMode::Range;
+                }
+                let field = crate::fluent::text_field(
+                    ui,
+                    egui::TextEdit::singleline(&mut self.range_text)
+                        .hint_text("es. 2-6, 8")
+                        .vertical_align(Align::Center)
+                        .desired_width(150.0),
+                )
+                .on_hover_text("Pagine e intervalli separati da virgole: 2-6 oppure 2, 5, 8 oppure 3-");
+                if field.gained_focus() || field.changed() {
+                    self.pages_mode = PagesMode::Range;
+                }
+            });
+            if self.pages_mode == PagesMode::Range {
+                match parse_pages(&self.range_text, self.pages.len()) {
+                    Ok(list) => {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} {} su {}",
+                                list.len(),
+                                if list.len() == 1 { "pagina" } else { "pagine" },
+                                self.pages.len()
+                            ))
+                            .size(12.5)
+                            .color(t.text_dim),
+                        );
+                    }
+                    Err(e) => {
+                        ui.label(egui::RichText::new(e).size(12.5).color(t.warning));
+                    }
+                }
+            }
+            if before != (self.pages_mode, self.range_text.clone()) {
+                self.sheet = 0;
+            }
+        }
         label(ui, "Foglio");
         ui.horizontal(|ui| {
             segmented(
@@ -718,26 +837,6 @@ impl PrintPage {
         });
 
         label(ui, "Opzioni");
-        if self.pages.len() > 1 {
-            ui.horizontal(|ui| {
-                if crate::fluent::radio(ui, !self.all_pages, format!("Pagina {}", self.current_page + 1))
-                    .clicked()
-                {
-                    self.all_pages = false;
-                    self.sheet = 0;
-                }
-                if crate::fluent::radio(
-                    ui,
-                    self.all_pages,
-                    format!("Tutte le {} pagine", self.pages.len()),
-                )
-                .clicked()
-                {
-                    self.all_pages = true;
-                    self.sheet = 0;
-                }
-            });
-        }
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Copie").color(t.text));
             stepper(ui, &mut self.copies, 1, 999);
@@ -773,7 +872,12 @@ impl PrintPage {
         let t = Tokens::get(ui.ctx());
         let calibration = self.calibration(calibrations);
         let count = sheets.len();
-        let summary = if count == 0 {
+        let summary = if count == 0
+            && self.pages_mode == PagesMode::Range
+            && parse_pages(&self.range_text, self.pages.len()).is_err()
+        {
+            "Scrivi quali pagine stampare".to_string()
+        } else if count == 0 {
             format!("Troppi fogli (oltre {MAX_SHEETS}): scegli una scala più piccola")
         } else {
             let total = count.saturating_mul(self.copies as usize);
@@ -1182,6 +1286,20 @@ fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn le_pagine_scritte_a_mano() {
+        assert_eq!(parse_pages("2-6", 10), Ok(vec![1, 2, 3, 4, 5]));
+        assert_eq!(parse_pages("2, 5, 8", 10), Ok(vec![1, 4, 7]));
+        assert_eq!(parse_pages("8 2;5 2", 10), Ok(vec![1, 4, 7]));
+        assert_eq!(parse_pages("2-4, 3, 9-", 10), Ok(vec![1, 2, 3, 8, 9]));
+        assert_eq!(parse_pages("-2", 10), Ok(vec![0, 1]));
+        assert_eq!(parse_pages("6 – 4", 10), Ok(vec![3, 4, 5]));
+        assert!(parse_pages("12", 10).is_err());
+        assert!(parse_pages("0", 10).is_err());
+        assert!(parse_pages("due", 10).is_err());
+        assert!(parse_pages("  ", 10).is_err());
+    }
 
     fn a4() -> Choice {
         Choice {
