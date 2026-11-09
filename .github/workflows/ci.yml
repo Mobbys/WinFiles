@@ -61,9 +61,12 @@ jobs:
           path: target/release/winfiles.exe
           if-no-files-found: error
 
+  convertitori:
+    uses: ./.github/workflows/convertitori.yml
+
   installer:
     name: Installer MSI
-    needs: windows
+    needs: [windows, convertitori]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -71,8 +74,13 @@ jobs:
         with:
           name: winfiles-windows
           path: windows
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: convertitore-*
+          path: convertitori
+          merge-multiple: true
       - run: sudo apt-get update -q && sudo apt-get install -y -q wixl
-      - run: installer/crea-msi.sh windows/winfiles.exe WinFiles.msi
+      - run: installer/crea-msi.sh windows/winfiles.exe WinFiles.msi - convertitori
       - uses: actions/upload-artifact@v4
         with:
           name: winfiles-installer

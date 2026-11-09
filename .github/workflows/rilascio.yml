@@ -82,9 +82,14 @@ jobs:
           path: menu/
           if-no-files-found: ignore
 
+  convertitori:
+    needs: versione
+    if: needs.versione.outputs.publish == 'true'
+    uses: ./.github/workflows/convertitori.yml
+
   pubblica:
     name: Installer e rilascio
-    needs: [versione, windows]
+    needs: [versione, windows, convertitori]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -100,12 +105,17 @@ jobs:
         with:
           name: winfiles-menu
           path: menu
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: convertitore-*
+          path: convertitori
+          merge-multiple: true
       - run: sudo apt-get update -q && sudo apt-get install -y -q wixl
       - name: Installer e copia portatile
         env:
           VERSION: ${{ needs.versione.outputs.version }}
         run: |
-          installer/crea-msi.sh windows/winfiles.exe "WinFiles-${VERSION}.msi" menu
+          installer/crea-msi.sh windows/winfiles.exe "WinFiles-${VERSION}.msi" menu convertitori
           cp windows/winfiles.exe "WinFiles-${VERSION}-portatile.exe"
       - name: Rilascio su GitHub
         shell: bash

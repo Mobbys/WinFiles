@@ -18,6 +18,7 @@ use crate::theme::{Tokens, semibold};
 
 mod info;
 pub mod load;
+mod office;
 pub mod print;
 
 use load::{CadChoice, Facts, Opened, Opening, PageView, Renderer, Tile, ViewKind};
@@ -530,7 +531,8 @@ impl ViewerModule {
                 &[
                     "pdf", "ai", "eps", "jpg", "jpeg", "png", "tif", "tiff", "webp", "bmp", "gif", "heic",
                     "heif", "psd", "psb", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2",
-                    "raf", "dxf", "dwg", "plt", "hpgl", "hpg", "svg", "svgz", "tga", "ico",
+                    "raf", "dxf", "dwg", "plt", "hpgl", "hpg", "svg", "svgz", "tga", "ico", "docx", "doc",
+                    "odt", "rtf", "xlsx", "xlsm", "xls", "xlsb", "ods", "pptx", "indd", "indt", "idml",
                 ],
             )
             .pick_files()
@@ -1817,7 +1819,13 @@ mod tests {
         assert_eq!(ViewKind::of(Path::new("a.dwg")), ViewKind::Cad);
         assert_eq!(ViewKind::of(Path::new("a.pdf")), ViewKind::Pdf);
         assert_eq!(ViewKind::of(Path::new("a.nef")), ViewKind::Image);
-        assert_eq!(ViewKind::of(Path::new("a.docx")), ViewKind::Unsupported);
+        assert_eq!(ViewKind::of(Path::new("a.plt")), ViewKind::Cad);
+        assert_eq!(ViewKind::of(Path::new("a.svg")), ViewKind::Svg);
+        assert_eq!(
+            ViewKind::of(Path::new("a.docx")),
+            ViewKind::Office(office::Office::Word)
+        );
+        assert_eq!(ViewKind::of(Path::new("a.txt")), ViewKind::Unsupported);
     }
 
     #[test]

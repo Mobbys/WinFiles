@@ -32,6 +32,20 @@
               <RegistryValue Root="HKCU" Key="Software\WinFiles" Name="Cartella" Type="string" Value="[INSTALLDIR]" KeyPath="yes" />
               <RemoveFolder Id="RimuoviCartella" On="uninstall" />
             </Component>
+<?ifdef var.Convertitori ?>
+            <!-- I convertitori dei documenti di Word, Excel, PowerPoint e InDesign per Visualizza
+                 (ADR 0035): girano in un processo a parte, chiamati da WinFiles. -->
+            <Directory Id="CONVERTITORI" Name="convertitori">
+              <Component Id="Convertitori" Guid="1292FFFB-80BD-4B7D-A61C-D348C73883EB">
+                <File Id="ConvWord" Name="wordcraft-cli.exe" Source="$(var.Convertitori)/wordcraft-cli.exe" />
+                <File Id="ConvExcel" Name="gridcraft-cli.exe" Source="$(var.Convertitori)/gridcraft-cli.exe" />
+                <File Id="ConvPowerPoint" Name="deckcraft-cli.exe" Source="$(var.Convertitori)/deckcraft-cli.exe" />
+                <File Id="ConvInDesign" Name="designcraft-cli.exe" Source="$(var.Convertitori)/designcraft-cli.exe" />
+                <RegistryValue Root="HKCU" Key="Software\WinFiles" Name="Convertitori" Type="integer" Value="1" KeyPath="yes" />
+                <RemoveFolder Id="RimuoviConvertitori" On="uninstall" />
+              </Component>
+            </Directory>
+<?endif ?>
             <Component Id="FileWinfiles" Guid="7C2A9E41-3F6B-4D18-B0A5-9E4C2D7F1B36">
               <RegistryValue Root="HKCU" Key="Software\Classes\.winfiles" Type="string" Value="WinFiles.Lavoro" KeyPath="yes" />
               <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.Lavoro" Type="string" Value="Lavoro WinFiles" />
@@ -299,6 +313,41 @@
               <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.raf\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
               <RegistryValue Root="HKCU" Key="Software\Classes\.raf\OpenWithProgids" Name="WinFiles.raf" Type="string" Value="WinFiles" />
               <RegistryValue Root="HKCU" Key="Software\WinFiles\Capabilities\FileAssociations" Name=".raf" Type="string" Value="WinFiles.raf" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.docx" Type="string" Value="Documento di Word (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.docx\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.docx\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.docx\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.docx\OpenWithProgids" Name="WinFiles.docx" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.doc" Type="string" Value="Documento di Word (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.doc\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.doc\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.doc\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.doc\OpenWithProgids" Name="WinFiles.doc" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.xlsx" Type="string" Value="Foglio di Excel (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.xlsx\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.xlsx\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.xlsx\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.xlsx\OpenWithProgids" Name="WinFiles.xlsx" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.xls" Type="string" Value="Foglio di Excel (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.xls\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.xls\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.xls\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.xls\OpenWithProgids" Name="WinFiles.xls" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.pptx" Type="string" Value="Presentazione di PowerPoint (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.pptx\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.pptx\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.pptx\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.pptx\OpenWithProgids" Name="WinFiles.pptx" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.indd" Type="string" Value="Documento di InDesign (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.indd\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.indd\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.indd\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.indd\OpenWithProgids" Name="WinFiles.indd" Type="string" Value="WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.idml" Type="string" Value="Documento di InDesign IDML (WinFiles)" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.idml\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.idml\shell\open" Type="string" Value="Visualizza in WinFiles" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.idml\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; --visualizza &quot;%1&quot;" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\.idml\OpenWithProgids" Name="WinFiles.idml" Type="string" Value="WinFiles" />
             </Component>
           </Directory>
         </Directory>
@@ -333,6 +382,9 @@
       <ComponentRef Id="MenuTastoDestro" />
       <ComponentRef Id="MenuNesting" />
       <ComponentRef Id="Visualizza" />
+<?ifdef var.Convertitori ?>
+      <ComponentRef Id="Convertitori" />
+<?endif ?>
       <ComponentRef Id="MenuStart" />
       <ComponentRef Id="Desktop" />
     </Feature>

@@ -29,6 +29,8 @@ pub enum ViewKind {
     Cad,
     /// Disegno SVG, mostrato come PDF vettoriale.
     Svg,
+    /// Word, Excel, PowerPoint, InDesign: convertiti in PDF (ADR 0035).
+    Office(super::office::Office),
     Unsupported,
 }
 
@@ -43,6 +45,9 @@ impl ViewKind {
             .is_some_and(|e| e.eq_ignore_ascii_case("svg") || e.eq_ignore_ascii_case("svgz"))
         {
             return ViewKind::Svg;
+        }
+        if let Some(o) = super::office::Office::of(path) {
+            return ViewKind::Office(o);
         }
         match FileKind::from_path(path) {
             FileKind::Pdf => ViewKind::Pdf,
@@ -74,6 +79,7 @@ impl ViewKind {
             ViewKind::Image => "Immagine",
             ViewKind::Cad => "Disegno CAD",
             ViewKind::Svg => "SVG",
+            ViewKind::Office(o) => o.label(),
             ViewKind::Unsupported => "Non supportato",
         }
     }
@@ -153,6 +159,10 @@ pub fn open(path: &Path, kind: ViewKind, cad: &CadChoice) -> Result<Opened, Stri
     let mut opened = match kind {
         ViewKind::Pdf | ViewKind::Ai | ViewKind::Eps => open_pdf_like(path, kind)?,
         ViewKind::Image => open_image(path)?,
+        ViewKind::Office(o) => {
+            let pdf = super::office::to_pdf(path, o)?;
+            pdf_opened(pdf, Some(o.note()))?
+        }
         ViewKind::Svg => {
             let (pdf, _) = winfiles_cad::svg::open(path).map_err(|e| e.to_string())?;
             pdf_opened(

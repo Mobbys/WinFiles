@@ -71,3 +71,4 @@ Il font dell'interfaccia è Inter (SIL OFL); le icone sono Lucide (ISC), le stes
 | `cadcraft-dxf`, `cadcraft-dwg`, `cadcraft-color` (codice, dipendenze) | storytold | https://github.com/storytold/cadcraft (commit fissato in `crates/cad/Cargo.toml`) | MIT o Apache-2.0 |
 | `acadrust` 0.6.6 (codice, dipendenza non modificata, lettore dei DWG) | autori di acadrust | https://crates.io/crates/acadrust | MPL-2.0 (ADR 0033) |
 | `svg2pdf` 0.13 (codice, dipendenza, SVG in PDF) | typst | https://github.com/typst/svg2pdf | MIT o Apache-2.0 (ADR 0034) |
+| `wordcraft-cli`, `gridcraft-cli`, `deckcraft-cli`, `designcraft-cli` (programmi, convertitori dei documenti nell'MSI) | storytold | https://github.com/storytold/wordcraft, gridcraft, deckcraft, designcraft (commit in `installer/convertitori.txt`) | MIT o Apache-2.0 (ADR 0035) |
