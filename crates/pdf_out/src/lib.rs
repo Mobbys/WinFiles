@@ -257,6 +257,26 @@ fn rounded(r: Rect, radius: f64) -> Option<krilla::geom::Path> {
     b.finish()
 }
 
+/// Una spezzata (chiusa se `closed`) in punti PDF; `None` con meno di due punti buoni.
+fn polyline(points: &[(f64, f64)], closed: bool) -> Option<krilla::geom::Path> {
+    let mut good = points.iter().filter(|(x, y)| x.is_finite() && y.is_finite());
+    let first = good.next()?;
+    let mut b = PathBuilder::new();
+    b.move_to(pt(first.0), pt(first.1));
+    let mut n = 1;
+    for p in good {
+        b.line_to(pt(p.0), pt(p.1));
+        n += 1;
+    }
+    if n < 2 {
+        return None;
+    }
+    if closed {
+        b.close();
+    }
+    b.finish()
+}
+
 impl Writer {
     fn item(&mut self, s: &mut Surface<'_>, item: &Item) {
         match item {
@@ -313,6 +333,39 @@ impl Writer {
             }
             Item::Text(t) => self.text(s, t),
             Item::Picture(p) => self.picture(s, p),
+            Item::Path {
+                points,
+                closed,
+                fill: f,
+                stroke,
+            } => {
+                let Some(path) = polyline(points, *closed) else {
+                    return;
+                };
+                if let Some(c) = f
+                    && *closed
+                {
+                    s.set_stroke(None);
+                    s.set_fill(Some(fill(*c)));
+                    s.draw_path(&path);
+                }
+                if let Some((c, width)) = stroke
+                    && width.is_finite()
+                    && *width > 0.0
+                {
+                    s.set_fill(None);
+                    s.set_stroke(Some(Stroke {
+                        paint: color(*c).into(),
+                        width: pt(*width),
+                        opacity: opacity(*c),
+                        line_cap: krilla::paint::LineCap::Round,
+                        line_join: krilla::paint::LineJoin::Round,
+                        ..Stroke::default()
+                    }));
+                    s.draw_path(&path);
+                    s.set_stroke(None);
+                }
+            }
         }
     }
 

@@ -19,6 +19,8 @@ use image::{DynamicImage, ImageDecoder, ImageReader, Limits};
 use winfiles_model::FileKind;
 
 mod legacy_ai;
+mod text;
+pub use text::{TextGlyph, assemble};
 
 /// Memoria massima che un decodificatore di immagini può chiedere (1 GiB).
 const MAX_DECODE_BYTES: u64 = 1024 * 1024 * 1024;
@@ -308,6 +310,75 @@ impl PdfPages {
     }
 }
 
+impl PdfPages {
+    /// Misura della pagina `page` in punti, come si vede (rotazione applicata).
+    pub fn page_size(&self, page: usize) -> Option<(f32, f32)> {
+        self.0.pages().get(page).map(|p| p.render_dimensions())
+    }
+
+    /// Solo un pezzo della pagina, per l'ingrandimento della scheda Visualizza: `scale` pixel per
+    /// punto, `region` in punti dall'angolo in alto a sinistra (`[x, y, larghezza, altezza]`).
+    /// L'immagine è grande `region × scale`, al massimo [`MAX_SIDE`] per lato.
+    /// I caratteri della pagina con i loro riquadri in punti (dall'alto a sinistra).
+    pub fn text(&self, page: usize) -> Result<Vec<TextGlyph>, ThumbError> {
+        let page = self.0.pages().get(page).ok_or(ThumbError::NoPage(page + 1))?;
+        catch_unwind(AssertUnwindSafe(|| text::page_glyphs(page))).map_err(|_| ThumbError::Crashed)
+    }
+
+    pub fn render_region(&self, page: usize, scale: f32, region: [f32; 4]) -> Result<Thumb, ThumbError> {
+        catch_unwind(AssertUnwindSafe(|| self.region_inner(page, scale, region)))
+            .unwrap_or(Err(ThumbError::Crashed))
+    }
+
+    fn region_inner(&self, page: usize, scale: f32, region: [f32; 4]) -> Result<Thumb, ThumbError> {
+        use hayro::kurbo::Affine;
+        use hayro::vello_cpu::{Pixmap, RenderContext};
+        let page = self.0.pages().get(page).ok_or(ThumbError::NoPage(page + 1))?;
+        let [x, y, w, h] = region;
+        if !(scale.is_finite()
+            && scale > 0.0
+            && [x, y, w, h].iter().all(|v| v.is_finite())
+            && w > 0.0
+            && h > 0.0)
+        {
+            return Err(ThumbError::Pdf);
+        }
+        let pw = ((w * scale).round() as u32).clamp(1, MAX_SIDE);
+        let ph = ((h * scale).round() as u32).clamp(1, MAX_SIDE);
+        let mut ctx = RenderContext::new(pw as u16, ph as u16);
+        let transform = Affine::translate((-f64::from(x * scale), -f64::from(y * scale)))
+            * Affine::scale(f64::from(scale))
+            * {
+                use hayro::hayro_interpret::util::TransformExt;
+                page.initial_transform(true).to_kurbo()
+            };
+        let cache = RenderCache::new();
+        hayro::render_into(
+            page,
+            &cache,
+            &InterpreterSettings::default(),
+            &RenderSettings::default(),
+            &mut ctx,
+            transform,
+        );
+        ctx.flush();
+        let mut pixmap = Pixmap::new(ctx.width(), ctx.height());
+        ctx.render_with(
+            &mut pixmap,
+            &mut hayro::vello_cpu::Resources::default(),
+            hayro::vello_cpu::RasterizerSettings {
+                target_init: hayro::vello_cpu::TargetInit::Clear(WHITE),
+                ..Default::default()
+            },
+        );
+        Ok(Thumb {
+            width: u32::from(pixmap.width()),
+            height: u32::from(pixmap.height()),
+            rgba: pixmap.data_as_u8_slice().to_vec(),
+        })
+    }
+}
+
 /// Inizio e lunghezza della parte PostScript di un EPS con intestazione DOS.
 fn dos_section(head: &[u8]) -> Option<(u64, u64)> {
     let field = |at: usize| {
@@ -316,6 +387,39 @@ fn dos_section(head: &[u8]) -> Option<(u64, u64)> {
             .map(u32::from_le_bytes)
     };
     Some((u64::from(field(4)?), u64::from(field(8)?)))
+}
+
+/// Il disegno di un AI "legacy" (PostScript, come i file da taglio salvati in Illustrator 3–8) o
+/// di un EPS di Illustrator, tradotto in un PDF di una pagina: tracciati, colori e tinte piatte
+/// (vedi `legacy_ai`). `None` se il file è un PDF o un PostScript che non viene da Illustrator.
+pub fn illustrator_pdf(path: &Path) -> Result<Option<Vec<u8>>, ThumbError> {
+    let mut file = std::fs::File::open(path)?;
+    let mut head = [0u8; 1024];
+    let n = read_up_to(&mut file, &mut head)?;
+    let head = head.get(..n).unwrap_or_default();
+    let section = if head.starts_with(&[0xC5, 0xD0, 0xD3, 0xC6]) {
+        dos_section(head)
+    } else if head.starts_with(b"%!") && !head.windows(5).any(|w| w == b"%PDF-") {
+        Some((0, file.metadata()?.len()))
+    } else {
+        None
+    };
+    let Some((start, len)) = section else {
+        return Ok(None);
+    };
+    if len > MAX_PDF_BYTES {
+        return Err(ThumbError::TooLarge(len));
+    }
+    file.seek(SeekFrom::Start(start))?;
+    let mut ps = Vec::new();
+    file.take(len).read_to_end(&mut ps)?;
+    if !legacy_ai::is_illustrator(&ps) {
+        return Ok(None);
+    }
+    catch_unwind(AssertUnwindSafe(|| legacy_ai::to_pdf(&ps)))
+        .map_err(|_| ThumbError::Crashed)?
+        .ok_or(ThumbError::NoPreview)
+        .map(Some)
 }
 
 /// Il disegno di un file PostScript di Illustrator (`section`: inizio e lunghezza), tradotto in

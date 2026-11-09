@@ -15,9 +15,9 @@ use crate::theme::{Tokens, semibold};
 use winfiles_scene::Weight;
 
 /// Quanto vicino bisogna essere a una maniglia o a una linea perché risponda, in punti.
-const GRIP: f32 = 9.0;
+pub(crate) const GRIP: f32 = 9.0;
 /// Sotto questa misura a schermo, in punti, una quota appena tracciata era un clic: si toglie.
-const MIN_DRAWN: f32 = 4.0;
+pub(crate) const MIN_DRAWN: f32 = 4.0;
 /// La misura più grande che si può scrivere, in millimetri (un chilometro).
 const MAX_VALUE: f64 = 1_000_000.0;
 
@@ -1093,7 +1093,7 @@ fn straight(from: Pos2, to: Pos2) -> Pos2 {
 }
 
 /// La distanza di `p` dal segmento da `a` a `b`.
-fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+pub(crate) fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     let ab = b - a;
     let len2 = ab.length_sq();
     if len2 <= f32::EPSILON {
@@ -1104,7 +1104,7 @@ fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
 }
 
 /// Una misura in millimetri nell'unità scelta: `1.500 mm`, `64,25 cm`.
-fn length_text(mm: Option<f64>, unit: Unit) -> String {
+pub(crate) fn length_text(mm: Option<f64>, unit: Unit) -> String {
     match mm {
         Some(v) => format!(
             "{} {}",
@@ -1212,7 +1212,7 @@ fn pill(p: &egui::Painter, at: Pos2, text: &str, fill: egui::Color32, t: Tokens)
     p.galley(r.center() - galley.size() / 2.0, galley, t.on_quote);
 }
 
-fn handle(p: &egui::Painter, at: Pos2, color: egui::Color32) {
+pub(crate) fn handle(p: &egui::Painter, at: Pos2, color: egui::Color32) {
     p.rect(
         Rect::from_center_size(at, Vec2::splat(8.0)),
         1.0,

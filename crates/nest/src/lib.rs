@@ -35,8 +35,9 @@ const S: f64 = 100.0;
 const SIMPLIFY_MM: f64 = 0.3;
 /// Margine contro gli arrotondamenti, in millimetri.
 const SAFETY_MM: f64 = 0.05;
-/// Il foglio o il rotolo più grande, in millimetri (100 m): tiene i conti negli interi.
-const MAX_MM: f64 = 100_000.0;
+/// Il foglio o il rotolo più grande, in millimetri (1 km, in pratica nessun limite): in centesimi
+/// di millimetro sono 10⁸, lontano dai 2³⁰ entro cui i conti interi di i_overlay sono esatti.
+pub const MAX_MM: f64 = 1_000_000.0;
 /// I pezzi in tutto (copie comprese).
 pub const MAX_PIECES: usize = 3000;
 /// I punti di una sagoma.

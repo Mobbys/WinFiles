@@ -363,14 +363,17 @@ pub(crate) fn file_menu(
         }
         _ => {}
     }
-    if matches!(f.kind, FileKind::Pdf | FileKind::Ai | FileKind::Image) {
+    if matches!(
+        f.kind,
+        FileKind::Pdf | FileKind::Ai | FileKind::Eps | FileKind::Image
+    ) {
         let label = match count {
             1 => "Manda al nesting".to_string(),
             n => format!("Manda al nesting i {n} file scelti"),
         };
         if ui
             .button(label)
-            .on_hover_text("Apre la scheda Nesting con questi file (PDF, AI e immagini)")
+            .on_hover_text("Apre la scheda Nesting con questi file (PDF, AI, EPS e immagini)")
             .clicked()
         {
             action = Some(FileAction::Nest(path.clone()));
@@ -665,6 +668,8 @@ impl WinFilesApp {
         }
         let unit = self.project.unit;
         let mut clicked = None;
+        // Il doppio clic su un file lo apre in Visualizza.
+        let mut double = None;
         let mut menu_on = None;
         let mut action = None;
         let marked = self.marked.len();
@@ -965,6 +970,9 @@ impl WinFilesApp {
                             if resp.clicked() {
                                 clicked = Some(*i);
                             }
+                            if resp.double_clicked() {
+                                double = Some(*i);
+                            }
                             if resp.secondary_clicked() {
                                 menu_on = Some(*i);
                             }
@@ -1109,6 +1117,9 @@ impl WinFilesApp {
             };
             self.move_files(&moving, d.before);
         }
+        if let Some(i) = double {
+            self.view_file(i, 0);
+        }
         if let Some(i) = clicked {
             self.pick(i, mods);
             if !mods.command && !mods.shift {
@@ -1220,7 +1231,12 @@ impl WinFilesApp {
                     .marked
                     .iter()
                     .filter_map(|i| self.project.files.get(*i))
-                    .filter(|f| matches!(f.kind, FileKind::Pdf | FileKind::Ai | FileKind::Image))
+                    .filter(|f| {
+                        matches!(
+                            f.kind,
+                            FileKind::Pdf | FileKind::Ai | FileKind::Eps | FileKind::Image
+                        )
+                    })
                     .map(|f| f.path.clone())
                     .collect();
                 let paths = if marked.contains(&path) {
