@@ -19,6 +19,8 @@ use image::{DynamicImage, ImageDecoder, ImageReader, Limits};
 use winfiles_model::FileKind;
 
 mod legacy_ai;
+mod text;
+pub use text::{TextGlyph, assemble};
 
 /// Memoria massima che un decodificatore di immagini può chiedere (1 GiB).
 const MAX_DECODE_BYTES: u64 = 1024 * 1024 * 1024;
@@ -317,6 +319,12 @@ impl PdfPages {
     /// Solo un pezzo della pagina, per l'ingrandimento della scheda Visualizza: `scale` pixel per
     /// punto, `region` in punti dall'angolo in alto a sinistra (`[x, y, larghezza, altezza]`).
     /// L'immagine è grande `region × scale`, al massimo [`MAX_SIDE`] per lato.
+    /// I caratteri della pagina con i loro riquadri in punti (dall'alto a sinistra).
+    pub fn text(&self, page: usize) -> Result<Vec<TextGlyph>, ThumbError> {
+        let page = self.0.pages().get(page).ok_or(ThumbError::NoPage(page + 1))?;
+        catch_unwind(AssertUnwindSafe(|| text::page_glyphs(page))).map_err(|_| ThumbError::Crashed)
+    }
+
     pub fn render_region(&self, page: usize, scale: f32, region: [f32; 4]) -> Result<Thumb, ThumbError> {
         catch_unwind(AssertUnwindSafe(|| self.region_inner(page, scale, region)))
             .unwrap_or(Err(ThumbError::Crashed))

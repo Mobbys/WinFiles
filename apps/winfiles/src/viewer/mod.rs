@@ -129,6 +129,11 @@ pub struct ViewerModule {
     /// La tinta piatta evidenziata (nome com'è nel file).
     highlight: Option<Vec<u8>>,
     quoting: bool,
+    /// Lo strumento "Seleziona": trascinando si sceglie una zona da copiare.
+    selecting: bool,
+    selection: Option<Selection>,
+    /// Il punto (mm della pagina) da cui parte la zona che si sta tracciando.
+    sel_anchor: Option<[f64; 2]>,
     quotes: crate::quotes::Quotes,
     pub print: Option<print::PrintPage>,
     /// Le scelte della pagina Stampa, ricordate nelle impostazioni.
@@ -165,6 +170,9 @@ impl ViewerModule {
             show_rulers: true,
             highlight: None,
             quoting: false,
+            selecting: false,
+            selection: None,
+            sel_anchor: None,
             quotes: crate::quotes::Quotes::default(),
             print: None,
             print_choice: print::Choice::default(),
@@ -765,6 +773,26 @@ impl ViewerModule {
                     }
                     if icons::button(
                         ui,
+                        "square-dashed",
+                        "Seleziona: trascina per scegliere testo o una zona; tasto destro per copiare",
+                        self.selecting,
+                        has,
+                        32.0,
+                    )
+                    .clicked()
+                    {
+                        self.selecting = !self.selecting;
+                        self.sel_anchor = None;
+                        if self.selecting && self.quoting {
+                            self.side_open = false;
+                            self.quoting = false;
+                        }
+                        if !self.selecting {
+                            self.selection = None;
+                        }
+                    }
+                    if icons::button(
+                        ui,
                         "ruler",
                         "Quote: misura sul file",
                         self.side_open && self.side_tab == SideTab::Quotes,
@@ -1276,7 +1304,7 @@ impl ViewerModule {
         // Trascinare sposta la pagina (le quote, se attive, usano il trascinamento).
         if let Some(dv) = hand {
             self.pan += dv;
-        } else if !self.quoting && resp.dragged() {
+        } else if !self.quoting && !self.selecting && resp.dragged() {
             self.pan += resp.drag_delta();
         }
         // La rotella scorre la pagina; arrivati in fondo (o in cima) passa alla pagina dopo.
@@ -1469,6 +1497,190 @@ impl ViewerModule {
                     f64::from((p.y - paper.top()) / scale) * real_k,
                 ]
             });
+        // Lo strumento Seleziona: la zona, i caratteri dentro e il tasto destro per copiare.
+        let to_page = |p: Pos2| {
+            [
+                f64::from(((p.x - paper.left()) / scale).clamp(0.0, pw)),
+                f64::from(((p.y - paper.top()) / scale).clamp(0.0, ph)),
+            ]
+        };
+        if self
+            .selection
+            .as_ref()
+            .is_some_and(|s| s.doc != d.id || s.page != page_no)
+        {
+            self.selection = None;
+        }
+        let pdf_content = d
+            .opened()
+            .is_some_and(|o| matches!(o.content, load::Content::Pdf(_)));
+        if self.selecting && !self.quoting && hand.is_none() {
+            if resp.drag_started()
+                && let Some(p) = resp.interact_pointer_pos()
+            {
+                self.sel_anchor = Some(to_page(p));
+            }
+            if resp.dragged()
+                && let (Some(a), Some(p)) = (self.sel_anchor, resp.interact_pointer_pos())
+            {
+                let b = to_page(p);
+                self.selection = Some(Selection {
+                    doc: d.id,
+                    page: page_no,
+                    rect: [
+                        a[0].min(b[0]),
+                        a[1].min(b[1]),
+                        (a[0] - b[0]).abs(),
+                        (a[1] - b[1]).abs(),
+                    ],
+                });
+            }
+            if resp.drag_stopped() {
+                self.sel_anchor = None;
+                if self
+                    .selection
+                    .as_ref()
+                    .is_some_and(|s| s.rect[2] < 0.5 && s.rect[3] < 0.5)
+                {
+                    self.selection = None;
+                }
+            }
+            if resp.clicked() {
+                self.selection = None;
+            }
+            if pdf_content && let Some(rend) = &mut d.renderer {
+                rend.want_text(page_no);
+            }
+            if ui.rect_contains_pointer(board) && hand.is_none() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
+        }
+        let texts = d
+            .renderer
+            .as_ref()
+            .and_then(|r| r.texts.get(&page_no))
+            .and_then(|t| t.as_ref().ok())
+            .cloned();
+        if let Some(sel) = &self.selection {
+            let r = Rect::from_two_pos(
+                mm_to(sel.rect[0], sel.rect[1]),
+                mm_to(sel.rect[0] + sel.rect[2], sel.rect[1] + sel.rect[3]),
+            );
+            let accent = t.accent;
+            if let Some(glyphs) = &texts {
+                for g in glyphs.iter().filter(|g| sel.holds(g)) {
+                    let gr = Rect::from_two_pos(
+                        mm_to(g.rect[0], g.rect[1]),
+                        mm_to(g.rect[0] + g.rect[2], g.rect[1] + g.rect[3]),
+                    );
+                    painter.rect_filled(gr, 0.0, accent.gamma_multiply(0.30));
+                }
+            }
+            painter.rect_filled(r, 0.0, accent.gamma_multiply(0.06));
+            painter.rect_stroke(r, 0.0, Stroke::new(1.2, accent), egui::StrokeKind::Middle);
+        }
+        // Il tasto destro sulla pagina: copiare testo e immagine.
+        let mut action: Option<CopyAction> = None;
+        let selected_text = match (&self.selection, &texts) {
+            (Some(sel), Some(glyphs)) => {
+                let chosen: Vec<&load::TextGlyph> = glyphs.iter().filter(|g| sel.holds(g)).collect();
+                (!chosen.is_empty()).then(|| assemble_text(&chosen))
+            }
+            _ => None,
+        };
+        resp.context_menu(|ui| {
+            if pdf_content {
+                if let Some(rend) = &mut d.renderer {
+                    rend.want_text(page_no);
+                }
+                let page_text = texts.as_ref().map(|g| g.iter().collect::<Vec<_>>());
+                if self.selection.is_some()
+                    && ui
+                        .add_enabled(
+                            selected_text.is_some(),
+                            egui::Button::new("Copia il testo selezionato"),
+                        )
+                        .clicked()
+                {
+                    action = selected_text.clone().map(CopyAction::Text);
+                    ui.close();
+                }
+                let label = match &page_text {
+                    None => "Copia il testo della pagina (lo sto leggendo…)",
+                    Some(g) if g.is_empty() => "Copia il testo della pagina (non ha testo)",
+                    Some(_) => "Copia il testo della pagina",
+                };
+                if ui
+                    .add_enabled(
+                        page_text.as_ref().is_some_and(|g| !g.is_empty()),
+                        egui::Button::new(label),
+                    )
+                    .clicked()
+                {
+                    action = page_text.map(|g| CopyAction::Text(assemble_text(&g)));
+                    ui.close();
+                }
+            }
+            let img_label = if self.selection.is_some() {
+                "Copia l'immagine della zona"
+            } else {
+                "Copia l'immagine della pagina"
+            };
+            if ui.button(img_label).clicked() {
+                let region = self
+                    .selection
+                    .as_ref()
+                    .map_or([0.0, 0.0, f64::from(pw), f64::from(ph)], |s| s.rect);
+                action = Some(CopyAction::Image(region));
+                ui.close();
+            }
+            if !self.selecting && ui.button("Seleziona testo o una zona…").clicked() {
+                self.selecting = true;
+                ui.close();
+            }
+            if self.selection.is_some() && ui.button("Togli la selezione").clicked() {
+                self.selection = None;
+                ui.close();
+            }
+        });
+        // Ctrl+C con una selezione: il testo, o l'immagine della zona se non c'è testo.
+        let ctrl_c = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)))
+            && !ui.ctx().egui_wants_keyboard_input();
+        if ctrl_c && self.selection.is_some() && action.is_none() {
+            action = match &selected_text {
+                Some(text) => Some(CopyAction::Text(text.clone())),
+                None => self.selection.as_ref().map(|s| CopyAction::Image(s.rect)),
+            };
+        }
+        match action {
+            Some(CopyAction::Text(text)) => {
+                let n = text.chars().filter(|c| !c.is_whitespace()).count();
+                ui.ctx().copy_text(text);
+                self.status = format!("Testo copiato ({n} caratteri)");
+            }
+            Some(CopyAction::Image(region)) => {
+                if let Some(rend) = &mut d.renderer {
+                    // 300 DPI, entro il lato massimo di un'immagine.
+                    let longest = region[2].max(region[3]).max(1e-3);
+                    let px_per_mm = (300.0 / 25.4_f64).min(f64::from(load::MAX_SIDE) / longest);
+                    rend.want_copy(page_no, region, px_per_mm);
+                    self.status = "Preparo l'immagine da copiare…".into();
+                }
+            }
+            None => {}
+        }
+        if let Some(result) = d.renderer.as_mut().and_then(|r| r.copied.take()) {
+            self.status = match result.and_then(|img| copy_image(&img)) {
+                Ok((w, h)) => {
+                    format!("Immagine copiata ({w} × {h} px): incollala con Ctrl+V, anche in Illustrator")
+                }
+                Err(e) => format!("Non riesco a copiare l'immagine: {e}"),
+            };
+        }
+        if d.renderer.as_ref().is_some_and(|r| r.copying) {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(60));
+        }
         // Le quote.
         if self.quoting {
             let mm_per_unit = real_k;
@@ -1584,6 +1796,10 @@ impl ViewerModule {
         } else {
             self.side_open = true;
             self.side_tab = tab;
+            if tab == SideTab::Quotes {
+                self.selecting = false;
+                self.selection = None;
+            }
         }
     }
 }
@@ -1745,6 +1961,55 @@ fn is_pdf_file(path: &Path) -> bool {
 }
 
 /// I file della cartella di `path` che la scheda sa mostrare, in ordine di nome come Esplora file.
+/// La zona scelta con lo strumento Seleziona, in mm della pagina.
+#[derive(Clone, Debug, PartialEq)]
+struct Selection {
+    doc: u64,
+    page: usize,
+    rect: [f64; 4],
+}
+
+impl Selection {
+    /// Il carattere sta nella zona (il suo centro).
+    fn holds(&self, g: &load::TextGlyph) -> bool {
+        let (cx, cy) = (g.rect[0] + g.rect[2] / 2.0, g.rect[1] + g.rect[3] / 2.0);
+        let [x, y, w, h] = self.rect;
+        cx >= x && cx <= x + w && cy >= y && cy <= y + h
+    }
+}
+
+enum CopyAction {
+    Text(String),
+    /// La zona della pagina in mm.
+    Image([f64; 4]),
+}
+
+/// Il testo dei caratteri, a righe e parole.
+fn assemble_text(glyphs: &[&load::TextGlyph]) -> String {
+    let pts: Vec<winfiles_thumbs::TextGlyph> = glyphs
+        .iter()
+        .map(|g| winfiles_thumbs::TextGlyph {
+            text: g.text.clone(),
+            rect: g.rect.map(|v| v as f32),
+        })
+        .collect();
+    let refs: Vec<&winfiles_thumbs::TextGlyph> = pts.iter().collect();
+    winfiles_thumbs::assemble(&refs)
+}
+
+/// Mette l'immagine negli appunti di Windows (bitmap: la incollano Illustrator, Photoshop, Word).
+fn copy_image(img: &winfiles_thumbs::Thumb) -> Result<(u32, u32), String> {
+    let data = arboard::ImageData {
+        width: img.width as usize,
+        height: img.height as usize,
+        bytes: std::borrow::Cow::Borrowed(&img.rgba),
+    };
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.set_image(data))
+        .map(|()| (img.width, img.height))
+        .map_err(|e| e.to_string())
+}
+
 fn folder_files(path: &Path) -> Vec<PathBuf> {
     let Some(dir) = path.parent() else {
         return vec![path.to_path_buf()];

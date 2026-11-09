@@ -434,9 +434,23 @@ impl Tile {
 }
 
 enum Job {
-    Base { page: usize, side: u32 },
+    Base {
+        page: usize,
+        side: u32,
+    },
     Tile(Tile),
-    Scan { page: usize },
+    Scan {
+        page: usize,
+    },
+    Text {
+        page: usize,
+    },
+    /// Un pezzo di pagina (mm) da copiare come immagine, a `px_per_mm`.
+    Copy {
+        page: usize,
+        region: [f64; 4],
+        px_per_mm: f64,
+    },
 }
 
 enum Done {
@@ -453,6 +467,18 @@ enum Done {
         page: usize,
         result: Result<PageScan, String>,
     },
+    Text {
+        page: usize,
+        result: Result<Vec<TextGlyph>, String>,
+    },
+    Copy(Result<Thumb, String>),
+}
+
+/// Un carattere della pagina in mm, dall'alto a sinistra.
+#[derive(Clone, Debug)]
+pub struct TextGlyph {
+    pub text: String,
+    pub rect: [f64; 4],
 }
 
 /// Le pagine di un file disegnate in un thread a parte.
@@ -465,6 +491,12 @@ pub struct Renderer {
     /// L'ultimo pezzo: com'era chiesto, la parte della pagina che copre davvero (mm) e l'immagine.
     pub tile: Option<(Tile, [f64; 4], egui::TextureHandle)>,
     pub scans: HashMap<usize, Result<Arc<PageScan>, String>>,
+    /// Il testo delle pagine (solo i PDF).
+    pub texts: HashMap<usize, Result<Arc<Vec<TextGlyph>>, String>>,
+    asked_text: Vec<usize>,
+    /// L'immagine chiesta da "Copia immagine", appena pronta.
+    pub copied: Option<Result<Thumb, String>>,
+    pub copying: bool,
     asked_base: HashMap<usize, u32>,
     asked_tile: Option<Tile>,
     asked_scan: Vec<usize>,
@@ -485,6 +517,10 @@ impl Renderer {
             failed: HashMap::new(),
             tile: None,
             scans: HashMap::new(),
+            texts: HashMap::new(),
+            asked_text: Vec::new(),
+            copied: None,
+            copying: false,
             asked_base: HashMap::new(),
             asked_tile: None,
             asked_scan: Vec::new(),
@@ -513,6 +549,35 @@ impl Renderer {
             && tx.send(Job::Tile(tile)).is_ok()
         {
             self.asked_tile = Some(tile);
+        }
+    }
+
+    pub fn want_text(&mut self, page: usize) {
+        if self.texts.contains_key(&page) || self.asked_text.contains(&page) {
+            return;
+        }
+        if let Some(tx) = &self.jobs
+            && tx.send(Job::Text { page }).is_ok()
+        {
+            self.asked_text.push(page);
+        }
+    }
+
+    /// Chiede un pezzo di pagina come immagine da copiare; arriva in `copied`.
+    pub fn want_copy(&mut self, page: usize, region: [f64; 4], px_per_mm: f64) {
+        if self.copying {
+            return;
+        }
+        if let Some(tx) = &self.jobs
+            && tx
+                .send(Job::Copy {
+                    page,
+                    region,
+                    px_per_mm,
+                })
+                .is_ok()
+        {
+            self.copying = true;
         }
     }
 
@@ -558,6 +623,14 @@ impl Renderer {
                 Done::Scan { page, result } => {
                     self.asked_scan.retain(|p| *p != page);
                     self.scans.insert(page, result.map(Arc::new));
+                }
+                Done::Text { page, result } => {
+                    self.asked_text.retain(|p| *p != page);
+                    self.texts.insert(page, result.map(Arc::new));
+                }
+                Done::Copy(result) => {
+                    self.copying = false;
+                    self.copied = Some(result);
                 }
             }
         }
@@ -625,6 +698,45 @@ fn work(content: Content, inbox: &Receiver<Job>, outbox: &Sender<Done>, wake: &(
                     };
                     Done::Scan { page, result }
                 }
+                Job::Text { page } => {
+                    let result = match &pdf {
+                        Some(Ok(p)) => p.text(page).map_err(|e| e.to_string()).map(|g| {
+                            let k = 25.4 / 72.0;
+                            g.into_iter()
+                                .map(|t| TextGlyph {
+                                    text: t.text,
+                                    rect: t.rect.map(|v| f64::from(v) * k),
+                                })
+                                .collect()
+                        }),
+                        Some(Err(e)) => Err(e.clone()),
+                        None => Err("non è un PDF".into()),
+                    };
+                    Done::Text { page, result }
+                }
+                Job::Copy {
+                    page,
+                    region,
+                    px_per_mm,
+                } => {
+                    let tile = Tile {
+                        page,
+                        region,
+                        px_per_mm,
+                    };
+                    let result = match (&content, &pdf) {
+                        (Content::Pdf(_), Some(Ok(p))) => {
+                            let k = (72.0 / 25.4) as f32;
+                            let [x, y, w, h] = region.map(|v| v as f32 * k);
+                            p.render_region(page, (px_per_mm as f32) / k, [x, y, w, h])
+                                .map_err(|e| e.to_string())
+                        }
+                        (Content::Image(img, dpi), _) => image_crop(img, *dpi, &tile),
+                        (_, Some(Err(e))) => Err(e.clone()),
+                        _ => Err("niente da copiare".into()),
+                    };
+                    Done::Copy(result)
+                }
             };
             if outbox.send(done).is_err() {
                 return;
@@ -632,6 +744,25 @@ fn work(content: Content, inbox: &Receiver<Job>, outbox: &Sender<Done>, wake: &(
             wake();
         }
     }
+}
+
+/// Il pezzo di un'immagine ai suoi pixel veri (per "Copia immagine").
+fn image_crop(img: &image::DynamicImage, dpi: f64, tile: &Tile) -> Result<Thumb, String> {
+    let k = dpi / 25.4;
+    let [x, y, w, h] = tile.region;
+    let x0 = ((x * k).floor().max(0.0) as u32).min(img.width());
+    let y0 = ((y * k).floor().max(0.0) as u32).min(img.height());
+    let x1 = (((x + w) * k).ceil().max(0.0) as u32).min(img.width());
+    let y1 = (((y + h) * k).ceil().max(0.0) as u32).min(img.height());
+    if x1 <= x0 || y1 <= y0 {
+        return Err("la zona scelta è fuori dall'immagine".into());
+    }
+    let rgba = img.crop_imm(x0, y0, x1 - x0, y1 - y0).to_rgba8();
+    Ok(Thumb {
+        width: rgba.width(),
+        height: rgba.height(),
+        rgba: rgba.into_raw(),
+    })
 }
 
 fn image_base(img: &image::DynamicImage, side: u32) -> Thumb {
