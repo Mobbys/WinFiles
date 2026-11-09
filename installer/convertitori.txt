@@ -1,0 +1,6 @@
+# I convertitori dei documenti per Visualizza (ADR 0035): nome, repository, commit fissato.
+# Aggiornarli è una PR a sé (CLAUDE.md, Dipendenze): si cambia il commit e si provano i file.
+wordcraft storytold/wordcraft d102b2f08b78904d6dd7ee1e9612c6e74868ab13
+gridcraft storytold/gridcraft 7102429a9a2fd9f6fba8e06238a1cce5807fb1b0
+deckcraft storytold/deckcraft 0623b430324cf4c3d1962e6ae7885cf30c011c5e
+designcraft storytold/designcraft 57e68009da69245dc022d804308bbd34aa97f294

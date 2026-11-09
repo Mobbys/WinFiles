@@ -1,0 +1,15 @@
+[package]
+name = "winfiles-nest"
+description = "Motore di nesting: dispone le sagome su lastre o rotoli, in millimetri (ADR 0027)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+i_overlay.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

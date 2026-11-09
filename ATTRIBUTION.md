@@ -1,0 +1,74 @@
+# Attribuzioni
+
+Ogni file di grafica, font o suono nel repository ha una riga qui: autore, fonte, licenza.
+Il font dell'interfaccia è Inter (SIL OFL); le icone sono Lucide (ISC), le stesse di VectorCraft.
+
+| File | Autore | Fonte | Licenza |
+|---|---|---|---|
+| `apps/winfiles/assets/fonts/Inter-Regular.ttf` | Rasmus Andersson e collaboratori | https://github.com/rsms/inter (copia da storytold/wordcraft) | SIL OFL 1.1 (`apps/winfiles/assets/fonts/OFL-Inter.txt`) |
+| `apps/winfiles/assets/fonts/Inter-SemiBold.ttf` | Rasmus Andersson e collaboratori | https://github.com/rsms/inter (copia da storytold/wordcraft) | SIL OFL 1.1 (`apps/winfiles/assets/fonts/OFL-Inter.txt`) |
+| `apps/winfiles/assets/fonts/OFL-Inter.txt` | (testo della licenza) | progetto originale | — |
+| `apps/winfiles/assets/icons/LICENSE-lucide.txt` | (testo della licenza) | progetto originale | — |
+| `apps/winfiles/assets/icons/chevron-down.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/chevron-left.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/chevron-right.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/chevrons-left.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/chevrons-right.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/file.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/file-down.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/file-plus.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/folder-open.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/image.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/info.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/layers.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/layout-grid.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/maximize-2.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/minus.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/pencil.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/plus.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/printer.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/ruler.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/search.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/square-dashed.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/trash-2.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/x.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/zoom-in.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/rotate-ccw.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/rotate-cw.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/undo-2.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/redo-2.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/crop.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/scissors.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/mouse-pointer-2.svg` | Lucide Icons and Contributors | https://lucide.dev (copia da storytold/pdfcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/triangle-alert.svg` | Lucide Icons and Contributors | https://lucide.dev (copia da storytold/pdfcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/circle-check.svg` | Lucide Icons and Contributors | https://lucide.dev (copia da storytold/pdfcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/palette.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/files.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/file-output.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/save.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/copy-plus.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/frame.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/scaling.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `vendor/hayro-interpret/` (codice, copia modificata) | Laurenz Stampfl | https://github.com/LaurenzV/hayro (crate `hayro-interpret` 0.8.0, modifiche in `vendor/README.md`) | Apache-2.0 o MIT (`vendor/hayro-interpret/LICENSE-*`) |
+| `testdata/heic/rgb-strips-96.heic` (foto di prova) | Thomas Braun | https://github.com/tbraun96/heic-rs (`tests/fixtures`, pixel sintetici codificati con `sips` di macOS) | MIT o Apache-2.0 |
+| `testdata/heic/checker-1024.heic` (foto di prova) | Thomas Braun | https://github.com/tbraun96/heic-rs (`tests/fixtures`, pixel sintetici codificati con `sips` di macOS) | MIT o Apache-2.0 |
+| `apps/winfiles/assets/icon/icona.ico`, `icona-256.png` (icona di WinFiles) | Progetto WinFiles | Disegnata da `apps/winfiles/assets/icon/genera-icona.py` (quadrato blu, "W" in Inter SemiBold) | Proprietaria (`LICENSE`); il carattere Inter è OFL-1.1 |
+| `installer/menu-win11/Assets/logo-44.png`, `logo-50.png`, `logo-150.png` | Progetto WinFiles | `icona-256.png` ridotta con ImageMagick, per il pacchetto del menu di Windows 11 | Proprietaria (`LICENSE`); il carattere Inter è OFL-1.1 |
+| `apps/winfiles/assets/icons/flip-horizontal-2.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/flip-vertical-2.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file; copia da storytold/vectorcraft) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/type.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v0.469.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/move-up-right.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v0.469.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/circle.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v0.469.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/square.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v0.469.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/highlighter.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v0.469.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/zoom-out.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/external-link.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/arrow-left.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/eye.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/eye-off.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/send.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `apps/winfiles/assets/icons/copy.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0, intestazione nel file) | ISC (`apps/winfiles/assets/icons/LICENSE-lucide.txt`) |
+| `cadcraft-dxf`, `cadcraft-dwg`, `cadcraft-color` (codice, dipendenze) | storytold | https://github.com/storytold/cadcraft (commit fissato in `crates/cad/Cargo.toml`) | MIT o Apache-2.0 |
+| `acadrust` 0.6.6 (codice, dipendenza non modificata, lettore dei DWG) | autori di acadrust | https://crates.io/crates/acadrust | MPL-2.0 (ADR 0033) |
+| `svg2pdf` 0.13 (codice, dipendenza, SVG in PDF) | typst | https://github.com/typst/svg2pdf | MIT o Apache-2.0 (ADR 0034) |
+| `wordcraft-cli`, `gridcraft-cli`, `deckcraft-cli`, `designcraft-cli` (programmi, convertitori dei documenti nell'MSI) | storytold | https://github.com/storytold/wordcraft, gridcraft, deckcraft, designcraft (commit in `installer/convertitori.txt`) | MIT o Apache-2.0 (ADR 0035) |
