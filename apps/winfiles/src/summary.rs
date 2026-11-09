@@ -131,6 +131,19 @@ fn cells(f: &FileEntry, page: Option<usize>, print: &PrintSettings, unit: Unit) 
     out
 }
 
+/// "3 annotazioni sulla miniatura", quando ce ne sono e si stampano: i disegni stanno sulle
+/// miniature, nel riepilogo basta ricordare che ci sono.
+fn annotations_text(project: &Project, n: usize) -> Option<String> {
+    if n == 0 || !project.print.show_annotations {
+        return None;
+    }
+    Some(if n == 1 {
+        "1 annotazione sulla miniatura".to_string()
+    } else {
+        format!("{n} annotazioni sulla miniatura")
+    })
+}
+
 /// Le righe del riepilogo, nell'ordine del lavoro.
 fn rows(project: &Project) -> Vec<Row> {
     let print_notes = project.print.show_notes;
@@ -163,7 +176,12 @@ fn rows(project: &Project) -> Vec<Row> {
                         n.trim().to_string()
                     }
                 })
-                .collect();
+                .collect::<Vec<_>>();
+            let mut notes = notes;
+            let drawn: usize = (0..pages).map(|p| f.annotations(p).len()).sum();
+            if let Some(text) = annotations_text(project, drawn) {
+                notes.push(text);
+            }
             out.push(Row {
                 kind: Kind::File {
                     file: i,
@@ -186,7 +204,10 @@ fn rows(project: &Project) -> Vec<Row> {
                         Vec::new()
                     } else {
                         vec![note.to_string()]
-                    },
+                    }
+                    .into_iter()
+                    .chain(annotations_text(project, f.annotations(p).len()))
+                    .collect(),
                 });
             }
         }

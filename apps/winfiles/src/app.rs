@@ -52,6 +52,10 @@ pub struct WinFilesApp {
     menu11: Option<crate::menu11::Status>,
     menu11_busy: bool,
     menu11_later: bool,
+    /// La finestra di Aiuto › Segnala un problema / Chiedi una nuova funzione.
+    report: Option<crate::report::ReportDialog>,
+    /// Il nome di chi segnala, ricordato fra una segnalazione e l'altra.
+    reporter: String,
     /// I file non supportati tolti con la casella, da rimettere se la si riaccende.
     pub(crate) parked: Vec<winfiles_model::FileEntry>,
     pub(crate) theme: ThemeChoice,
@@ -123,6 +127,9 @@ pub struct WinFilesApp {
     last_flip: f64,
     /// Dove portare lo scorrimento del foglio appena cambiato con la rotella.
     flip_to: Option<Edge>,
+    /// Dove portare lo scorrimento dell'anteprima dopo Ctrl+rotella, perché il punto sotto il
+    /// mouse resti fermo.
+    zoom_scroll: Option<Vec2>,
     /// `--pdf` sulla riga di comando: esportare qui appena i file sono letti, poi chiudere.
     batch_pdf: Option<PathBuf>,
     /// L'esportazione in corso è quella di `--pdf`.
@@ -143,7 +150,10 @@ pub struct WinFilesApp {
     prefs: crate::prefs::Prefs,
     prefs_checked: f64,
     /// L'ultima impaginazione e il lavoro da cui viene: si rifà solo quando il lavoro cambia.
-    layout_cache: Option<(Project, std::rc::Rc<Pages>)>,
+    layout_cache: Option<(Project, crate::filter::FileFilter, std::rc::Rc<Pages>)>,
+    /// Il lavoro come lo vedono anteprima, stampa e PDF: senza quello che la ricerca nell'elenco
+    /// nasconde (`FileFilter::apply`). Gli indici dei file sono quelli di `project`.
+    pub(crate) shown: Project,
     /// Nel nesting: la scala 1:N in uso (scelta o automatica).
     pub(crate) nesting_scale: Option<u32>,
     /// Con "Su N fogli", le colonne e il verso scelti all'ultima impaginazione.
@@ -155,19 +165,35 @@ pub struct WinFilesApp {
     /// Il modulo immagini (Fase 8), con le immagini aperte.
     pub(crate) images: crate::images::ImagesModule,
     pub(crate) nesting: crate::nesting::NestingModule,
+    /// La scheda Visualizza (ADR 0031).
+    pub(crate) viewer: crate::viewer::ViewerModule,
+    /// La finestra "Programma predefinito…" aperta.
+    defaults: Option<crate::defaults::DefaultsDialog>,
     /// I file mandati da "Apri in WinFiles" mentre la finestra è aperta.
     inbox: Option<crate::instance::Inbox>,
+    /// Le annotazioni delle miniature: strumenti, stile e passi da annullare.
+    pub(crate) annot: crate::annotate::Annotator,
 }
 
 /// I moduli di WinFiles, come le schede della 4.9.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Module {
+    Viewer,
     #[default]
     Thumbnails,
     Pdf,
     Images,
     Nesting,
 }
+
+/// Le schede dei moduli, con il nome che si vede.
+const MODULE_TABS: [(Module, &str); 5] = [
+    (Module::Viewer, "Visualizza"),
+    (Module::Thumbnails, "Miniature"),
+    (Module::Pdf, "Modifica PDF"),
+    (Module::Images, "Modifica immagini"),
+    (Module::Nesting, "Nesting"),
+];
 
 impl WinFilesApp {
     // Uno per ogni modo di aprire WinFiles dalla riga di comando.
@@ -180,6 +206,7 @@ impl WinFilesApp {
         edit_pdf: Option<PathBuf>,
         edit_images: Vec<PathBuf>,
         nest_files: Vec<PathBuf>,
+        view_files: Vec<PathBuf>,
         prefs: crate::prefs::Prefs,
     ) -> Self {
         let blank = blank_project(&prefs);
@@ -217,6 +244,8 @@ impl WinFilesApp {
             menu11: None,
             menu11_busy: false,
             menu11_later: prefs.menu11_later,
+            report: None,
+            reporter: prefs.reporter.clone(),
             parked: Vec::new(),
             theme: prefs.theme,
             applied: None,
@@ -256,6 +285,7 @@ impl WinFilesApp {
             wheel_edges: (true, true),
             last_flip: 0.0,
             flip_to: None,
+            zoom_scroll: None,
             recent: crate::recent::load(),
             ctx: ctx.clone(),
             prefs,
@@ -263,12 +293,17 @@ impl WinFilesApp {
             nesting_scale: None,
             fit_choice: None,
             layout_cache: None,
+            shown: Project::default(),
             module: Module::Thumbnails,
             pdf: crate::pdf::PdfModule::new(ctx),
             images: crate::images::ImagesModule::new(ctx),
             nesting: crate::nesting::NestingModule::new(ctx),
+            viewer: crate::viewer::ViewerModule::new(ctx),
+            defaults: None,
             inbox: None,
+            annot: crate::annotate::Annotator::default(),
         };
+        app.annot = crate::annotate::Annotator::with_style(app.prefs.annotate.clone());
         // Le stampanti si cercano subito, così Stampa le trova già pronte.
         if !app.prefs.inks.is_empty() {
             app.pdf.inks = app.prefs.inks.clone();
@@ -289,6 +324,14 @@ impl WinFilesApp {
         if !edit_images.is_empty() {
             app.module = Module::Images;
             app.images.open(&edit_images);
+        }
+        app.viewer.inks = app.pdf.inks.clone();
+        app.viewer.print_choice = app.prefs.viewer.print.clone().sanitized();
+        app.viewer.cad_dark = !app.prefs.viewer.cad_light;
+        // `--visualizza file`: il doppio clic in Esplora file, se WinFiles è il predefinito.
+        if !view_files.is_empty() {
+            app.module = Module::Viewer;
+            app.viewer.open(&view_files);
         }
         if !nest_files.is_empty() {
             app.module = Module::Nesting;
@@ -369,11 +412,11 @@ impl WinFilesApp {
                 Some(summary) if i < summary_sheets => summary
                     .sheets
                     .get(i)
-                    .map(|s| crate::summary::compose(ctx, s, summary, &self.project)),
+                    .map(|s| crate::summary::compose(ctx, s, summary, &self.shown)),
                 _ => sheets
                     .grid
                     .get(i - summary_sheets)
-                    .map(|s| canvas::compose(ctx, s, &self.project, &self.slots)),
+                    .map(|s| canvas::compose(ctx, s, &self.shown, &self.slots)),
             })
             .collect()
     }
@@ -485,7 +528,7 @@ impl WinFilesApp {
                         .into();
                     self.menu11 = None;
                 }
-                Status::Ready | Status::Unavailable => self.menu11 = None,
+                Status::Ready | Status::Unavailable | Status::Busy => self.menu11 = None,
                 other if self.menu11_later && !asked => drop(other),
                 other => self.menu11 = Some(other),
             }
@@ -794,7 +837,8 @@ impl WinFilesApp {
             Module::Pdf => self.pdf.status = text,
             Module::Images => self.images.status = text,
             Module::Nesting => self.nesting.status = text,
-            _ => {}
+            Module::Viewer => self.viewer.status = text,
+            Module::Thumbnails => {}
         }
     }
 
@@ -1382,6 +1426,10 @@ impl WinFilesApp {
                 left.horizontal_centered(|ui| {
                     egui::MenuBar::new().ui(ui, |ui| {
                         ui.menu_button("File", |ui| {
+                            if self.module == Module::Viewer {
+                                self.viewer.file_menu(ui);
+                                return;
+                            }
                             if self.module == Module::Pdf {
                                 self.pdf.file_menu(ui);
                                 return;
@@ -1577,6 +1625,25 @@ impl WinFilesApp {
                                 self.menu11_check = Some(crate::menu11::check());
                                 self.status = "Controllo il menu di Windows 11…".into();
                             }
+                            if ui
+                                .button("Programma predefinito…")
+                                .on_hover_text("Per quali file il doppio clic in Esplora file apre WinFiles")
+                                .clicked()
+                            {
+                                ui.close();
+                                self.defaults = Some(crate::defaults::DefaultsDialog::new());
+                            }
+                            ui.separator();
+                            for (kind, label) in [
+                                (crate::report::Kind::Problem, "Segnala un problema…"),
+                                (crate::report::Kind::Feature, "Chiedi una nuova funzione…"),
+                            ] {
+                                if ui.button(label).clicked() {
+                                    ui.close();
+                                    self.open_report(kind);
+                                }
+                            }
+                            ui.separator();
                             dim_label(ui, "Trascina file o cartelle nella finestra per aggiungerli.");
                         });
                     });
@@ -1613,13 +1680,42 @@ impl WinFilesApp {
     /// La striscia in cima alla finestra: il marchio e le schede dei moduli, come le schede di un
     /// browser. La scheda attiva ha il colore della barra dei menu e si unisce a lei.
     /// Ctrl+Tab e Ctrl+Maiusc+Tab passano alla scheda dopo e a quella prima.
+    /// Aiuto › Segnala un problema / Chiedi una nuova funzione: la finestra per scriverla.
+    fn open_report(&mut self, kind: crate::report::Kind) {
+        let module = MODULE_TABS
+            .iter()
+            .find(|(m, _)| *m == self.module)
+            .map_or("Miniature", |(_, name)| *name);
+        self.report = Some(crate::report::ReportDialog::new(
+            kind,
+            module,
+            self.reporter.clone(),
+        ));
+    }
+
+    /// La finestra della segnalazione, se è aperta.
+    fn report_window(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = self.report.as_mut() else {
+            return;
+        };
+        let text = match dialog.show(ctx) {
+            None => return,
+            Some(crate::report::Answer::Close { name }) => {
+                self.reporter = name.trim().to_string();
+                self.report = None;
+                return;
+            }
+            Some(crate::report::Answer::Status(text)) => text,
+        };
+        if self.module == Module::Thumbnails {
+            self.status = text;
+        } else {
+            self.set_module_status(text);
+        }
+    }
+
     fn module_tabs(&mut self, ui: &mut egui::Ui) {
-        const TABS: [(Module, &str); 4] = [
-            (Module::Thumbnails, "Miniature"),
-            (Module::Pdf, "Modifica PDF"),
-            (Module::Images, "Modifica immagini"),
-            (Module::Nesting, "Nesting"),
-        ];
+        const TABS: [(Module, &str); 5] = MODULE_TABS;
         let t = Tokens::get(ui.ctx());
         let (next, previous) = ui.input_mut(|i| {
             (
@@ -2037,6 +2133,36 @@ impl WinFilesApp {
                 .layout(egui::Layout::right_to_left(Align::Center)),
         );
         self.sheet_controls(&mut controls, count, &t);
+        // Annota apre la riga degli strumenti di disegno: solo nella griglia.
+        if self.project.print.view == View::Grid {
+            controls.add_space(10.0);
+            let on = self.annot.on;
+            let tint = if on { t.on_primary } else { t.text_strong };
+            let mut button = egui::Button::image_and_text(
+                icons::image("pencil", 16.0, tint),
+                egui::RichText::new("Annota").color(tint),
+            )
+            .min_size(vec2(0.0, 30.0));
+            if on {
+                button = button.fill(t.primary);
+            }
+            if controls
+                .add(button)
+                .on_hover_text(
+                    "Testo, frecce, forme ed evidenziatore sopra le miniature; si salvano nel lavoro",
+                )
+                .clicked()
+            {
+                if on {
+                    self.annot.close();
+                } else {
+                    self.annot.on = true;
+                    self.project.print.show_annotations = true;
+                }
+            }
+        } else if self.annot.on {
+            self.annot.close();
+        }
         // Il titolo nello spazio che resta: in una finestra stretta si accorcia con "…".
         let room = header.with_max_x((header.max.x - controls.min_rect().width() - 12.0).max(header.min.x));
         let mut bar = ui.new_child(
@@ -2090,11 +2216,42 @@ impl WinFilesApp {
             bar.label(egui::RichText::new(detail).color(t.text_dim));
         }
 
+        let mut top = full.top() + 48.0;
+        // La riga Annota: va a capo quando la finestra è stretta.
+        if self.annot.on {
+            let area = Rect::from_min_max(
+                egui::pos2(full.left() + 12.0, top),
+                egui::pos2(full.right() - 12.0, full.bottom()),
+            );
+            let mut row = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(area)
+                    .layout(egui::Layout::top_down(Align::Min)),
+            );
+            let selected = self.annot.selected_annotation(&self.shown).cloned();
+            let mut show = self.project.print.show_annotations;
+            let out = row
+                .horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    ui.spacing_mut().interact_size.y = 32.0;
+                    self.annot.bar(ui, selected.as_ref(), &mut show)
+                })
+                .inner;
+            self.project.print.show_annotations = show;
+            self.annot_bar(out);
+            top = row.min_rect().bottom() + 6.0;
+        }
+        // Con la ricerca attiva nell'elenco, una striscia lo ricorda: si stampa solo quello.
+        if self.filter.is_active() && !self.project.files.is_empty() {
+            let strip = Rect::from_min_max(
+                egui::pos2(full.left() + 8.0, top),
+                egui::pos2(full.right() - 8.0, top + 34.0),
+            );
+            self.filter_strip(ui, strip);
+            top = strip.bottom() + 6.0;
+        }
         // Il fondo su cui sta il foglio.
-        let board = Rect::from_min_max(
-            egui::pos2(full.left() + 8.0, full.top() + 48.0),
-            full.max - vec2(8.0, 8.0),
-        );
+        let board = Rect::from_min_max(egui::pos2(full.left() + 8.0, top), full.max - vec2(8.0, 8.0));
         if board.width() < 20.0 || board.height() < 20.0 {
             return;
         }
@@ -2117,6 +2274,14 @@ impl WinFilesApp {
         };
         if self.project.files.is_empty() {
             empty_hint(ui, board);
+        } else if self.slots.is_empty() && self.filter.is_active() {
+            ui.painter().text(
+                board.center(),
+                egui::Align2::CENTER_CENTER,
+                "Nessun file corrisponde alla ricerca",
+                semibold(17.0),
+                t.text_strong,
+            );
         }
         let summary_sheets = pages.summary.as_ref().map_or(0, |s| s.sheets.len());
         // I fogli di riepilogo vengono prima di quelli delle miniature.
@@ -2127,7 +2292,7 @@ impl WinFilesApp {
                 .zoom
                 .unwrap_or_else(|| canvas::fit_zoom(sheet.size, board.size()));
             self.shown_zoom = scale;
-            let scene = crate::summary::compose(ui.ctx(), sheet, summary, &self.project);
+            let scene = crate::summary::compose(ui.ctx(), sheet, summary, &self.shown);
             let offset = self.flip_offset(ui, sheet.size, scale);
             let scrolled = scroll_area(offset).show(ui, |ui| {
                 crate::summary::draw(ui, sheet, &scene, summary, &mut self.thumbs, &self.marked, scale)
@@ -2147,29 +2312,73 @@ impl WinFilesApp {
             .zoom
             .unwrap_or_else(|| canvas::fit_zoom(sheet.size, board.size()));
         self.shown_zoom = scale;
-        let scene = canvas::compose(ui.ctx(), sheet, &self.project, &self.slots);
+        let scene = canvas::compose(ui.ctx(), sheet, &self.shown, &self.slots);
         let offset = self.flip_offset(ui, sheet.size, scale);
-        let scrolled = scroll_area(offset).show(ui, |ui| {
-            canvas::draw(
+        let annotating = self.annot.on;
+        let mut area = scroll_area(offset);
+        if let Some(v) = self.zoom_scroll.take() {
+            area = area.scroll_offset(v);
+        }
+        let mut frame = (egui::Pos2::ZERO, Vec2::ZERO);
+        let scrolled = area.show(ui, |ui| {
+            frame = (ui.cursor().min, ui.available_size());
+            let out = canvas::draw(
                 ui,
                 sheet,
                 &scene,
                 &self.slots,
                 &mut self.thumbs,
                 canvas::Selection {
-                    marked: &self.marked,
+                    marked: if annotating { &NONE } else { &self.marked },
                     focus: self.selected.map(|f| (f, self.selected_page)),
+                    annotating,
                 },
                 scale,
-            )
+            );
+            if annotating && let Some(resp) = &out.response {
+                self.annot
+                    .interact(ui, resp, out.origin, scale, sheet, &self.slots, &mut self.shown);
+            }
+            out
         });
         self.wheel(ui, board, count, &scrolled);
         self.zoom_with_wheel(ui, board, scale);
+        // Ctrl+rotella ingrandisce verso il mouse: il punto del foglio sotto il puntatore resta
+        // dov'è, come nei moduli di modifica.
+        if let Some(new) = self.zoom
+            && (new - scale).abs() > 1e-6
+            && let Some(p) = ui.ctx().pointer_hover_pos()
+        {
+            let at = (p - scrolled.inner.origin) / scale;
+            let page = vec2(sheet.size.w as f32, sheet.size.h as f32) * new;
+            // Il contenuto parte da `start` con lo scorrimento a zero; il foglio vi sta centrato.
+            let (cursor, avail) = frame;
+            let start = cursor + scrolled.state.offset;
+            let total = vec2(
+                avail.x.max(page.x + 2.0 * canvas::FIT_MARGIN),
+                canvas::content_height(sheet.size, new, avail.y),
+            );
+            let offset = start.to_vec2() + total / 2.0 - page / 2.0 + at * new - p.to_vec2();
+            self.zoom_scroll = Some(offset.max(Vec2::ZERO));
+            self.flip_to = None;
+        }
+        for (file, page) in self.annot.take_pending() {
+            self.annot.commit(&mut self.project, &self.shown, file, page);
+        }
+        if self.annot.on {
+            ui.ctx().request_repaint();
+        }
         let out = scrolled.inner;
-        if let Some((file, page)) = out.clicked {
+        // Con Annota aperta un clic sceglie le annotazioni, non i file.
+        if let Some((file, page)) = out.clicked.filter(|_| !annotating) {
             let mods = ui.input(|i| i.modifiers);
             self.pick(file, mods);
             self.selected_page = page;
+        }
+        // Il doppio clic su una miniatura la apre in Visualizza, su quella pagina; le frecce
+        // scorrono i file del lavoro.
+        if let Some((file, page)) = out.double.filter(|_| !annotating) {
+            self.view_file(file, page);
         }
         // Il tasto destro su una miniatura apre lo stesso menu dell'elenco dei file.
         if let Some(hit) = out.secondary {
@@ -2186,13 +2395,100 @@ impl WinFilesApp {
                 1
             };
             let mut action = None;
+            let page = self.selected_page;
+            let mut clear = false;
             if let Some(f) = self.project.files.get(i) {
                 let state = f.print_state();
-                resp.context_menu(|ui| action = crate::panels::file_menu(ui, f, count, state));
+                let annotated = !f.annotations(page).is_empty();
+                resp.context_menu(|ui| {
+                    action = crate::panels::file_menu(ui, f, count, state);
+                    if annotated {
+                        ui.separator();
+                        if ui.button("Togli le annotazioni di questa pagina").clicked() {
+                            clear = true;
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            if clear {
+                self.annot.clear_page(&mut self.project, i, page);
             }
             if let Some(a) = action {
                 self.file_action(ui.ctx(), a);
             }
+        }
+    }
+}
+
+/// Nessun file scelto: con Annota aperta i file non si scelgono dall'anteprima.
+static NONE: BTreeSet<usize> = BTreeSet::new();
+
+impl WinFilesApp {
+    /// Quello che la riga Annota chiede di fare nel lavoro.
+    fn annot_bar(&mut self, out: crate::annotate::BarOutput) {
+        if out.undo {
+            self.annot.undo(&mut self.project);
+        }
+        if out.redo {
+            self.annot.redo(&mut self.project);
+        }
+        if out.delete {
+            self.annot.delete_selected(&mut self.project);
+        }
+        if out.restyle {
+            self.annot.restyle_selected(&mut self.project);
+        }
+        if let Some((start, end)) = out.arrows {
+            self.annot.set_arrows(&mut self.project, start, end);
+        }
+        if out.true_sizes {
+            self.annot.true_sizes(&mut self.project);
+        }
+    }
+
+    /// I tasti delle annotazioni, prima di quelli dell'elenco dei file: Canc toglie
+    /// l'annotazione scelta e non il file.
+    fn annotate_keys(&mut self, ctx: &egui::Context) {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        if !self.annot.on || self.module != Module::Thumbnails {
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            self.annot.escape(&mut self.shown);
+            for (file, page) in self.annot.take_pending() {
+                self.annot.commit(&mut self.project, &self.shown, file, page);
+            }
+        }
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let pressed = |mods, key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(mods, key)));
+        if self.annot.selected.is_some()
+            && (pressed(Modifiers::NONE, Key::Delete) || pressed(Modifiers::NONE, Key::Backspace))
+        {
+            self.annot.delete_selected(&mut self.project);
+        }
+        if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z) || pressed(Modifiers::COMMAND, Key::Y) {
+            self.annot.redo(&mut self.project);
+        } else if pressed(Modifiers::COMMAND, Key::Z) {
+            self.annot.undo(&mut self.project);
+        }
+        // Copia e incolla arrivano come eventi; con un'annotazione scelta copiano lei.
+        let (copy, paste) = ctx.input(|i| {
+            (
+                i.events.iter().any(|e| matches!(e, egui::Event::Copy)),
+                i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
+                    || i.modifiers.command && i.key_pressed(Key::V),
+            )
+        });
+        if copy && self.annot.copy(&self.shown) {
+            ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Copy)));
+            // Negli appunti va un testo: con appunti vuoti Windows non manda l'Incolla.
+            ctx.copy_text("Annotazione di WinFiles".into());
+        }
+        if paste {
+            self.annot.paste(&mut self.project);
         }
     }
 }
@@ -2361,6 +2657,63 @@ pub(crate) fn card(ui: &egui::Ui, rect: Rect) {
         Stroke::new(1.0, t.border),
         egui::StrokeKind::Inside,
     );
+}
+
+impl WinFilesApp {
+    /// La striscia sopra l'anteprima quando la ricerca nell'elenco nasconde dei file: dice
+    /// quanti ne vanno in anteprima, stampa e PDF, e li rimette tutti con un clic.
+    fn filter_strip(&mut self, ui: &mut egui::Ui, strip: Rect) {
+        let t = Tokens::get(ui.ctx());
+        let p = ui.painter();
+        p.rect(
+            strip,
+            t.radius,
+            t.panel_darker,
+            egui::Stroke::new(1.0, t.border),
+            egui::StrokeKind::Inside,
+        );
+        // Il bordo sinistro nel colore d'accento, come gli avvisi di Windows 11.
+        let bar = Rect::from_min_size(strip.min + vec2(0.0, 6.0), vec2(3.0, strip.height() - 12.0));
+        p.rect_filled(bar, 1.5, t.accent);
+        let mut row = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(strip.shrink2(vec2(12.0, 0.0)))
+                .layout(egui::Layout::left_to_right(Align::Center)),
+        );
+        row.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        let found = self.filter.count(&self.project);
+        let all = self.project.files.len();
+        let mut clear = false;
+        row.with_layout(egui::Layout::right_to_left(Align::Center), |row| {
+            clear = row
+                .button("Mostra tutti")
+                .on_hover_text("Svuota la ricerca e toglie i tipi scelti nell'elenco dei file")
+                .clicked();
+            row.with_layout(egui::Layout::left_to_right(Align::Center), |row| {
+                icons::paint(
+                    row,
+                    "search",
+                    Rect::from_center_size(
+                        row.cursor().min + vec2(7.0, strip.height() * 0.5),
+                        Vec2::splat(14.0),
+                    ),
+                    t.text_dim,
+                );
+                row.add_space(20.0);
+                row.label(
+                    egui::RichText::new(format!("Ricerca attiva: {found} di {all} file"))
+                        .font(semibold(13.0))
+                        .color(t.text_strong),
+                );
+                row.label(
+                    egui::RichText::new("solo questi vanno in anteprima, stampa e PDF").color(t.text_dim),
+                );
+            });
+        });
+        if clear {
+            self.filter = Default::default();
+        }
+    }
 }
 
 /// Avviso al centro dell'anteprima vuota.
@@ -2650,16 +3003,19 @@ impl WinFilesApp {
     /// note, impostazioni): con migliaia di file misurare tutti i testi a ogni fotogramma
     /// rallenterebbe l'anteprima.
     fn pages(&mut self, ctx: &egui::Context) -> std::rc::Rc<Pages> {
-        if let Some((key, pages)) = &self.layout_cache
+        if let Some((key, filter, pages)) = &self.layout_cache
             && *key == self.project
+            && *filter == self.filter
         {
             return pages.clone();
         }
-        self.slots = captions::slots(&self.project);
+        // Come nella 4.9, i file che la ricerca nasconde nell'elenco non vanno sui fogli.
+        self.shown = self.filter.apply(&self.project);
+        self.slots = captions::slots(&self.shown);
         // Una miniatura per foglio (o l'unica del lavoro) riempie il foglio, girato come il file:
         // i testi si misurano come con una colonna sola, sul foglio verticale (il più stretto).
-        let mut project = std::borrow::Cow::Borrowed(&self.project);
-        if full_pages(&self.project, &self.slots).is_some() {
+        let mut project = std::borrow::Cow::Borrowed(&self.shown);
+        if full_pages(&self.shown, &self.slots).is_some() {
             let p = project.to_mut();
             p.print.columns = 1;
             p.print.orientation = winfiles_geom::Orientation::Portrait;
@@ -2676,7 +3032,7 @@ impl WinFilesApp {
         self.nesting_scale = (print.view == View::Nesting && !items.is_empty())
             .then(|| winfiles_layout::nesting_denominator(&print, &items));
         self.fit_choice = None;
-        let grid = if fits(&self.project, &self.slots) {
+        let grid = if fits(&self.shown, &self.slots) {
             // Su N fogli: per ogni prova di colonne e verso si rimisurano titolo e didascalie.
             let mut trial_project = project.clone();
             winfiles_layout::fit_to_sheets(&print, print.fit_sheets, |trial| {
@@ -2706,7 +3062,7 @@ impl WinFilesApp {
             Ok(Sheets { summary, grid })
         });
         let pages = std::rc::Rc::new(pages);
-        self.layout_cache = Some((self.project.clone(), pages.clone()));
+        self.layout_cache = Some((self.project.clone(), self.filter.clone(), pages.clone()));
         pages
     }
 }
@@ -2866,6 +3222,12 @@ impl WinFilesApp {
             inks: self.pdf.inks.clone(),
             nesting: self.nesting.settings.clone(),
             image_die: self.images.die.settings.clone(),
+            reporter: self.reporter.clone(),
+            annotate: self.annot.style.clone(),
+            viewer: crate::prefs::ViewerPrefs {
+                print: self.viewer.print_choice.clone(),
+                cad_light: !self.viewer.cad_dark,
+            },
         }
     }
 
@@ -2898,16 +3260,28 @@ impl eframe::App for WinFilesApp {
                 .map(|f| f.path().to_path_buf())
                 .collect()
         });
-        // I file di "Apri in WinFiles" vanno sempre in Miniature, come se li avessi trascinati lì.
+        // I file di "Apri in WinFiles" vanno sempre in Miniature, come se li avessi trascinati lì;
+        // "Invia al nesting WinFiles" nel nesting, il doppio clic (programma predefinito) in
+        // Visualizza.
         let sent = self
             .inbox
             .as_ref()
             .map(crate::instance::Inbox::take)
             .unwrap_or_default();
-        if !sent.is_empty() {
-            self.module = Module::Thumbnails;
-            dropped.extend(sent);
+        for (target, paths) in sent {
+            match target {
+                crate::instance::Target::Thumbnails => {
+                    self.module = Module::Thumbnails;
+                    dropped.extend(paths);
+                }
+                crate::instance::Target::Nesting => self.pdf.to_nesting.extend(paths),
+                crate::instance::Target::Viewer => {
+                    self.module = Module::Viewer;
+                    self.viewer.open(&paths);
+                }
+            }
         }
+        self.viewer_requests();
         // I file mandati al nesting dal tasto destro di Modifica PDF o Modifica immagini.
         let mut to_nest = std::mem::take(&mut self.pdf.to_nesting);
         to_nest.append(&mut self.images.to_nesting);
@@ -2919,11 +3293,25 @@ impl eframe::App for WinFilesApp {
         let pdf_mode = self.module == Module::Pdf;
         let images_mode = self.module == Module::Images;
         let nesting_mode = self.module == Module::Nesting;
+        let viewer_mode = self.module == Module::Viewer;
+        if viewer_mode {
+            if self.viewer.inks != self.pdf.inks {
+                self.viewer.inks = self.pdf.inks.clone();
+            }
+            if self.viewer.calibrations != self.calibrations {
+                self.viewer.calibrations = self.calibrations.clone();
+            }
+        }
         // La tinta del taglio della fustella sulle immagini è quella di Modifica PDF.
         if images_mode && self.images.inks != self.pdf.inks {
             self.images.inks = self.pdf.inks.clone();
         }
-        if nesting_mode {
+        if viewer_mode {
+            if !dropped.is_empty() {
+                self.viewer.dropped(dropped);
+            }
+            self.viewer.shortcuts(&ctx);
+        } else if nesting_mode {
             // Le tinte di taglio sono quelle di Modifica PDF.
             if self.nesting.inks != self.pdf.inks {
                 self.nesting.inks = self.pdf.inks.clone();
@@ -2951,6 +3339,7 @@ impl eframe::App for WinFilesApp {
             if let Some(p) = projects.into_iter().next() {
                 self.guard(&ctx, Then::Open(Some(p)));
             }
+            self.annotate_keys(&ctx);
             self.shortcuts(&ctx);
         }
         self.remember_prefs(&ctx, false);
@@ -2981,6 +3370,10 @@ impl eframe::App for WinFilesApp {
                 .title()
                 .unwrap_or_else(|| "Modifica immagini — WinFiles".into()),
             Module::Nesting => "Nesting — WinFiles".into(),
+            Module::Viewer => self
+                .viewer
+                .title()
+                .unwrap_or_else(|| "Visualizza — WinFiles".into()),
             Module::Thumbnails => self.window_title(),
         };
         if title != self.shown_title {
@@ -2988,8 +3381,7 @@ impl eframe::App for WinFilesApp {
             self.shown_title = title;
         }
         // Canc toglie dall'elenco i file scelti, se non si sta scrivendo in un campo.
-        if !pdf_mode
-            && !images_mode
+        if self.module == Module::Thumbnails
             && !self.marked.is_empty()
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|i| i.key_pressed(egui::Key::Delete))
@@ -2998,8 +3390,7 @@ impl eframe::App for WinFilesApp {
             self.remove_files(&marked);
         }
         // Spazio mette o toglie dalla stampa i file scelti, come la spunta delle miniature della 4.9.
-        if !pdf_mode
-            && !images_mode
+        if self.module == Module::Thumbnails
             && !self.marked.is_empty()
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|i| i.key_pressed(egui::Key::Space))
@@ -3054,6 +3445,10 @@ impl eframe::App for WinFilesApp {
         self.receive_printers();
         self.print_window(&ctx, sheets);
         self.calibrate_window(&ctx);
+        // Le novità si aprono dalla barra degli aggiornamenti, che c'è in ogni scheda:
+        // la finestra va disegnata qui, prima di scegliere la scheda, sennò in
+        // Visualizza, Nesting e Modifica immagini il pulsante «Novità» non apriva niente.
+        self.notes_window(&ctx);
         self.app_bar(ui);
         let t = Tokens::get(ui.ctx());
         let frame = egui::Frame::NONE.fill(t.app_bar).inner_margin(egui::Margin {
@@ -3077,7 +3472,30 @@ impl eframe::App for WinFilesApp {
                 .show(ui, |ui| self.pdf.body(ui, unit));
             self.module_output();
             self.pdf.windows(&ctx);
-            self.notes_window(&ctx);
+            self.report_window(&ctx);
+            self.unsaved_dialog(&ctx);
+            return;
+        }
+        if let Some(d) = &mut self.defaults
+            && !d.show(&ctx)
+        {
+            self.defaults = None;
+        }
+        if self.module == Module::Viewer {
+            self.viewer.control_bar(ui);
+            self.update_bar(ui);
+            self.viewer.status_bar(ui, self.project.unit);
+            let unit = self.project.unit;
+            egui::CentralPanel::default()
+                .frame(frame.inner_margin(egui::Margin {
+                    left: 10,
+                    right: 10,
+                    top: 0,
+                    bottom: 2,
+                }))
+                .show(ui, |ui| self.viewer.body(ui, unit));
+            self.viewer_requests();
+            self.report_window(&ctx);
             self.unsaved_dialog(&ctx);
             return;
         }
@@ -3094,6 +3512,7 @@ impl eframe::App for WinFilesApp {
                     bottom: 2,
                 }))
                 .show(ui, |ui| self.nesting.body(ui, unit));
+            self.report_window(&ctx);
             self.unsaved_dialog(&ctx);
             return;
         }
@@ -3112,6 +3531,7 @@ impl eframe::App for WinFilesApp {
                 .show(ui, |ui| self.images.body(ui, unit));
             self.module_output();
             self.images.windows(&ctx);
+            self.report_window(&ctx);
             self.unsaved_dialog(&ctx);
             return;
         }
@@ -3147,7 +3567,7 @@ impl eframe::App for WinFilesApp {
                 self.apply_dock(action);
             }
         });
-        self.notes_window(&ctx);
+        self.report_window(&ctx);
         self.unsaved_dialog(&ctx);
     }
 
@@ -3164,6 +3584,54 @@ impl eframe::App for WinFilesApp {
 }
 
 impl WinFilesApp {
+    /// Apre in Visualizza il file `file` del lavoro alla pagina `page`.
+    pub(crate) fn view_file(&mut self, file: usize, page: usize) {
+        let Some(path) = self.project.files.get(file).map(|f| f.path.clone()) else {
+            return;
+        };
+        let job: Vec<PathBuf> = self
+            .shown
+            .files
+            .iter()
+            .map(|f| f.path.clone())
+            .filter(|p| crate::viewer::load::ViewKind::of(p) != crate::viewer::load::ViewKind::Unsupported)
+            .collect();
+        self.module = Module::Viewer;
+        self.viewer.open_from_job(&path, page, job);
+    }
+
+    /// Le richieste della scheda Visualizza: passare il file a un'altra scheda.
+    fn viewer_requests(&mut self) {
+        for r in std::mem::take(&mut self.viewer.requests) {
+            match r {
+                crate::viewer::Request::ToThumbnails(paths) => {
+                    self.module = Module::Thumbnails;
+                    self.add_paths(paths);
+                }
+                crate::viewer::Request::ToPdf { path, paths } => {
+                    self.module = Module::Pdf;
+                    self.pdf.open(&path);
+                    if paths {
+                        self.pdf.show_paths();
+                    }
+                }
+                crate::viewer::Request::ToImages { path, die } => {
+                    self.module = Module::Images;
+                    self.images.open(&[path]);
+                    if die {
+                        self.images.show_die();
+                    }
+                }
+                crate::viewer::Request::ToNesting(paths) => {
+                    self.module = Module::Nesting;
+                    self.nesting.inks = self.pdf.inks.clone();
+                    self.nesting.add(&paths);
+                }
+                crate::viewer::Request::BackToThumbnails => self.module = Module::Thumbnails,
+            }
+        }
+    }
+
     /// Avvia l'installer già scaricato, se c'è.
     fn install_update(&mut self) {
         if let crate::update::State::Ready(_, msi) = &self.updater.state

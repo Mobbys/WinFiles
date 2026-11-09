@@ -33,3 +33,5 @@ Una decisione si cambia con un nuovo ADR che sostituisce il precedente, mai risc
 | [0026](0026-abbondanza-sagomata.md) | Abbondanza che segue una fustella sagomata, allungando l'ultima striscia di grafica | Accettata |
 | [0027](0027-nesting.md) | Nesting delle sagome su lastre e rotoli, con il motore del pannello per Illustrator portato in Rust | Accettata |
 | [0028](0028-fustella-e-abbondanza-sulle-immagini.md) | Fustella e abbondanza sulle immagini: abbondanza con i pixel, PDF con fustella e TrimBox | Accettata |
+| [0029](0029-segnalazioni-dall-app.md) | Segnalazioni dal menu Aiuto: finestra in WinFiles, invio alle Issues con una chiave di sole issue | Accettata |
+| [0030](0030-annotazioni-sulle-miniature.md) | Annotazioni sulle miniature, attaccate alla pagina e salvate nel lavoro | Accettata |

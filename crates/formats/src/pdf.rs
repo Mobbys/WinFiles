@@ -20,9 +20,11 @@ pub(crate) fn sniff(head: &[u8]) -> bool {
     head.windows(5).any(|w| w == b"%PDF-")
 }
 
-fn size_of(r: Rect, rotation: Rotation) -> Option<Size> {
-    let w = pt_to_mm((r.x1 - r.x0).abs());
-    let h = pt_to_mm((r.y1 - r.y0).abs());
+/// `unit` è la `UserUnit` della pagina (1 di solito): le pagine oltre i 508 cm (i rotoli del
+/// nesting) contano in unità più grandi del punto.
+fn size_of(r: Rect, rotation: Rotation, unit: f64) -> Option<Size> {
+    let w = pt_to_mm((r.x1 - r.x0).abs() * unit);
+    let h = pt_to_mm((r.y1 - r.y0).abs() * unit);
     let ok = |v: f64| v.is_finite() && v > 0.0 && v <= MAX_SIDE_MM;
     if !ok(w) || !ok(h) {
         return None;
@@ -42,14 +44,19 @@ pub(crate) fn probe(src: &mut dyn Source) -> Result<Probe, ProbeError> {
     let mut pages = Vec::new();
     for page in pdf.pages().iter().take(MAX_PAGES) {
         let rotation = page.rotation();
+        let unit = page
+            .raw()
+            .get::<f64>(b"UserUnit")
+            .filter(|u| u.is_finite() && *u > 0.0 && *u <= 75_000.0)
+            .unwrap_or(1.0);
         // Il formato pagina è quello che mostrano i lettori: il CropBox dentro il MediaBox.
-        let Some(size) = size_of(page.intersected_crop_box(), rotation) else {
+        let Some(size) = size_of(page.intersected_crop_box(), rotation, unit) else {
             continue;
         };
         let trim = page
             .raw()
             .get::<Rect>(b"TrimBox")
-            .and_then(|r| size_of(r, rotation))
+            .and_then(|r| size_of(r, rotation, unit))
             .filter(|t| (t.w - size.w).abs() > 0.01 || (t.h - size.h).abs() > 0.01);
         pages.push(PageInfo { size, trim });
     }

@@ -1594,3 +1594,58 @@ fn i_tracciati_di_ritaglio_sagomati_diventano_fustella() {
     let w = line.bounds[2] - line.bounds[0];
     assert!((w - 70.56).abs() < 0.3, "{w}");
 }
+
+#[test]
+fn un_rotolo_di_50_metri_usa_la_user_unit() {
+    // Un quadrato rosso in cima al rotolo e uno in fondo, a 50 m: la pagina dichiara una
+    // UserUnit e il disegno resta a misura vera.
+    let content = leak("1 0 0 rg 0 0 100 100 re f".to_string());
+    let file = PdfFile::from_bytes(pdf(&[page([0.0, 0.0, 100.0, 100.0], 0, content)])).unwrap();
+    let side = pt_to_mm(100.0);
+    let (w, h) = (1000.0, 50_000.0);
+    let piece = |y: f64| SheetPiece {
+        source: 0,
+        page: 0,
+        matrix: [1.0, 0.0, 0.0, 1.0, 0.0, y],
+        clip: Vec::new(),
+        hide: Vec::new(),
+    };
+    let sheet = NestSheet {
+        width: w,
+        height: h,
+        pieces: vec![piece(0.0), piece(h - side)],
+        lines: Vec::new(),
+    };
+    let out = nest_document(&[&file], &[sheet], None).unwrap();
+    let pdf = Pdf::new(out.to_bytes().unwrap()).unwrap();
+    let p = &pdf.pages()[0];
+    let unit = p
+        .raw()
+        .get::<f64>(b"UserUnit")
+        .expect("la pagina lunga ha la UserUnit");
+    assert_eq!(unit, 10.0);
+    let mb = p.media_box();
+    assert!((mb.y1 - mb.y0) <= 14_400.0);
+    // MediaBox per UserUnit = 50 m, al decimo di millimetro.
+    let long = pt_to_mm((mb.y1 - mb.y0) * unit);
+    assert!((long - h).abs() < 0.1, "{long}");
+    assert!((pt_to_mm((mb.x1 - mb.x0) * unit) - w).abs() < 0.1);
+    // Disegnata un punto per unità: i quadrati sono di 10 pixel, in cima e in fondo.
+    let img = render(&pdf, 0);
+    let last = img.2 - 1;
+    assert!(is_red(pixel(&img, 5, 5)), "{:?}", pixel(&img, 5, 5));
+    assert!(is_white(pixel(&img, 5, 15)));
+    assert!(is_red(pixel(&img, 5, last - 5)), "{:?}", pixel(&img, 5, last - 5));
+    assert!(is_white(pixel(&img, 5, last - 15)));
+    assert!(is_white(pixel(&img, 15, last - 5)));
+    // Sotto i 508 cm niente UserUnit.
+    let short = NestSheet {
+        width: w,
+        height: 5000.0,
+        pieces: vec![piece(0.0)],
+        lines: Vec::new(),
+    };
+    let out = nest_document(&[&file], &[short], None).unwrap();
+    let pdf = Pdf::new(out.to_bytes().unwrap()).unwrap();
+    assert!(pdf.pages()[0].raw().get::<f64>(b"UserUnit").is_none());
+}

@@ -355,7 +355,7 @@ impl NestingModule {
         for path in paths {
             if !matches!(
                 FileKind::from_path(path),
-                FileKind::Pdf | FileKind::Ai | FileKind::Image
+                FileKind::Pdf | FileKind::Ai | FileKind::Eps | FileKind::Image
             ) {
                 skipped += 1;
                 continue;
@@ -801,7 +801,11 @@ impl NestingModule {
                 "{} su {} copie · rotolo lungo {}",
                 o.placed,
                 total,
-                format_length(len, Unit::Cm)
+                if len >= 10_000.0 {
+                    metres(len)
+                } else {
+                    format_length(len, Unit::Cm)
+                }
             ),
             None => format!(
                 "{} su {} copie · {} {}",
@@ -1643,7 +1647,10 @@ impl NestingModule {
                 let old = fit * self.zoom;
                 let min = room.center() + self.pan - vec2(sw as f32, sh as f32) * old / 2.0;
                 let q = (p - min) / old;
-                self.zoom = (self.zoom * z).clamp(1.0, 400.0);
+                // Su un rotolo lungo il foglio intero è una striscia: si deve poter ingrandire
+                // fino a qualche pixel per millimetro.
+                let most = 400.0_f32.max(6.0 / fit);
+                self.zoom = (self.zoom * z).clamp(1.0, most);
                 let new = fit * self.zoom;
                 let new_min = p - q * new;
                 self.pan = new_min + vec2(sw as f32, sh as f32) * new / 2.0 - room.center();
@@ -1651,6 +1658,20 @@ impl NestingModule {
         }
         if resp.dragged() {
             self.pan += resp.drag_delta();
+        }
+        // La rotella da sola scorre il foglio ingrandito (un rotolo da 50 m si percorre così);
+        // con le Maiuscole va di lato.
+        if resp.hovered() {
+            let scroll = ui.input(|i| {
+                if i.modifiers.command {
+                    Vec2::ZERO
+                } else {
+                    i.smooth_scroll_delta
+                }
+            });
+            if scroll != Vec2::ZERO {
+                self.pan += scroll;
+            }
         }
         if resp.double_clicked() {
             self.zoom = 1.0;
@@ -1745,10 +1766,14 @@ impl NestingModule {
         if let Some(tip) = tip {
             resp.on_hover_text(tip);
         } else if self.zoom <= 1.0 {
-            resp.on_hover_text("Ctrl+rotella per ingrandire, trascina per spostare");
+            resp.on_hover_text("Ctrl+rotella per ingrandire, rotella o trascina per spostare");
         }
         // La misura del foglio sotto.
-        let caption = format_size(Size::new(sw, sh), Unit::Cm);
+        let caption = if sh >= 10_000.0 {
+            format!("{} × {}", format_length(sw, Unit::Cm), metres(sh))
+        } else {
+            format_size(Size::new(sw, sh), Unit::Cm)
+        };
         painter.text(
             pos2(paper.center().x, (paper.bottom() + 4.0).min(room.bottom() + 4.0)),
             egui::Align2::CENTER_TOP,
@@ -1791,8 +1816,8 @@ impl NestingModule {
                 if s.support == Support::Roll {
                     hint(
                         ui,
-                        "Il rotolo si taglia alla lunghezza usata; oltre la lunghezza massima si passa a un altro \
-                         pezzo (un PDF non va oltre 5,08 m).",
+                        "Il rotolo si taglia alla lunghezza usata; oltre la lunghezza massima (anche 50 m e più) \
+                         si passa a un altro pezzo.",
                     );
                 }
                 ui.add_space(12.0);
@@ -1995,7 +2020,7 @@ fn write_job(job: &Job, target: &Path) -> Result<(), String> {
                 Some(size) => winfiles_pdf_out::image_page(p, *size)
                     .map_err(|e| e.to_string())
                     .and_then(|b| PdfFile::from_bytes(b).map_err(|e| e.to_string())),
-                None => PdfFile::open(p).map_err(|e| e.to_string()),
+                None => open_pdf(p),
             };
             file.map_err(|e| format!("{}: {e}", file_name(p)))
         })
@@ -2094,13 +2119,27 @@ fn masked(thumb: &winfiles_thumbs::Thumb, clip: &[Vec<[f64; 2]>], page: [f64; 2]
     egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba)
 }
 
+/// Apre un PDF, un AI salvato con compatibilità PDF, o un AI "legacy" / EPS di Illustrator
+/// (PostScript, come i file da taglio): questi si traducono in una pagina PDF con i tracciati e le
+/// tinte piatte, come per le miniature.
+fn open_pdf(path: &Path) -> Result<PdfFile, String> {
+    match winfiles_thumbs::illustrator_pdf(path) {
+        Ok(Some(bytes)) => PdfFile::from_bytes(bytes).map_err(|e| e.to_string()),
+        Ok(None) => PdfFile::open(path).map_err(|e| e.to_string()),
+        Err(winfiles_thumbs::ThumbError::NoPreview) => {
+            Err("disegno di Illustrator senza un riquadro leggibile".into())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Legge un PDF: per ogni pagina la sagoma (la fustella di taglio, se c'è, o il formato finito)
 /// e l'immagine.
 fn load(path: &Path, inks: &[InkName]) -> Result<Vec<(usize, usize, Shape, winfiles_thumbs::Thumb)>, String> {
     if FileKind::from_path(path) == FileKind::Image {
         return load_image(path).map(|one| vec![one]);
     }
-    let file = PdfFile::open(path).map_err(|e| e.to_string())?;
+    let file = open_pdf(path)?;
     let count = file.page_count();
     if count == 0 {
         return Err("il PDF non ha pagine".into());
@@ -2247,7 +2286,8 @@ fn pick_pdfs() -> Vec<PathBuf> {
         .add_filter(
             "PDF, Illustrator e immagini",
             &[
-                "pdf", "PDF", "ai", "AI", "jpg", "jpeg", "png", "tif", "tiff", "webp", "bmp", "psd",
+                "pdf", "PDF", "ai", "AI", "eps", "EPS", "jpg", "jpeg", "png", "tif", "tiff", "webp", "bmp",
+                "psd",
             ],
         )
         .pick_files()

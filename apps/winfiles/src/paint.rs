@@ -55,6 +55,39 @@ pub fn page(painter: &egui::Painter, origin: Pos2, scale: f32, page: &Page, thum
             }
             Item::Text(text) => draw_text(painter, origin, scale, text),
             Item::Picture(p) => picture(painter, map(p.rect), p, thumbs, scale),
+            Item::Path {
+                points,
+                closed,
+                fill,
+                stroke,
+            } => {
+                let pts: Vec<Pos2> = points
+                    .iter()
+                    .filter(|(x, y)| x.is_finite() && y.is_finite())
+                    .map(|p| at(*p))
+                    .collect();
+                if pts.len() < 2 {
+                    continue;
+                }
+                let stroke = stroke.map_or(Stroke::NONE, |(c, w)| Stroke::new(mm(w).max(0.75), c32(c)));
+                let fill = fill.filter(|_| *closed).map_or(Color32::TRANSPARENT, c32);
+                if *closed {
+                    painter.add(egui::Shape::convex_polygon(pts.clone(), fill, Stroke::NONE));
+                    if stroke.width > 0.0 {
+                        painter.add(egui::Shape::closed_line(pts, stroke));
+                    }
+                } else {
+                    // Capi tondi come nel PDF: un tondo a ogni estremo.
+                    let r = stroke.width / 2.0;
+                    let ends = [pts.first().copied(), pts.last().copied()];
+                    painter.add(egui::Shape::line(pts, stroke));
+                    if r > 1.0 && stroke.color.a() == 255 {
+                        for p in ends.into_iter().flatten() {
+                            painter.circle_filled(p, r, stroke.color);
+                        }
+                    }
+                }
+            }
         }
     }
 }
