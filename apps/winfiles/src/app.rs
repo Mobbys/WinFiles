@@ -3445,6 +3445,10 @@ impl eframe::App for WinFilesApp {
         self.receive_printers();
         self.print_window(&ctx, sheets);
         self.calibrate_window(&ctx);
+        // Le novità si aprono dalla barra degli aggiornamenti, che c'è in ogni scheda:
+        // la finestra va disegnata qui, prima di scegliere la scheda, sennò in
+        // Visualizza, Nesting e Modifica immagini il pulsante «Novità» non apriva niente.
+        self.notes_window(&ctx);
         self.app_bar(ui);
         let t = Tokens::get(ui.ctx());
         let frame = egui::Frame::NONE.fill(t.app_bar).inner_margin(egui::Margin {
@@ -3468,7 +3472,6 @@ impl eframe::App for WinFilesApp {
                 .show(ui, |ui| self.pdf.body(ui, unit));
             self.module_output();
             self.pdf.windows(&ctx);
-            self.notes_window(&ctx);
             self.report_window(&ctx);
             self.unsaved_dialog(&ctx);
             return;
@@ -3564,7 +3567,6 @@ impl eframe::App for WinFilesApp {
                 self.apply_dock(action);
             }
         });
-        self.notes_window(&ctx);
         self.report_window(&ctx);
         self.unsaved_dialog(&ctx);
     }
