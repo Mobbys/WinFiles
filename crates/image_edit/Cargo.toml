@@ -24,6 +24,8 @@ image.workspace = true
 # Scrittura dei TIFF con la risoluzione e il profilo ICC (vedi il commento nel Cargo.toml in alto).
 tiff.workspace = true
 photocraft-heif.workspace = true
+# Unione dei pixel del soggetto e allargamento della fustella dal contorno (ADR 0028).
+i_overlay.workspace = true
 
 [lints]
 workspace = true

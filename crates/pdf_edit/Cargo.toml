@@ -13,6 +13,7 @@ thiserror.workspace = true
 pdfcraft-cos.workspace = true
 pdfcraft-organize.workspace = true
 pdfcraft-content.workspace = true
+i_overlay.workspace = true
 
 [dev-dependencies]
 hayro.workspace = true

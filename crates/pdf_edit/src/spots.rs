@@ -25,7 +25,7 @@ const MAX_SPOTS: usize = 64;
 /// Nomi degli stati grafici aggiunti: sovrastampa del riempimento e del contorno.
 const GS_PREFIX: &str = "WFSovra";
 /// Contenuto più grande che si riscrive.
-const MAX_CONTENT: usize = 512 * 1024 * 1024;
+pub(crate) const MAX_CONTENT: usize = 512 * 1024 * 1024;
 
 /// I nomi che non sono tinte: la registrazione (tutte le lastre), nessuna, la quadricromia.
 const NOT_SPOTS: [&[u8]; 6] = [b"All", b"None", b"Cyan", b"Magenta", b"Yellow", b"Black"];
@@ -206,7 +206,7 @@ struct Res {
     patterns: HashMap<Vec<u8>, u64>,
 }
 
-fn dict_of(doc: &Document, d: Option<&Object>) -> Dict {
+pub(crate) fn dict_of(doc: &Document, d: Option<&Object>) -> Dict {
     d.and_then(|o| doc.dict(o)).unwrap_or_default()
 }
 
@@ -376,7 +376,7 @@ struct Walked {
     added: HashSet<(bool, bool)>,
 }
 
-fn gs_name(fill: bool, stroke: bool) -> Vec<u8> {
+pub(crate) fn gs_name(fill: bool, stroke: bool) -> Vec<u8> {
     format!("{GS_PREFIX}{}{}", u8::from(fill), u8::from(stroke)).into_bytes()
 }
 
@@ -544,7 +544,7 @@ fn walk(ops: Vec<Op>, res: &Res, start: State, mode: Mode) -> Walked {
 }
 
 /// Le risorse di una pagina, anche ereditate.
-fn page_resources(doc: &Document, page: ObjRef) -> Dict {
+pub(crate) fn page_resources(doc: &Document, page: ObjRef) -> Dict {
     let mut node = page;
     for _ in 0..MAX_DEPTH {
         let obj = doc.get(node);
@@ -561,7 +561,7 @@ fn page_resources(doc: &Document, page: ObjRef) -> Dict {
 }
 
 /// Il contenuto di una pagina, decodificato e in un pezzo solo.
-fn page_content(doc: &Document, page: ObjRef) -> Result<Vec<u8>, EditError> {
+pub(crate) fn page_content(doc: &Document, page: ObjRef) -> Result<Vec<u8>, EditError> {
     let obj = doc.get(page);
     let Some(c) = obj.as_dict().and_then(|d| d.get(b"Contents")) else {
         return Ok(Vec::new());
@@ -1013,7 +1013,7 @@ pub(crate) fn set_overprint(doc: &mut Document, name: &[u8], on: bool) -> Result
 }
 
 /// Aggiunge gli stati grafici alle risorse (copiate: le risorse condivise restano com'erano).
-fn add_states(doc: &Document, res: &mut Dict, states: &[(Vec<u8>, ObjRef)]) {
+pub(crate) fn add_states(doc: &Document, res: &mut Dict, states: &[(Vec<u8>, ObjRef)]) {
     let mut g = dict_of(doc, res.get(b"ExtGState"));
     for (name, r) in states {
         g.set(name.clone(), Object::Ref(*r));

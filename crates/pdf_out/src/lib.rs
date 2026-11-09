@@ -108,6 +108,86 @@ pub fn write(
     Ok((bytes, w.report))
 }
 
+/// Byte massimi di un'immagine messa intera in un PDF.
+const MAX_IMAGE_BYTES: u64 = 1 << 30;
+
+/// Un PDF di una pagina di `size` (mm) con l'immagine in `path` a tutta pagina, alla sua
+/// risoluzione: i JPEG e i PNG entrano così come sono, gli altri formati senza perdite. Serve al
+/// nesting, che dispone le pagine dei PDF.
+pub fn image_page(path: &Path, size: winfiles_geom::Size) -> Result<Vec<u8>, PdfOutError> {
+    let len = std::fs::metadata(path)?.len();
+    if len > MAX_IMAGE_BYTES {
+        return Err(PdfOutError::Write(format!("immagine troppo grande ({len} byte)")));
+    }
+    let bytes = std::fs::read(path)?;
+    // Quello che il decodificatore delle immagini non legge (HEIC, Photoshop, RAW) passa dalle
+    // miniature, al loro lato massimo.
+    let image = full_image(bytes)
+        .or_else(|_| {
+            let thumb = winfiles_thumbs::render(
+                path,
+                winfiles_model::FileKind::Image,
+                0,
+                winfiles_thumbs::MAX_SIDE,
+            )
+            .map_err(|e| e.to_string())?;
+            let rgba = image::RgbaImage::from_raw(thumb.width, thumb.height, thumb.rgba)
+                .ok_or_else(|| "immagine non valida".to_string())?;
+            let mut png = Vec::new();
+            image::DynamicImage::ImageRgba8(rgba)
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .map_err(|e| e.to_string())?;
+            Image::from_png(Data::from(png), true)
+        })
+        .map_err(PdfOutError::Write)?;
+    one_image_page(image, size)
+}
+
+/// Come [`image_page`], con l'immagine già codificata in memoria (JPEG, PNG, TIFF…): serve a
+/// Modifica immagini, che salva l'immagine com'è adesso, con le modifiche.
+pub fn image_page_bytes(bytes: Vec<u8>, size: winfiles_geom::Size) -> Result<Vec<u8>, PdfOutError> {
+    one_image_page(full_image(bytes).map_err(PdfOutError::Write)?, size)
+}
+
+fn one_image_page(image: Image, size: winfiles_geom::Size) -> Result<Vec<u8>, PdfOutError> {
+    let page = KSize::from_wh(pt(size.w), pt(size.h))
+        .ok_or_else(|| PdfOutError::Write("formato della pagina non valido".into()))?;
+    let mut doc = Document::new();
+    let mut p = doc.start_page_with(PageSettings::new(page));
+    let mut surface = p.surface();
+    surface.draw_image(image, page);
+    surface.finish();
+    p.finish();
+    doc.finish().map_err(|e| PdfOutError::Write(format!("{e:?}")))
+}
+
+/// L'immagine intera: un JPEG dritto o un PNG passano senza ricomprimere, il resto si decodifica
+/// (girato come dice l'EXIF) e diventa un PNG.
+fn full_image(bytes: Vec<u8>) -> Result<Image, String> {
+    use image::ImageDecoder;
+    if bytes.starts_with(&[0xFF, 0xD8]) {
+        let upright = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&bytes))
+            .and_then(|mut d| d.orientation())
+            .is_ok_and(|o| o == image::metadata::Orientation::NoTransforms);
+        if upright {
+            return Image::from_jpeg(Data::from(bytes), true);
+        }
+    } else if bytes.starts_with(b"\x89PNG") {
+        return Image::from_png(Data::from(bytes), true);
+    }
+    let reader = image::ImageReader::new(std::io::Cursor::new(&bytes))
+        .with_guessed_format()
+        .map_err(|e| e.to_string())?;
+    let mut decoder = reader.into_decoder().map_err(|e| e.to_string())?;
+    let orientation = decoder.orientation().map_err(|e| e.to_string())?;
+    let mut img = image::DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
+    img.apply_orientation(orientation);
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Image::from_png(Data::from(png), true)
+}
+
 /// Scrive il PDF su disco passando da un file temporaneo, come il salvataggio del lavoro.
 pub fn save(path: &Path, bytes: &[u8]) -> Result<(), PdfOutError> {
     let mut tmp = path.as_os_str().to_owned();
@@ -177,6 +257,26 @@ fn rounded(r: Rect, radius: f64) -> Option<krilla::geom::Path> {
     b.finish()
 }
 
+/// Una spezzata (chiusa se `closed`) in punti PDF; `None` con meno di due punti buoni.
+fn polyline(points: &[(f64, f64)], closed: bool) -> Option<krilla::geom::Path> {
+    let mut good = points.iter().filter(|(x, y)| x.is_finite() && y.is_finite());
+    let first = good.next()?;
+    let mut b = PathBuilder::new();
+    b.move_to(pt(first.0), pt(first.1));
+    let mut n = 1;
+    for p in good {
+        b.line_to(pt(p.0), pt(p.1));
+        n += 1;
+    }
+    if n < 2 {
+        return None;
+    }
+    if closed {
+        b.close();
+    }
+    b.finish()
+}
+
 impl Writer {
     fn item(&mut self, s: &mut Surface<'_>, item: &Item) {
         match item {
@@ -233,6 +333,39 @@ impl Writer {
             }
             Item::Text(t) => self.text(s, t),
             Item::Picture(p) => self.picture(s, p),
+            Item::Path {
+                points,
+                closed,
+                fill: f,
+                stroke,
+            } => {
+                let Some(path) = polyline(points, *closed) else {
+                    return;
+                };
+                if let Some(c) = f
+                    && *closed
+                {
+                    s.set_stroke(None);
+                    s.set_fill(Some(fill(*c)));
+                    s.draw_path(&path);
+                }
+                if let Some((c, width)) = stroke
+                    && width.is_finite()
+                    && *width > 0.0
+                {
+                    s.set_fill(None);
+                    s.set_stroke(Some(Stroke {
+                        paint: color(*c).into(),
+                        width: pt(*width),
+                        opacity: opacity(*c),
+                        line_cap: krilla::paint::LineCap::Round,
+                        line_join: krilla::paint::LineJoin::Round,
+                        ..Stroke::default()
+                    }));
+                    s.draw_path(&path);
+                    s.set_stroke(None);
+                }
+            }
         }
     }
 

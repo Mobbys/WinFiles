@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use winfiles_geom::{Margins, Orientation, Paper, Size, Unit, area_m2};
 
+mod annotation;
+pub use annotation::{Anchor, Annotation, MAX_PER_PAGE, Point, QUOTE_SIZE, Rgba, ShapeStyle};
+
 /// Versione del formato del file di progetto. Si alza a ogni modifica incompatibile.
 pub const FORMAT_VERSION: u32 = 1;
 /// Estensione dei file di progetto.
@@ -53,9 +56,8 @@ impl FileKind {
             .unwrap_or("")
             .to_ascii_lowercase();
         match ext.as_str() {
-            "jpg" | "jpeg" | "png" | "tif" | "tiff" | "webp" | "bmp" | "gif" | "heic" | "heif" | "hif" => {
-                FileKind::Image
-            }
+            "jpg" | "jpeg" | "png" | "tif" | "tiff" | "webp" | "bmp" | "gif" | "heic" | "heif" | "hif"
+            | "tga" | "ico" => FileKind::Image,
             // File di Photoshop e foto RAW delle fotocamere (le stesse estensioni di PhotoCraft).
             "psd" | "psb" | "dng" | "cr2" | "cr3" | "nef" | "nrw" | "arw" | "srf" | "sr2" | "pef" | "orf"
             | "rw2" | "raf" => FileKind::Image,
@@ -150,6 +152,9 @@ pub struct FileEntry {
     /// spunta della 4.9. Un file senza misure ha comunque la sua pagina 0.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub skip: BTreeSet<usize>,
+    /// Annotazioni disegnate sopra la miniatura, per pagina (da 0) come le note.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub annotations: BTreeMap<usize, Vec<Annotation>>,
     /// Nota unica per file dei primi lavori salvati: all'apertura passa alla prima pagina.
     #[serde(default, rename = "note", skip_serializing)]
     legacy_note: String,
@@ -165,6 +170,7 @@ impl FileEntry {
             image: None,
             notes: BTreeMap::new(),
             skip: BTreeSet::new(),
+            annotations: BTreeMap::new(),
             legacy_note: String::new(),
         }
     }
@@ -235,6 +241,20 @@ impl FileEntry {
     /// Vero se almeno una pagina ha una nota.
     pub fn has_notes(&self) -> bool {
         self.notes.values().any(|n| !n.trim().is_empty())
+    }
+
+    /// Le annotazioni della pagina `page` (da 0).
+    pub fn annotations(&self, page: usize) -> &[Annotation] {
+        self.annotations.get(&page).map_or(&[], Vec::as_slice)
+    }
+
+    /// Sostituisce le annotazioni della pagina `page`; vuote, la pagina non ne ha più.
+    pub fn set_annotations(&mut self, page: usize, list: Vec<Annotation>) {
+        if list.is_empty() {
+            self.annotations.remove(&page);
+        } else {
+            self.annotations.insert(page, list);
+        }
     }
 
     /// Metri quadrati di tutte le pagine, al formato finito.
@@ -377,6 +397,8 @@ pub struct PrintSettings {
     pub one_per_sheet: bool,
     /// Il percorso completo della cartella sotto la sua intestazione.
     pub show_path: bool,
+    /// Disegna le annotazioni sopra le miniature (spento: restano nel lavoro ma non sul foglio).
+    pub show_annotations: bool,
     /// Nella griglia, "Su N fogli": colonne e verso li sceglie WinFiles, perché tutte le miniature
     /// in stampa stiano in `fit_sheets` fogli, più grandi possibile.
     pub fit: bool,
@@ -410,6 +432,7 @@ impl Default for PrintSettings {
             fill_single: true,
             one_per_sheet: false,
             show_path: true,
+            show_annotations: true,
             fit: false,
             fit_sheets: 1,
         }
@@ -544,6 +567,12 @@ impl Project {
             if !legacy.trim().is_empty() {
                 f.notes.entry(0).or_insert(legacy);
             }
+            // Le annotazioni arrivano da un file che può essere rovinato.
+            f.annotations.retain(|_, list| {
+                list.truncate(MAX_PER_PAGE);
+                list.retain_mut(Annotation::sanitize);
+                !list.is_empty()
+            });
         }
         if project.version > FORMAT_VERSION {
             return Err(ModelError::TooNew {
@@ -593,6 +622,64 @@ impl Project {
 mod tests {
     use super::*;
 
+    #[test]
+    fn le_annotazioni_si_salvano_e_si_riaprono() {
+        let mut p = sample();
+        let list = vec![
+            Annotation::Linea {
+                a: (0.1, 0.2),
+                b: (0.8, 0.9),
+                color: Rgba::rgb(220, 30, 30),
+                width: 0.5,
+                start_arrow: false,
+                end_arrow: true,
+                end: None,
+            },
+            Annotation::Testo {
+                at: (0.0, 1.05),
+                text: "Logo da rifare".into(),
+                color: Rgba::rgb(220, 30, 30),
+                size: 4.0,
+                bold: true,
+                background: true,
+                width: Some(40.0),
+            },
+            Annotation::Evidenziatore {
+                points: vec![(0.1, 0.5), (0.4, 0.52), (0.7, 0.5)],
+                color: Rgba::rgb(255, 230, 0).with_alpha(0.4),
+                width: 4.0,
+            },
+        ];
+        p.files[0].set_annotations(0, list.clone());
+        let back = Project::from_json(&p.to_json().unwrap()).unwrap();
+        assert_eq!(back.files[0].annotations(0), list.as_slice());
+        assert!(back.files[0].annotations(1).is_empty());
+    }
+
+    #[test]
+    fn un_lavoro_senza_annotazioni_non_le_scrive() {
+        let p = sample();
+        assert!(!p.to_json().unwrap().contains("\"annotations\""));
+    }
+
+    #[test]
+    fn annotazioni_rovinate_si_scartano_all_apertura() {
+        let mut p = sample();
+        p.files[0].set_annotations(
+            2,
+            vec![Annotation::Ovale {
+                a: (0.1, 0.1),
+                b: (0.2, 0.2),
+                style: ShapeStyle {
+                    stroke: None,
+                    fill: None,
+                },
+            }],
+        );
+        let back = Project::from_json(&p.to_json().unwrap()).unwrap();
+        assert!(back.files[0].annotations.is_empty());
+    }
+
     fn sample() -> Project {
         let mut p = Project::new("Catalogo");
         p.files.push(FileEntry {
@@ -605,6 +692,7 @@ mod tests {
             image: None,
             notes: BTreeMap::from([(0, "Verificare il colore Pantone, è più scuro".into())]),
             skip: BTreeSet::new(),
+            annotations: BTreeMap::new(),
             legacy_note: String::new(),
         });
         p.folder_notes

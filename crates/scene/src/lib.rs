@@ -89,6 +89,14 @@ pub enum Item {
     },
     Text(Text),
     Picture(Picture),
+    /// Spezzata o poligono con giunzioni e capi arrotondati: ovali, punte di freccia, tratti
+    /// dell'evidenziatore. Il riempimento vale solo per un tracciato chiuso e convesso.
+    Path {
+        points: Vec<(f64, f64)>,
+        closed: bool,
+        fill: Option<Color>,
+        stroke: Option<(Color, f64)>,
+    },
 }
 
 /// Un foglio da disegnare.

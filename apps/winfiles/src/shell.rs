@@ -47,3 +47,23 @@ pub fn reveal(path: &Path) -> std::io::Result<()> {
         open(path.parent().unwrap_or(path))
     }
 }
+
+/// Apre un indirizzo web nel browser predefinito. Su Windows passa da `url.dll`, che lascia
+/// intatti `&` e `?` dell'indirizzo (con `cmd /c start` andrebbero persi).
+pub fn open_url(url: &str) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", url])
+            .spawn()
+            .map(drop)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(url).spawn().map(drop)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(url).spawn().map(drop)
+    }
+}

@@ -52,10 +52,27 @@ static ICONS: &[(&str, &[u8])] = icons![
     "scaling",
     "scissors",
     "undo-2",
+    "mouse-pointer-2",
+    "triangle-alert",
+    "circle-check",
     // Modulo immagini. I nomi sono quelli di Lucide, che chiama le icone con l'asse dello
     // specchio: "flip-vertical-2" è lo specchio sinistra-destra.
     "flip-horizontal-2",
     "flip-vertical-2",
+    // Annotazioni delle miniature.
+    "type",
+    "move-up-right",
+    "circle",
+    "square",
+    "highlighter",
+    // Scheda Visualizza.
+    "zoom-out",
+    "external-link",
+    "arrow-left",
+    "eye",
+    "send",
+    "copy",
+    "eye-off",
 ];
 
 fn table() -> &'static SvgIconSet {

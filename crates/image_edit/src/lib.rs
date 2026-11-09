@@ -15,11 +15,15 @@ use std::sync::Arc;
 use image::{DynamicImage, ImageDecoder, ImageReader, Limits};
 use winfiles_geom::Size;
 
+mod bleed;
+mod contour;
 mod save;
 #[cfg(test)]
 mod tests;
 
-pub use save::{Format, SaveOptions};
+pub use bleed::BleedMethod;
+pub use contour::{Background, ContourSpec, contour_area, trace, trace_image};
+pub use save::{Format, SaveOptions, encode};
 
 /// Le estensioni dei file che si aprono, per la finestra di sistema.
 pub fn extensions() -> Vec<&'static str> {
@@ -129,6 +133,18 @@ pub enum Op {
     /// Cambia la risoluzione senza ricampionare: l'immagine resta quella, cambia quanto misura
     /// sulla carta.
     Dpi(f64),
+    /// Aggiunge l'abbondanza: pixel in più a sinistra, in alto, a destra e in basso, riempiti
+    /// con l'immagine stessa. Quello che c'era diventa il formato finito.
+    Bleed {
+        sides: [u32; 4],
+        method: BleedMethod,
+    },
+    /// L'abbondanza lungo il contorno del soggetto: oltre la fustella dal contorno, per `band`
+    /// mm, ogni pixel prende il colore più vicino dentro la fustella. La misura non cambia.
+    ContourBleed {
+        spec: ContourSpec,
+        band: f64,
+    },
 }
 
 impl Op {
@@ -143,6 +159,8 @@ impl Op {
             Op::Crop(_) => "Ritaglia".into(),
             Op::Resize { .. } => "Ridimensiona".into(),
             Op::Dpi(_) => "Cambia risoluzione".into(),
+            Op::Bleed { .. } => "Aggiungi abbondanza".into(),
+            Op::ContourBleed { .. } => "Abbondanza lungo il contorno".into(),
         }
     }
 }
@@ -186,6 +204,12 @@ pub struct Picture {
     origin: Option<String>,
     /// Il nome del profilo ICC, letto una volta all'apertura.
     icc_name: Option<String>,
+    /// Il formato finito in pixel, quando l'immagine ha l'abbondanza aggiunta qui.
+    trim: Option<CropPx>,
+    /// La fustella dal contorno fissata dall'abbondanza lungo il contorno, in pixel: dopo,
+    /// lo sfondo attorno al soggetto è pieno e ricalcolarla la allargherebbe. Le operazioni che
+    /// spostano i pixel la tolgono (si torna a cercare il contorno).
+    cut: Option<Arc<Vec<Vec<[f64; 2]>>>>,
 }
 
 impl Picture {
@@ -218,6 +242,39 @@ impl Picture {
     /// Da dove vengono i pixel, per le foto RAW e i file di Photoshop.
     pub fn origin(&self) -> Option<&str> {
         self.origin.as_deref()
+    }
+
+    /// Il formato finito in pixel, se all'immagine è stata aggiunta l'abbondanza.
+    pub fn trim(&self) -> Option<CropPx> {
+        self.trim
+    }
+
+    /// Il formato finito in mm dall'angolo in alto a sinistra: `[sinistra, alto, destra, basso]`;
+    /// senza abbondanza aggiunta, l'immagine intera.
+    /// La fustella fissata dall'abbondanza lungo il contorno, in mm, se c'è.
+    pub fn cut_mm(&self) -> Option<Vec<Vec<[f64; 2]>>> {
+        let k = 25.4 / self.dpi;
+        self.cut.as_ref().map(|c| {
+            c.iter()
+                .map(|line| line.iter().map(|p| [p[0] * k, p[1] * k]).collect())
+                .collect()
+        })
+    }
+
+    pub fn trim_mm(&self) -> [f64; 4] {
+        let t = self.trim.unwrap_or(CropPx {
+            x: 0,
+            y: 0,
+            width: self.width(),
+            height: self.height(),
+        });
+        let m = |v: u32| mm(v, self.dpi);
+        [
+            m(t.x),
+            m(t.y),
+            m(t.x.saturating_add(t.width)),
+            m(t.y.saturating_add(t.height)),
+        ]
     }
 
     pub fn bits(&self) -> u8 {
@@ -422,8 +479,78 @@ impl Editor {
 }
 
 fn apply_one(picture: &Picture, op: Op) -> Result<Picture, ImageEditError> {
+    let mut next = apply_pixels(picture, op)?;
+    let (w, h) = (picture.image.width(), picture.image.height());
+    // Il formato finito segue l'immagine.
+    next.trim = picture.trim.and_then(|t| match op {
+        Op::Rotate(q) => Some(bleed::rotate_trim(t, w, h, q)),
+        Op::Flip(Axis::Horizontal) => Some(CropPx {
+            x: w.saturating_sub(t.x.saturating_add(t.width)),
+            ..t
+        }),
+        Op::Flip(Axis::Vertical) => Some(CropPx {
+            y: h.saturating_sub(t.y.saturating_add(t.height)),
+            ..t
+        }),
+        Op::Crop(c) => bleed::crop_trim(t, c),
+        Op::Resize { width, height } => bleed::resize_trim(t, (w, h), (width, height)),
+        Op::Dpi(_) | Op::ContourBleed { .. } => Some(t),
+        Op::Bleed { sides, .. } => Some(CropPx {
+            x: t.x.saturating_add(sides[0]),
+            y: t.y.saturating_add(sides[1]),
+            ..t
+        }),
+    });
+    // La fustella fissata resta solo se i pixel non si spostano.
+    next.cut = match op {
+        Op::Dpi(_) => picture.cut.clone(),
+        Op::ContourBleed { .. } => next.cut,
+        _ => None,
+    };
+    if let (None, Op::Bleed { sides, .. }) = (picture.trim, op) {
+        next.trim = Some(CropPx {
+            x: sides[0],
+            y: sides[1],
+            width: w,
+            height: h,
+        });
+    }
+    Ok(next)
+}
+
+fn apply_pixels(picture: &Picture, op: Op) -> Result<Picture, ImageEditError> {
     let mut next = picture.clone();
     match op {
+        Op::Bleed { sides, method } => {
+            let (w, h) = (picture.image.width(), picture.image.height());
+            let nw = w
+                .checked_add(sides[0])
+                .and_then(|v| v.checked_add(sides[2]))
+                .ok_or(ImageEditError::BadSize)?;
+            let nh = h
+                .checked_add(sides[1])
+                .and_then(|v| v.checked_add(sides[3]))
+                .ok_or(ImageEditError::BadSize)?;
+            check_size(nw, nh)?;
+            if sides.iter().all(|s| *s == 0) {
+                return Err(ImageEditError::BadSize);
+            }
+            next.image = Arc::new(bleed::add(&picture.image, sides, method));
+        }
+        Op::ContourBleed { spec, band } => {
+            // La fustella prima: dopo, lo sfondo attorno al soggetto non c'è più.
+            let cut = match picture.cut_mm() {
+                Some(c) => c,
+                None => contour::trace(picture, &spec)?,
+            };
+            let k = picture.dpi / 25.4;
+            let px = cut
+                .iter()
+                .map(|line| line.iter().map(|p| [p[0] * k, p[1] * k]).collect())
+                .collect();
+            next.image = Arc::new(contour::bleed_around(&picture.image, picture.dpi, &cut, band)?);
+            next.cut = Some(Arc::new(px));
+        }
         Op::Rotate(quarters) => {
             next.image = Arc::new(match quarters.rem_euclid(4) {
                 1 => picture.image.rotate90(),
@@ -528,6 +655,8 @@ fn load(path: &Path) -> Result<Picture, ImageEditError> {
         icc_name: icc.as_deref().and_then(winfiles_photo::icc_name),
         icc,
         origin: None,
+        trim: None,
+        cut: None,
     })
 }
 
@@ -557,6 +686,8 @@ fn photo(data: &[u8], path: &Path) -> Result<Picture, ImageEditError> {
         icc_name: photo.icc.as_deref().and_then(winfiles_photo::icc_name),
         icc: photo.icc,
         origin: Some(photo.origin),
+        trim: None,
+        cut: None,
     })
 }
 
@@ -657,5 +788,7 @@ fn heif(data: &[u8]) -> Result<Picture, ImageEditError> {
         icc: None,
         origin: None,
         icc_name: None,
+        trim: None,
+        cut: None,
     })
 }

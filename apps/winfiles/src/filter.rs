@@ -1,8 +1,8 @@
 //! Cerca e filtra nell'elenco dei file: per nome o cartella, per numero di pagina e per testo
-//! delle note, e per tipo. Il filtro cambia solo quello che l'elenco mostra, mai quello che va in
-//! stampa.
+//! delle note, e per tipo. Come nella 4.9, quello che l'elenco nasconde sparisce anche da
+//! anteprima, stampa, PDF e riepilogo (`FileFilter::apply`); il lavoro salvato non cambia.
 
-use winfiles_model::{FileEntry, FileKind};
+use winfiles_model::{FileEntry, FileKind, Project};
 
 /// I tipi che si possono scegliere, con il nome del loro pulsante.
 pub const KINDS: [(FileKind, &str); 5] = [
@@ -86,6 +86,41 @@ impl FileFilter {
         } else {
             Found::Pages(pages)
         }
+    }
+}
+
+impl FileFilter {
+    /// Il lavoro come lo vedono anteprima, stampa e PDF: i file che la ricerca non trova e le
+    /// pagine non trovate vanno fuori stampa. Gli indici dei file restano quelli del lavoro.
+    /// Senza filtro, il lavoro com'è.
+    pub fn apply(&self, project: &Project) -> Project {
+        let mut shown = project.clone();
+        if !self.is_active() {
+            return shown;
+        }
+        for f in &mut shown.files {
+            match self.find(f) {
+                Found::File => {}
+                Found::Nothing => f.set_all_printed(false),
+                Found::Pages(pages) => {
+                    for p in 0..f.sheet_pages() {
+                        if !pages.contains(&p) {
+                            f.set_printed(p, false);
+                        }
+                    }
+                }
+            }
+        }
+        shown
+    }
+
+    /// Quanti file del lavoro la ricerca trova.
+    pub fn count(&self, project: &Project) -> usize {
+        project
+            .files
+            .iter()
+            .filter(|f| self.find(f) != Found::Nothing)
+            .count()
     }
 }
 
@@ -199,6 +234,46 @@ mod tests {
         // Un file di una pagina si trova solo intero.
         filter.text = "volantino 1".into();
         assert_eq!(filter.find(&f("/x/volantino.pdf")), Found::Nothing);
+    }
+
+    #[test]
+    fn anteprima_e_stampa_seguono_il_filtro() {
+        let mut project = Project::default();
+        project.files.push(f("/a/rossi.pdf"));
+        project.files.push(f("/a/bianchi.jpg"));
+        let mut libro = f("/b/catalogo.pdf");
+        libro.pages = vec![
+            winfiles_model::PageInfo {
+                size: winfiles_geom::Size::new(210.0, 297.0),
+                trim: None,
+            };
+            4
+        ];
+        libro.set_printed(0, false);
+        project.files.push(libro);
+        let printed = |p: &Project| -> Vec<Vec<usize>> {
+            p.files.iter().map(|f| f.printed_pages().collect()).collect()
+        };
+        // Senza filtro non cambia nulla, nemmeno le pagine già tolte a mano.
+        let mut filter = FileFilter::default();
+        assert_eq!(filter.apply(&project), project);
+        // Per tipo: i JPG spariscono, i PDF restano come erano.
+        filter.toggle(FileKind::Pdf);
+        assert_eq!(
+            printed(&filter.apply(&project)),
+            [vec![0usize], vec![], vec![1, 2, 3]]
+        );
+        assert_eq!(filter.count(&project), 2);
+        // Per pagina: solo quella trovata, e una pagina tolta a mano resta tolta.
+        filter.text = "catalogo 3".into();
+        assert_eq!(printed(&filter.apply(&project)), [vec![], vec![], vec![2usize]]);
+        filter.text = "catalogo 1".into();
+        assert_eq!(
+            printed(&filter.apply(&project)),
+            [Vec::<usize>::new(), vec![], vec![]]
+        );
+        // Il lavoro di partenza non si tocca.
+        assert_eq!(printed(&project), [vec![0usize], vec![0], vec![1, 2, 3]]);
     }
 
     #[test]

@@ -233,3 +233,71 @@ fn la_correzione_della_stampante_sposta_e_allunga_il_foglio() {
     assert!((probe[0].0 - 210.0).abs() < 0.1);
     std::fs::remove_dir_all(&d).unwrap();
 }
+
+#[test]
+fn un_immagine_diventa_un_pdf_di_una_pagina_alla_sua_misura() {
+    let d = dir("immagine");
+    // Metà sinistra nera e destra bianca: si deve ritrovare nel PDF, in PNG, JPEG e TIFF.
+    let img = image::RgbImage::from_fn(200, 100, |x, _| {
+        if x < 100 {
+            image::Rgb([0, 0, 0])
+        } else {
+            image::Rgb([255, 255, 255])
+        }
+    });
+    for name in ["prova.png", "prova.jpg", "prova.tif"] {
+        let src = d.join(name);
+        img.save(&src).unwrap();
+        let bytes = image_page(&src, winfiles_geom::Size::new(80.0, 40.0)).unwrap();
+        let out = d.join(format!("{name}.pdf"));
+        save(&out, &bytes).unwrap();
+        let size = winfiles_formats_like_size(&out);
+        assert!(
+            (size[0].0 - 80.0).abs() < 0.1 && (size[0].1 - 40.0).abs() < 0.1,
+            "{name}"
+        );
+        let thumb = winfiles_thumbs::render(&out, FileKind::Pdf, 0, 400).unwrap();
+        let px = |x: u32| thumb.rgba[((thumb.height / 2 * thumb.width + x) * 4) as usize];
+        assert!(px(thumb.width / 4) < 60, "{name}");
+        assert!(px(thumb.width * 3 / 4) > 200, "{name}");
+    }
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn ovali_frecce_ed_evidenziatore_vanno_nel_pdf() {
+    let mut page = Page::new(Size::new(210.0, 297.0));
+    let ellipse: Vec<(f64, f64)> = (0..48)
+        .map(|i| {
+            let t = f64::from(i) / 48.0 * std::f64::consts::TAU;
+            (100.0 + 30.0 * t.cos(), 100.0 + 20.0 * t.sin())
+        })
+        .collect();
+    page.push(Item::Path {
+        points: ellipse,
+        closed: true,
+        fill: Some(Color {
+            r: 255,
+            g: 221,
+            b: 0,
+            a: 102,
+        }),
+        stroke: Some((Color::rgb(37, 99, 235), 0.5)),
+    });
+    page.push(Item::Path {
+        points: vec![(20.0, 200.0), (60.0, 210.0), (100.0, 200.0)],
+        closed: false,
+        fill: None,
+        stroke: Some((Color::rgb(255, 221, 0), 4.0)),
+    });
+    // Un tracciato di un punto solo, o con numeri assurdi, non rompe niente.
+    page.push(Item::Path {
+        points: vec![(f64::NAN, 1.0), (5.0, 5.0)],
+        closed: true,
+        fill: Some(Color::rgb(0, 0, 0)),
+        stroke: None,
+    });
+    let (bytes, report) = write(&[page], &FONTS, &AtomicBool::new(false), |_| {}).unwrap();
+    assert_eq!(report.pages, 1);
+    assert!(bytes.starts_with(b"%PDF"));
+}

@@ -5,11 +5,13 @@
 // In release su Windows niente finestra di console dietro l'app.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod annotate;
 mod app;
 mod calibrate;
 mod canvas;
 mod captions;
 mod cutter;
+mod defaults;
 mod dock;
 mod document;
 mod export;
@@ -21,6 +23,7 @@ mod instance;
 mod legacy;
 mod measure;
 mod menu11;
+mod nesting;
 mod paint;
 mod pan;
 mod panels;
@@ -31,6 +34,7 @@ mod printing;
 mod quotes;
 mod recent;
 mod reorder;
+mod report;
 mod scan;
 mod shell;
 mod sketch;
@@ -40,8 +44,14 @@ mod theme;
 mod thumbs;
 mod unsupported;
 mod update;
+mod viewer;
 
 fn main() -> eframe::Result {
+    // Una copia di WinFiles avviata per leggere un DWG (ADR 0033): legge, risponde ed esce.
+    if let Some(code) = winfiles_cad::serve_dwg_worker() {
+        std::process::exit(code);
+    }
+    winfiles_cad::use_dwg_worker();
     // Le ultime scelte: pannelli, tema, impaginazione, stampante e misura della finestra.
     let prefs = prefs::load();
     let mut viewport = egui::ViewportBuilder::default()
@@ -69,9 +79,16 @@ fn main() -> eframe::Result {
     let mut calibration = None;
     let mut edit_pdf = None;
     let mut edit_images: Vec<std::path::PathBuf> = Vec::new();
+    // `--nesting a.pdf b.pdf` apre il nesting con quei PDF (tutto quello che segue).
+    let mut nest_files: Vec<std::path::PathBuf> = Vec::new();
     // `--aggiungi a.pdf …` (il tasto destro "Apri in WinFiles") manda i file alla finestra già
     // aperta, se c'è, invece di aprirne un'altra.
     let mut add = false;
+    // `--invia-nesting a.pdf …` (il tasto destro "Invia al nesting WinFiles") e `--visualizza a.pdf
+    // …` (il doppio clic sui tipi di cui WinFiles è il predefinito) fanno lo stesso, ma i file
+    // vanno nella scheda Nesting o Visualizza.
+    let mut target = instance::Target::Thumbnails;
+    let mut view_files: Vec<std::path::PathBuf> = Vec::new();
     // `--togli-menu`: la disinstallazione toglie la voce del menu di Windows 11, poi si chiude.
     if std::env::args_os().nth(1).is_some_and(|a| a == "--togli-menu") {
         menu11::unregister();
@@ -87,6 +104,14 @@ fn main() -> eframe::Result {
             add = true;
         } else if arg == "--modifica-immagini" {
             edit_images.extend(args.by_ref().map(Into::into));
+        } else if arg == "--nesting" {
+            nest_files.extend(args.by_ref().map(Into::into));
+        } else if arg == "--invia-nesting" {
+            add = true;
+            target = instance::Target::Nesting;
+        } else if arg == "--visualizza" {
+            add = true;
+            target = instance::Target::Viewer;
         } else if arg == "--calibrazione" {
             let paper = match args.next() {
                 Some(p) if p.eq_ignore_ascii_case("a3") => winfiles_geom::Paper::A3,
@@ -97,9 +122,20 @@ fn main() -> eframe::Result {
             paths.push(instance::arg_path(arg));
         }
     }
+    // Con `--invia-nesting` e `--visualizza` i percorsi sono i file per quella scheda.
+    match target {
+        instance::Target::Thumbnails => {}
+        instance::Target::Nesting => nest_files.append(&mut paths),
+        instance::Target::Viewer => view_files.append(&mut paths),
+    }
+    let forwarded: Vec<std::path::PathBuf> = [&paths, &nest_files, &view_files]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
     // Le esportazioni da riga di comando non aprono finestre: niente da ricevere.
     let inbox = if pdf.is_none() && calibration.is_none() {
-        match instance::start(&paths, add) {
+        match instance::start(&forwarded, add, target) {
             instance::Start::Forwarded => return Ok(()),
             instance::Start::Window(inbox) => inbox,
         }
@@ -120,6 +156,8 @@ fn main() -> eframe::Result {
                     calibration,
                     edit_pdf,
                     edit_images,
+                    nest_files,
+                    view_files,
                     prefs,
                 )
                 .with_inbox(&cc.egui_ctx, inbox),

@@ -100,6 +100,27 @@ pub struct Prefs {
     pub keep_legacy: bool,
     /// "Non ora" sul certificato del menu di Windows 11: la barra non si ripropone da sola.
     pub menu11_later: bool,
+    /// I nomi delle tinte usati in Modifica PDF (taglio, cordonatura…), con il loro ruolo.
+    pub inks: Vec<crate::pdf::tracciati::InkName>,
+    /// Le scelte del nesting (supporto, misure, distanze).
+    pub nesting: crate::nesting::NestSettings,
+    /// Le scelte di fustella e abbondanza in Modifica immagini.
+    pub image_die: crate::images::DieSettings,
+    /// Il nome scritto l'ultima volta in Aiuto › Segnala un problema.
+    pub reporter: String,
+    /// L'ultimo stile delle annotazioni delle miniature.
+    pub annotate: crate::annotate::Style,
+    /// Le scelte della scheda Visualizza.
+    pub viewer: ViewerPrefs,
+}
+
+/// Le scelte della scheda Visualizza da ricordare.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ViewerPrefs {
+    pub print: crate::viewer::print::Choice,
+    /// I disegni CAD su fondo bianco invece che nero.
+    pub cad_light: bool,
 }
 
 impl Prefs {
@@ -117,6 +138,10 @@ impl Prefs {
             .window
             .filter(|[w, h]| w.is_finite() && h.is_finite() && *w >= MIN_WINDOW[0] && *h >= MIN_WINDOW[1]);
         self.window = self.window.map(|[w, h]| [w.min(MAX_WINDOW), h.min(MAX_WINDOW)]);
+        self.nesting = self.nesting.sanitized();
+        self.image_die = self.image_die.sanitized();
+        self.annotate = self.annotate.sanitized();
+        self.viewer.print = std::mem::take(&mut self.viewer.print).sanitized();
         if winfiles_layout::grid(&self.print, &[]).is_err() {
             self.print = PrintSettings::default();
         }
@@ -128,6 +153,7 @@ impl Prefs {
             .take(MAX_CALIBRATIONS)
             .collect();
         self.presets = crate::presets::sanitized(std::mem::take(&mut self.presets));
+        self.inks = crate::pdf::tracciati::sanitized(std::mem::take(&mut self.inks));
         self
     }
 }
@@ -224,6 +250,32 @@ mod tests {
             hide_unsupported: true,
             keep_legacy: true,
             menu11_later: true,
+            inks: vec![crate::pdf::tracciati::InkName {
+                name: "Thru-cut".into(),
+                role: crate::pdf::tracciati::Role::Cut,
+                cmyk: Some([0.0, 1.0, 0.0, 0.0]),
+            }],
+            nesting: crate::nesting::NestSettings {
+                support: crate::nesting::Support::Roll,
+                roll_w: 1370.0,
+                ..crate::nesting::NestSettings::default()
+            },
+            image_die: crate::images::DieSettings {
+                shape: crate::images::DieShape::Rounded,
+                radius: 8.0,
+                ..crate::images::DieSettings::default()
+            },
+            reporter: "Mario".into(),
+            annotate: crate::annotate::Style::default(),
+            viewer: ViewerPrefs {
+                print: crate::viewer::print::Choice {
+                    paper: winfiles_geom::Paper::A3,
+                    tiles: true,
+                    ratio: 100.0,
+                    ..crate::viewer::print::Choice::default()
+                },
+                cad_light: true,
+            },
         };
         save_to(&file, &prefs).unwrap();
         assert_eq!(load_from(&file), prefs);

@@ -61,6 +61,22 @@ impl<'a> Sketch<'a> {
         });
     }
 
+    /// Una spezzata o un poligono (chiuso, convesso se pieno), spessori in mm.
+    pub fn path(
+        &mut self,
+        points: Vec<(f64, f64)>,
+        closed: bool,
+        fill: Option<Color32>,
+        stroke: Option<(Color32, f64)>,
+    ) {
+        self.page.push(Item::Path {
+            points,
+            closed,
+            fill: fill.map(color),
+            stroke: stroke.map(|(c, w)| (color(c), w)),
+        });
+    }
+
     pub fn picture(&mut self, picture: Picture) {
         self.page.push(Item::Picture(picture));
     }
