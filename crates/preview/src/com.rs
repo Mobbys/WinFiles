@@ -90,7 +90,8 @@ impl IInitializeWithStream_Impl for Preview_Impl {
     fn Initialize(&self, stream: Ref<IStream>, _mode: u32) -> Result<()> {
         let stream = stream.ok()?;
         let ext = stream_ext(stream);
-        let bytes = read_all(stream)?;
+        let bytes = read_all(stream).inspect_err(|e| log(&format!("«{ext}»: flusso non letto ({e})")))?;
+        trace(&format!("Initialize: «{ext}», {} byte", bytes.len()));
         let mut file = self
             .file
             .lock()
@@ -100,24 +101,89 @@ impl IInitializeWithStream_Impl for Preview_Impl {
     }
 }
 
+/// Una riga nel registro degli errori delle anteprime (`%TEMP%\\winfiles-anteprime\\errori.txt`),
+/// per capire perché un file non ha l'anteprima. Si ferma a 256 KB.
+pub(crate) fn log(msg: &str) {
+    use std::io::Write;
+    let Some(dir) = work_dir() else { return };
+    let path = dir.join("errori.txt");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 256 * 1024) {
+        return;
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "[{}] {msg}", std::process::id());
+    }
+}
+
+/// Una riga nel registro solo se nella cartella c'è il file `traccia` (le prove della CI).
+fn trace(msg: &str) {
+    if work_dir().is_some_and(|d| d.join("traccia").exists()) {
+        log(msg);
+    }
+}
+
+/// La cartella dove scrivere i file temporanei e il registro. Il processo delle anteprime di
+/// Windows può girare a integrità bassa, e allora non scrive nella cartella temporanea normale:
+/// si prova anche `LocalLow` e `Temp\Low`, le cartelle permesse a quel livello.
+/// Le cartelle possibili, in ordine.
+pub(crate) fn work_dirs() -> Vec<std::path::PathBuf> {
+    let temp = std::env::temp_dir();
+    let mut candidates = vec![temp.join("winfiles-anteprime")];
+    if let Some(parent) = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .and_then(|l| l.parent().map(std::path::Path::to_path_buf))
+    {
+        candidates.push(parent.join("LocalLow").join("WinFiles").join("anteprime"));
+    }
+    candidates.push(temp.join("Low").join("winfiles-anteprime"));
+    candidates
+}
+
+fn work_dir() -> Option<&'static std::path::Path> {
+    static DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        work_dirs().into_iter().find(|d| {
+            let probe = d.join(format!("prova-{}", std::process::id()));
+            let ok = std::fs::create_dir_all(d).is_ok() && std::fs::write(&probe, b"").is_ok();
+            let _ = std::fs::remove_file(&probe);
+            ok
+        })
+    })
+    .as_deref()
+}
+
 /// Disegna l'anteprima dai byte, passando da un file temporaneo con la stessa estensione.
 fn render(bytes: &[u8], ext: &str, side: u32) -> std::result::Result<winfiles_thumbs::Thumb, String> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let dir = std::env::temp_dir().join("winfiles-anteprime");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir = work_dir().ok_or("nessuna cartella dove scrivere il file temporaneo")?;
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    let ext = if ext.chars().all(|c| c.is_ascii_alphanumeric()) && !ext.is_empty() {
+    // Il nome che dà Windows, se è di un tipo conosciuto; altrimenti il tipo dai primi byte.
+    let ext = if crate::EXTENSIONS.contains(&ext) {
         ext
     } else {
-        "bin"
+        crate::sniff(bytes).ok_or_else(|| format!("tipo non riconosciuto (estensione «{ext}»)"))?
     };
     let path = dir.join(format!("{}-{n}.{ext}", std::process::id()));
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-    let result = catch_unwind(AssertUnwindSafe(|| crate::thumbnail(&path, side)))
-        .unwrap_or_else(|_| Err("errore interno".into()));
+    // Il processo delle anteprime di Windows (dllhost) ha una pila piccola (256 KB): i PDF
+    // complessi, i PSD e gli AI la superano e il processo cade senza anteprima. Si disegna
+    // allora in un thread con una pila grande, come fanno i lavoratori di WinFiles.
+    let job = path.clone();
+    let result = std::thread::Builder::new()
+        .name("anteprima".into())
+        .stack_size(RENDER_STACK)
+        .spawn(move || {
+            catch_unwind(AssertUnwindSafe(|| crate::thumbnail(&job, side)))
+                .unwrap_or_else(|_| Err("errore interno".into()))
+        })
+        .map_err(|e| e.to_string())
+        .and_then(|h| h.join().unwrap_or_else(|_| Err("errore interno".into())));
     let _ = std::fs::remove_file(&path);
     result
 }
+
+/// La pila del thread che disegna l'anteprima.
+const RENDER_STACK: usize = 64 * 1024 * 1024;
 
 /// L'immagine in una bitmap di Windows: dall'alto in basso, BGRA premoltiplicato.
 fn bitmap(t: &winfiles_thumbs::Thumb) -> Result<HBITMAP> {
@@ -164,13 +230,17 @@ impl IThumbnailProvider_Impl for Preview_Impl {
         if phbmp.is_null() || pdwalpha.is_null() {
             return Err(E_POINTER.into());
         }
+        trace(&format!("GetThumbnail: {cx} px"));
         let file = self
             .file
             .lock()
             .map_err(|_| windows_core::Error::from(E_UNEXPECTED))?
             .take()
             .ok_or_else(|| windows_core::Error::from(E_UNEXPECTED))?;
-        let thumb = render(&file.0, &file.1, cx).map_err(|_| windows_core::Error::from(E_FAIL))?;
+        let thumb = render(&file.0, &file.1, cx).map_err(|e| {
+            log(&format!("«{}», {} byte: {e}", file.1, file.0.len()));
+            windows_core::Error::from(E_FAIL)
+        })?;
         let hbmp = bitmap(&thumb)?;
         // SAFETY: puntatori controllati sopra.
         unsafe {
@@ -225,10 +295,12 @@ pub unsafe extern "system" fn DllGetClassObject(
     if object.is_null() || riid.is_null() || rclsid.is_null() {
         return E_POINTER;
     }
+    trace("DllGetClassObject");
     // SAFETY: puntatori controllati sopra.
     unsafe {
         *object = core::ptr::null_mut();
         if *rclsid != clsid() {
+            log(&format!("DllGetClassObject: classe sconosciuta {:?}", *rclsid));
             return CLASS_E_CLASSNOTAVAILABLE;
         }
         let factory: IClassFactory = Factory.into();

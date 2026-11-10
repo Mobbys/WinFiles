@@ -32,6 +32,8 @@ if [ -f "$(dirname "$exe")/winfiles_preview.dll" ]; then
     prev="-D Anteprime=$(dirname "$exe")/winfiles_preview.dll"
 fi
 # shellcheck disable=SC2086
-wixl -D Version="$version" -D Exe="$exe" -D Icon="$dir/../apps/winfiles/assets/icon/icona.ico" \
+# Pacchetto a 64 bit (-a x64): in uno a 32 bit Windows Installer scrive la classe delle anteprime
+# (HKCU\Software\Classes\CLSID) in WOW6432Node, dove Esplora file non la vede.
+wixl -a x64 -D Version="$version" -D Exe="$exe" -D Icon="$dir/../apps/winfiles/assets/icon/icona.ico" \
     $menu $conv $prev -o "$out" "$dir/winfiles.wxs"
 echo "$out: WinFiles $version${menu:+ con il menu di Windows 11}${conv:+ con i convertitori dei documenti}${prev:+ con le anteprime in Esplora file}"

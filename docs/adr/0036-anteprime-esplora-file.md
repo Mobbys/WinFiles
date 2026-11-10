@@ -45,3 +45,36 @@ Michel ha detto di prepararle in WinFiles.
 - Le cartelle già aperte tengono le icone vecchie nella cache di Windows finché non la si svuota
   (Pulizia disco › Anteprime) o i file cambiano.
 - Togliendo WinFiles si tolgono anche le chiavi: tornano le icone di prima.
+
+## Aggiunta (2026-11-10): davanti ai gestori degli altri programmi
+Dopo la 0.2.32 Michel vedeva le anteprime dei PDF ma non quelle di AI, DXF e PSD. Windows cerca il
+gestore prima nel ProgID del file (il programma che lo apre) e solo dopo nell'estensione.
+Illustrator, Photoshop e i programmi CAD hanno il loro gestore nel ProgID, e spesso non dà niente.
+- La DLL esporta `DllRegisterServer`. WinFiles la chiama a ogni avvio con `regsvr32 /s`, in un
+  thread a parte. Per ogni tipo conosciuto scrive il CLSID di WinFiles anche in
+  `HKCU\Software\Classes\<ProgID>\ShellEx\{e357…}`, sia per il ProgID scelto dall'utente
+  (UserChoice) sia per quello dell'estensione, e ricorda in `HKCU\Software\WinFiles\AnteprimeProgId`
+  quali ha toccato. Poi avvisa Esplora file (`SHChangeNotify`).
+- `DllUnregisterServer`, chiamata alla disinstallazione da `--togli-menu`, li toglie.
+- Il programma che apre i file non cambia.
+- Il disegno gira su un thread con 64 MB di pila: quella di dllhost è piccola.
+- La CI su Windows registra le chiavi dell'installer e un finto "Photoshop" con un suo gestore
+  nel ProgID del PSD. Poi chiama `DllRegisterServer` e chiede alla shell le anteprime di SVG, PLT,
+  PDF, AI, DXF e PSD (`IShellItemImageFactory`, solo anteprime).
+
+## Aggiunta del 2026-11-10 (seconda): la classe nella vista a 64 bit
+
+Sul PC di Michel la diagnosi (`rundll32 winfiles_preview.dll,Diagnosi`) ha mostrato le chiavi
+`.ext\ShellEx` al loro posto ma nessuna classe: `0x80040154`, la DLL non partiva mai.
+- Causa: l'MSI di wixl era a 32 bit, e Windows Installer scrive `HKCU\Software\Classes\CLSID`
+  dei pacchetti a 32 bit in `WOW6432Node`, che Esplora file (64 bit) non legge. Le chiavi delle
+  estensioni non sono reindirizzate, per questo c'erano.
+- Scelta: l'MSI si crea a 64 bit (`wixl -a x64`), così la classe la scrive l'installer nel posto
+  giusto. In più `DllRegisterServer` scrive da sé la classe con il proprio percorso (riparazione
+  a ogni avvio di WinFiles, il cui esito va in `errori.txt`) e `DllUnregisterServer` la toglie.
+- Alternativa scartata: solo la registrazione all'avvio. Sul PC di Michel non è partita, e le
+  anteprime devono funzionare anche prima del primo avvio.
+- La CI installa l'MSI vero su Windows sopra il rilascio 0.2.33 (a 32 bit), controlla la classe
+  nella vista a 64 bit e disinstalla (`installer/prova-msi.ps1`).
+- Gli AI esportati da CorelDRAW (`%%Creator:Adobe Illustrator…` senza spazio, commenti `%AI` oltre
+  i primi 1024 byte) ora sono riconosciuti come PostScript di Illustrator.

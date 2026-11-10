@@ -347,3 +347,23 @@ fn il_testo_della_pagina_si_legge_con_le_posizioni() {
     assert_eq!(assemble(&all), "Ciao mondo\nRiga due");
     assert!(pages.text(5).is_err());
 }
+
+/// Gli AI 8 esportati da CorelDRAW: `%%Creator:` senza spazio e i commenti `%AI3_` oltre i primi
+/// 1024 byte (prima erano «senza anteprima»).
+#[test]
+fn ai_esportato_da_coreldraw_si_disegna() {
+    let ps = String::from_utf8(legacy_ai()).unwrap();
+    let ps = ps
+        .replace(
+            "%%Creator: Adobe Illustrator(TM) 3.2",
+            "%%Creator:Adobe Illustrator (TM) 8.000000 Exported from CorelDRAW X5",
+        )
+        .replace(
+            "%AI3_ColorUsage: Color\r\n",
+            &"%%+ procset Adobe_level2_AI5 1.2 0\r\n".repeat(40),
+        );
+    assert!(!ps[..1024].contains("%AI"));
+    let f = Temp::new("corel.ai", ps.as_bytes());
+    let t = render(&f.0, FileKind::Ai, 0, 200).unwrap();
+    assert_eq!((t.width, t.height), (200, 100));
+}

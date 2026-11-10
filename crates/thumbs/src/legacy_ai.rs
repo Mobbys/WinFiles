@@ -24,9 +24,20 @@ const MAX_NESTING: usize = 64;
 pub(crate) fn is_illustrator(ps: &[u8]) -> bool {
     let head = ps.get(..ps.len().min(8192)).unwrap_or_default();
     ps.starts_with(b"%!")
-        && (contains(head, b"%%Creator: Adobe Illustrator")
-            || contains(head, b"%AI3_")
-            || contains(head, b"%AI5_"))
+        && (creator_is_illustrator(head) || contains(head, b"%AI3_") || contains(head, b"%AI5_"))
+}
+
+/// La riga `%%Creator:` nomina Illustrator, con o senza spazio dopo i due punti (CorelDRAW scrive
+/// `%%Creator:Adobe Illustrator (TM) 8.000000 Exported from CorelDRAW X5`).
+fn creator_is_illustrator(head: &[u8]) -> bool {
+    let key = b"%%Creator:";
+    let Some(at) = find(head, key) else { return false };
+    let rest = head.get(at + key.len()..).unwrap_or_default();
+    let end = rest
+        .iter()
+        .position(|b| *b == b'\r' || *b == b'\n')
+        .unwrap_or(rest.len());
+    contains(rest.get(..end).unwrap_or_default(), b"Adobe Illustrator")
 }
 
 /// La pagina PDF con il disegno, o `None` se il file non ha un riquadro credibile.
