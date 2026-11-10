@@ -9,10 +9,14 @@
 //! `DllUnregisterServer` (alla disinstallazione) li toglie. Il programma che apre i file non
 //! cambia.
 
-use windows::Win32::Foundation::{ERROR_SUCCESS, WIN32_ERROR};
+use windows::Win32::Foundation::{ERROR_SUCCESS, HMODULE, WIN32_ERROR};
+use windows::Win32::System::LibraryLoader::{
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleFileNameW,
+    GetModuleHandleExW,
+};
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, KEY_READ, REG_SZ, RRF_RT_REG_SZ, RegCloseKey,
-    RegDeleteKeyValueW, RegDeleteKeyW, RegGetValueW, RegOpenKeyExW, RegSetKeyValueW,
+    RegDeleteKeyValueW, RegDeleteKeyW, RegDeleteTreeW, RegGetValueW, RegOpenKeyExW, RegSetKeyValueW,
 };
 use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
 use windows_core::{HRESULT, HSTRING, PCWSTR};
@@ -120,6 +124,28 @@ pub(crate) fn merge(old: &str, new: &[String]) -> String {
     all.join(";")
 }
 
+/// Il percorso completo di questa DLL.
+fn own_path() -> Option<String> {
+    let mut module = HMODULE::default();
+    let marker = own_path as fn() -> Option<String> as *const u16;
+    // SAFETY: l'indirizzo è una funzione di questa DLL; il conteggio dei riferimenti non cambia.
+    unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            PCWSTR(marker),
+            &mut module,
+        )
+        .ok()?;
+    }
+    let mut buf = [0u16; 1024];
+    // SAFETY: `buf` è un buffer valido della lunghezza passata.
+    let len = unsafe { GetModuleFileNameW(Some(module), &mut buf) } as usize;
+    if len == 0 || len >= buf.len() {
+        return None;
+    }
+    Some(String::from_utf16_lossy(buf.get(..len)?))
+}
+
 fn notify() {
     // SAFETY: notifica senza dati.
     unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None) };
@@ -129,11 +155,20 @@ fn notify() {
 #[unsafe(no_mangle)]
 pub extern "system" fn DllRegisterServer() -> HRESULT {
     let clsid = crate::CLSID;
-    // La DLL è registrata dall'installer: senza, non si tocca niente.
-    if !exists(
-        HKEY_CURRENT_USER,
-        &format!(r"Software\Classes\CLSID\{clsid}\InprocServer32"),
-    ) {
+    // La classe la scrive la DLL stessa, nella vista a 64 bit del registro: l'MSI di wixl è a
+    // 32 bit e Windows Installer mette HKCU\Software\Classes\CLSID in WOW6432Node, dove Esplora
+    // file (64 bit) non la vede (diagnosi sul PC di Michel, 2026-11-10).
+    let Some(dll) = own_path() else {
+        return HRESULT(0x8000_4005_u32 as i32);
+    };
+    let class = format!(r"Software\Classes\CLSID\{clsid}");
+    let inproc = format!(r"{class}\InprocServer32");
+    let written = [
+        set(&class, None, "Anteprime di WinFiles"),
+        set(&inproc, None, &dll),
+        set(&inproc, Some("ThreadingModel"), "Apartment"),
+    ];
+    if written.iter().any(|e| *e != ERROR_SUCCESS) {
         return HRESULT(0x8000_4005_u32 as i32);
     }
     let mut touched: Vec<String> = Vec::new();
@@ -155,8 +190,8 @@ pub extern "system" fn DllRegisterServer() -> HRESULT {
     if !touched.is_empty() {
         let old = get(HKEY_CURRENT_USER, STATE_KEY, Some(STATE_VALUE)).unwrap_or_default();
         let _ = set(STATE_KEY, Some(STATE_VALUE), &merge(&old, &touched));
-        notify();
     }
+    notify();
     HRESULT(0)
 }
 
@@ -178,8 +213,12 @@ pub extern "system" fn DllUnregisterServer() -> HRESULT {
             }
         }
     }
-    // SAFETY: valore dell'utente scritto da DllRegisterServer.
+    // SAFETY: chiavi e valore dell'utente scritti da DllRegisterServer.
     unsafe {
+        let _ = RegDeleteTreeW(
+            HKEY_CURRENT_USER,
+            &HSTRING::from(format!(r"Software\Classes\CLSID\{}", crate::CLSID)),
+        );
         let _ = RegDeleteKeyValueW(
             HKEY_CURRENT_USER,
             &HSTRING::from(STATE_KEY),
