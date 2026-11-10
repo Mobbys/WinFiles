@@ -14,7 +14,7 @@
     <Property Id="MSIINSTALLPERUSER" Value="1" />
     <Property Id="ARPPRODUCTICON" Value="WinFilesIcon" />
     <Icon Id="WinFilesIcon" SourceFile="$(var.Icon)" />
-    <MajorUpgrade DowngradeErrorMessage="È già installata una versione più recente di WinFiles." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="È già installata una versione più recente di WinFiles." />
     <Media Id="1" Cabinet="winfiles.cab" EmbedCab="yes" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
