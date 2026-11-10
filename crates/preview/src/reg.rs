@@ -18,13 +18,13 @@ use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify
 use windows_core::{HRESULT, HSTRING, PCWSTR};
 
 /// La chiave del gestore delle anteprime (IThumbnailProvider) sotto ShellEx.
-const THUMB_KEY: &str = r"ShellEx\{e357fccd-a995-4576-b01f-234630154e96}";
+pub(crate) const THUMB_KEY: &str = r"ShellEx\{e357fccd-a995-4576-b01f-234630154e96}";
 /// Dove si ricordano i ProgID toccati.
 const STATE_KEY: &str = r"Software\WinFiles";
 const STATE_VALUE: &str = "AnteprimeProgId";
 
 /// Un valore di testo del registro, se c'è.
-fn get(root: HKEY, key: &str, value: Option<&str>) -> Option<String> {
+pub(crate) fn get(root: HKEY, key: &str, value: Option<&str>) -> Option<String> {
     let key = HSTRING::from(key);
     let name = value.map(HSTRING::from);
     let name_ptr = name.as_ref().map_or(PCWSTR::null(), |n| PCWSTR(n.as_ptr()));
@@ -69,7 +69,7 @@ fn set(key: &str, value: Option<&str>, data: &str) -> WIN32_ERROR {
     }
 }
 
-fn exists(root: HKEY, key: &str) -> bool {
+pub(crate) fn exists(root: HKEY, key: &str) -> bool {
     let mut h = HKEY::default();
     // SAFETY: `h` riceve la chiave aperta, chiusa subito dopo.
     unsafe {
@@ -82,7 +82,7 @@ fn exists(root: HKEY, key: &str) -> bool {
 }
 
 /// I ProgID di un'estensione: quello scelto dall'utente e quello dell'estensione.
-fn prog_ids(ext: &str) -> Vec<String> {
+pub(crate) fn prog_ids(ext: &str) -> Vec<String> {
     let choice = get(
         HKEY_CURRENT_USER,
         &format!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.{ext}\UserChoice"),

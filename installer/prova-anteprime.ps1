@@ -67,4 +67,10 @@ foreach ($c in $cartelle) {
     if (Test-Path $errori) { Write-Host "Errori della DLL ($errori):"; Get-Content $errori }
 }
 Get-Process dllhost -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "dllhost $($_.Id): $((Get-Process -Id $_.Id -Module -ErrorAction SilentlyContinue | Where-Object ModuleName -like 'winfiles*').FileName)" }
+# La diagnosi che si lancia sui PC degli utenti con rundll32.
+Start-Process rundll32 -ArgumentList ('"' + (Join-Path $dir 'winfiles_preview.dll') + '",Diagnosi') -Wait
+$diagnosi = Join-Path $env:TEMP 'winfiles-diagnosi.txt'
+if (-not (Test-Path $diagnosi)) { throw "La diagnosi non ha scritto il resoconto" }
+Get-Content $diagnosi
+Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process -ErrorAction SilentlyContinue
 if ($esito -ne 0) { throw "Anteprime mancanti" }

@@ -13,6 +13,8 @@ use winfiles_thumbs::Thumb;
 #[cfg(windows)]
 mod com;
 #[cfg(windows)]
+mod diag;
+#[cfg(windows)]
 mod reg;
 
 /// Il CLSID della classe delle anteprime (uguale nell'installer).
@@ -123,6 +125,21 @@ pub fn sniff(bytes: &[u8]) -> Option<&'static str> {
 pub mod prova {
     /// Un DXF con un rettangolo di 100 × 50.
     pub const DXF: &str = "0\nSECTION\n2\nENTITIES\n0\nLWPOLYLINE\n8\n0\n90\n4\n70\n1\n10\n0\n20\n0\n10\n100\n20\n0\n10\n100\n20\n50\n10\n0\n20\n50\n0\nENDSEC\n0\nEOF\n";
+
+    /// Un PLT con un rettangolo e un cerchio.
+    pub const PLT: &str = "IN;SP1;PU0,0;PD4000,0,4000,2000,0,2000,0,0;PU;SP2;PU2000,1000;CI800;";
+
+    /// Un SVG rosso con una scritta.
+    pub const SVG: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="red"/><text x="10" y="60" font-size="40">Prova</text></svg>"#;
+
+    /// Un PDF di una pagina (il PLT a 200 mm).
+    pub fn pdf() -> Result<Vec<u8>, String> {
+        let d = winfiles_cad::hpgl::parse(PLT.as_bytes()).map_err(|e| e.to_string())?;
+        d.to_pdf(&winfiles_cad::PdfOptions {
+            mm_per_unit: d.fit_scale(200.0),
+            ..winfiles_cad::PdfOptions::default()
+        })
+    }
 
     /// Un PSD RGB rosso di `w` × `h` pixel, senza livelli né compressione.
     pub fn psd(w: u32, h: u32) -> Vec<u8> {

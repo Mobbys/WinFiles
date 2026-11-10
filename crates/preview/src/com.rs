@@ -125,19 +125,24 @@ fn trace(msg: &str) {
 /// La cartella dove scrivere i file temporanei e il registro. Il processo delle anteprime di
 /// Windows può girare a integrità bassa, e allora non scrive nella cartella temporanea normale:
 /// si prova anche `LocalLow` e `Temp\Low`, le cartelle permesse a quel livello.
+/// Le cartelle possibili, in ordine.
+pub(crate) fn work_dirs() -> Vec<std::path::PathBuf> {
+    let temp = std::env::temp_dir();
+    let mut candidates = vec![temp.join("winfiles-anteprime")];
+    if let Some(parent) = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .and_then(|l| l.parent().map(std::path::Path::to_path_buf))
+    {
+        candidates.push(parent.join("LocalLow").join("WinFiles").join("anteprime"));
+    }
+    candidates.push(temp.join("Low").join("winfiles-anteprime"));
+    candidates
+}
+
 fn work_dir() -> Option<&'static std::path::Path> {
     static DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
-        let temp = std::env::temp_dir();
-        let mut candidates = vec![temp.join("winfiles-anteprime")];
-        if let Some(parent) = std::env::var_os("LOCALAPPDATA")
-            .map(std::path::PathBuf::from)
-            .and_then(|l| l.parent().map(std::path::Path::to_path_buf))
-        {
-            candidates.push(parent.join("LocalLow").join("WinFiles").join("anteprime"));
-        }
-        candidates.push(temp.join("Low").join("winfiles-anteprime"));
-        candidates.into_iter().find(|d| {
+        work_dirs().into_iter().find(|d| {
             let probe = d.join(format!("prova-{}", std::process::id()));
             let ok = std::fs::create_dir_all(d).is_ok() && std::fs::write(&probe, b"").is_ok();
             let _ = std::fs::remove_file(&probe);
