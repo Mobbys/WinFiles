@@ -19,5 +19,16 @@ foreach ($v in $valori) {
     New-ItemProperty -Path $chiave -Name $nome -Value $valore -PropertyType $tipo -Force | Out-Null
 }
 Write-Host "Registrate $($valori.Count) chiavi; DLL in $dir"
+# Un programma che si è preso il PSD con il suo gestore delle anteprime, come fa Photoshop:
+# DllRegisterServer deve mettere davanti quello di WinFiles.
+New-Item -Path 'HKCU:\Software\Classes\.psd' -Force | Out-Null
+Set-ItemProperty -Path 'HKCU:\Software\Classes\.psd' -Name '(default)' -Value 'Prova.Immagine'
+New-Item -Path 'HKCU:\Software\Classes\Prova.Immagine\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}' -Force | Out-Null
+Set-ItemProperty -Path 'HKCU:\Software\Classes\Prova.Immagine\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}' -Name '(default)' -Value '{00000000-0000-0000-0000-000000000001}'
+$p = Start-Process regsvr32 -ArgumentList '/s', (Join-Path $dir 'winfiles_preview.dll') -Wait -PassThru
+if ($p.ExitCode -ne 0) { throw "DllRegisterServer: $($p.ExitCode)" }
+$h = (Get-ItemProperty 'HKCU:\Software\Classes\Prova.Immagine\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}').'(default)'
+if ($h -ne '{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}') { throw "Il gestore nel ProgID non è quello di WinFiles: $h" }
+Write-Host "DllRegisterServer: gestore di WinFiles anche nel ProgID Prova.Immagine"
 & (Join-Path $dir 'examples\esplora.exe') (Join-Path $env:RUNNER_TEMP 'anteprime')
 if ($LASTEXITCODE -ne 0) { throw "Anteprime mancanti" }

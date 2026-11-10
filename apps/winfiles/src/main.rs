@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod annotate;
+mod anteprime;
 mod app;
 mod calibrate;
 mod canvas;
@@ -92,6 +93,7 @@ fn main() -> eframe::Result {
     // `--togli-menu`: la disinstallazione toglie la voce del menu di Windows 11, poi si chiude.
     if std::env::args_os().nth(1).is_some_and(|a| a == "--togli-menu") {
         menu11::unregister();
+        anteprime::unregister();
         return Ok(());
     }
     let mut args = std::env::args_os().skip(1);
@@ -137,7 +139,10 @@ fn main() -> eframe::Result {
     let inbox = if pdf.is_none() && calibration.is_none() {
         match instance::start(&forwarded, add, target) {
             instance::Start::Forwarded => return Ok(()),
-            instance::Start::Window(inbox) => inbox,
+            instance::Start::Window(inbox) => {
+                anteprime::register();
+                inbox
+            }
         }
     } else {
         None

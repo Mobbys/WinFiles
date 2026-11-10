@@ -32,12 +32,16 @@ fn main() -> std::process::ExitCode {
         eprintln!("PDF di prova non creato");
         return std::process::ExitCode::FAILURE;
     };
-    let files: [(&str, &[u8]); 4] = [
+    let psd = winfiles_preview::prova::psd(200, 100);
+    let files: [(&str, &[u8]); 6] = [
         ("prova.svg", svg.as_bytes()),
         ("prova.plt", plt.as_bytes()),
         ("prova.pdf", &pdf),
         // Gli AI moderni sono PDF.
         ("prova.ai", &pdf),
+        ("prova.dxf", winfiles_preview::prova::DXF.as_bytes()),
+        // Il PSD ha un altro gestore nel suo ProgID (vedi prova-anteprime.ps1).
+        ("prova.psd", &psd),
     ];
     let mut ok = true;
     // SAFETY: inizializzazione di COM e chiamate alla shell con argomenti validi.

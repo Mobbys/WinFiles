@@ -12,6 +12,8 @@ use winfiles_thumbs::Thumb;
 
 #[cfg(windows)]
 mod com;
+#[cfg(windows)]
+mod reg;
 
 /// Il CLSID della classe delle anteprime (uguale nell'installer).
 pub const CLSID: &str = "{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}";
@@ -68,3 +70,30 @@ fn pdf_thumb(pdf: Vec<u8>, side: u32) -> Result<Thumb, String> {
 
 #[cfg(test)]
 mod tests;
+
+/// File piccoli per le prove (i test e la prova della CI su Windows).
+#[doc(hidden)]
+pub mod prova {
+    /// Un DXF con un rettangolo di 100 × 50.
+    pub const DXF: &str = "0\nSECTION\n2\nENTITIES\n0\nLWPOLYLINE\n8\n0\n90\n4\n70\n1\n10\n0\n20\n0\n10\n100\n20\n0\n10\n100\n20\n50\n10\n0\n20\n50\n0\nENDSEC\n0\nEOF\n";
+
+    /// Un PSD RGB rosso di `w` × `h` pixel, senza livelli né compressione.
+    pub fn psd(w: u32, h: u32) -> Vec<u8> {
+        let mut d = b"8BPS".to_vec();
+        d.extend_from_slice(&1u16.to_be_bytes());
+        d.extend_from_slice(&[0; 6]);
+        d.extend_from_slice(&3u16.to_be_bytes());
+        d.extend_from_slice(&h.to_be_bytes());
+        d.extend_from_slice(&w.to_be_bytes());
+        d.extend_from_slice(&8u16.to_be_bytes());
+        d.extend_from_slice(&3u16.to_be_bytes());
+        // Modo colore, risorse, livelli: vuoti; poi i pixel senza compressione.
+        d.extend_from_slice(&[0; 12]);
+        d.extend_from_slice(&0u16.to_be_bytes());
+        let n = (w as usize).saturating_mul(h as usize);
+        for v in [255u8, 0, 0] {
+            d.extend(std::iter::repeat_n(v, n));
+        }
+        d
+    }
+}

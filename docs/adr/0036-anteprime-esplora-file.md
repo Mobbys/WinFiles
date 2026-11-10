@@ -45,3 +45,19 @@ Michel ha detto di prepararle in WinFiles.
 - Le cartelle già aperte tengono le icone vecchie nella cache di Windows finché non la si svuota
   (Pulizia disco › Anteprime) o i file cambiano.
 - Togliendo WinFiles si tolgono anche le chiavi: tornano le icone di prima.
+
+## Aggiunta (2026-11-10): davanti ai gestori degli altri programmi
+Dopo la 0.2.32 Michel vedeva le anteprime dei PDF ma non quelle di AI, DXF e PSD. Windows cerca il
+gestore prima nel ProgID del file (il programma che lo apre) e solo dopo nell'estensione.
+Illustrator, Photoshop e i programmi CAD hanno il loro gestore nel ProgID, e spesso non dà niente.
+- La DLL esporta `DllRegisterServer`. WinFiles la chiama a ogni avvio con `regsvr32 /s`, in un
+  thread a parte. Per ogni tipo conosciuto scrive il CLSID di WinFiles anche in
+  `HKCU\Software\Classes\<ProgID>\ShellEx\{e357…}`, sia per il ProgID scelto dall'utente
+  (UserChoice) sia per quello dell'estensione, e ricorda in `HKCU\Software\WinFiles\AnteprimeProgId`
+  quali ha toccato. Poi avvisa Esplora file (`SHChangeNotify`).
+- `DllUnregisterServer`, chiamata alla disinstallazione da `--togli-menu`, li toglie.
+- Il programma che apre i file non cambia.
+- Il disegno gira su un thread con 64 MB di pila: quella di dllhost è piccola.
+- La CI su Windows registra le chiavi dell'installer e un finto "Photoshop" con un suo gestore
+  nel ProgID del PSD. Poi chiama `DllRegisterServer` e chiede alla shell le anteprime di SVG, PLT,
+  PDF, AI, DXF e PSD (`IShellItemImageFactory`, solo anteprime).

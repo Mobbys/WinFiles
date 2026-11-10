@@ -51,3 +51,13 @@ fn le_estensioni_sono_quelle_dell_installer() {
     }
     assert!(wxs.contains(CLSID));
 }
+
+#[test]
+fn dxf_e_psd_hanno_l_anteprima() {
+    let t = thumbnail(&temp("f.dxf", prova::DXF.as_bytes()), 256).unwrap();
+    assert_eq!(t.width.max(t.height), 256);
+    assert!(t.rgba.chunks(4).any(|px| px[0] < 128));
+    let t = thumbnail(&temp("g.psd", &prova::psd(64, 32)), 256).unwrap();
+    assert_eq!((t.width, t.height), (64, 32));
+    assert_eq!(&t.rgba[..4], &[255, 0, 0, 255]);
+}
