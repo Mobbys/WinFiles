@@ -31,4 +31,7 @@ $h = (Get-ItemProperty 'HKCU:\Software\Classes\Prova.Immagine\ShellEx\{e357fccd-
 if ($h -ne '{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}') { throw "Il gestore nel ProgID non è quello di WinFiles: $h" }
 Write-Host "DllRegisterServer: gestore di WinFiles anche nel ProgID Prova.Immagine"
 & (Join-Path $dir 'examples\esplora.exe') (Join-Path $env:RUNNER_TEMP 'anteprime')
-if ($LASTEXITCODE -ne 0) { throw "Anteprime mancanti" }
+$esito = $LASTEXITCODE
+$errori = Join-Path $env:TEMP 'winfiles-anteprime\errori.txt'
+if (Test-Path $errori) { Write-Host "Errori della DLL:"; Get-Content $errori }
+if ($esito -ne 0) { throw "Anteprime mancanti" }

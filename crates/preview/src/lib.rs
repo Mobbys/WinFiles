@@ -71,6 +71,53 @@ fn pdf_thumb(pdf: Vec<u8>, side: u32) -> Result<Thumb, String> {
 #[cfg(test)]
 mod tests;
 
+/// Il tipo del file dai primi byte, quando Windows non dà il nome (il flusso senza nome).
+pub fn sniff(bytes: &[u8]) -> Option<&'static str> {
+    let head = bytes.get(..bytes.len().min(4096)).unwrap_or_default();
+    let starts = |m: &[u8]| head.starts_with(m);
+    if starts(b"%PDF") {
+        return Some("pdf");
+    }
+    if starts(b"%!PS") || starts(&[0xC5, 0xD0, 0xD3, 0xC6]) {
+        return Some("eps");
+    }
+    if starts(b"8BPS") {
+        return Some(if head.get(4..6) == Some(&[0, 2]) {
+            "psb"
+        } else {
+            "psd"
+        });
+    }
+    if starts(b"AC10") || starts(b"AC1.") || starts(b"AC2.") {
+        return Some("dwg");
+    }
+    if starts(&[0x1f, 0x8b]) {
+        return Some("svgz");
+    }
+    let text = String::from_utf8_lossy(head);
+    let trimmed = text.trim_start_matches('\u{feff}').trim_start();
+    if trimmed.starts_with("<svg") || (trimmed.starts_with("<?xml") && text.contains("<svg")) {
+        return Some("svg");
+    }
+    if trimmed.starts_with("0\r\nSECTION") || trimmed.starts_with("0\nSECTION") || trimmed.starts_with("999")
+    {
+        return Some("dxf");
+    }
+    if head.get(4..12) == Some(b"ftypheic")
+        || head.get(4..12) == Some(b"ftypmif1")
+        || head.get(4..12) == Some(b"ftypheix")
+    {
+        return Some("heic");
+    }
+    if starts(b"RIFF") && head.get(8..12) == Some(b"WEBP") {
+        return Some("webp");
+    }
+    if winfiles_cad::hpgl::looks_like_hpgl(head) {
+        return Some("plt");
+    }
+    None
+}
+
 /// File piccoli per le prove (i test e la prova della CI su Windows).
 #[doc(hidden)]
 pub mod prova {

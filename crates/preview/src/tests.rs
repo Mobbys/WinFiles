@@ -61,3 +61,14 @@ fn dxf_e_psd_hanno_l_anteprima() {
     assert_eq!((t.width, t.height), (64, 32));
     assert_eq!(&t.rgba[..4], &[255, 0, 0, 255]);
 }
+
+#[test]
+fn il_tipo_si_riconosce_dai_byte() {
+    assert_eq!(sniff(b"%PDF-1.7"), Some("pdf"));
+    assert_eq!(sniff(b"%!PS-Adobe-3.0 EPSF"), Some("eps"));
+    assert_eq!(sniff(&prova::psd(2, 2)), Some("psd"));
+    assert_eq!(sniff(prova::DXF.as_bytes()), Some("dxf"));
+    assert_eq!(sniff(b"<?xml version=\"1.0\"?>\n<svg xmlns=\"\"/>"), Some("svg"));
+    assert_eq!(sniff(b"IN;SP1;PU0,0;PD10,10;"), Some("plt"));
+    assert_eq!(sniff(b"\x89PNG"), None);
+}
