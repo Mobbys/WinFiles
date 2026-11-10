@@ -68,7 +68,9 @@ foreach ($c in $cartelle) {
 }
 Get-Process dllhost -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "dllhost $($_.Id): $((Get-Process -Id $_.Id -Module -ErrorAction SilentlyContinue | Where-Object ModuleName -like 'winfiles*').FileName)" }
 # La diagnosi che si lancia sui PC degli utenti con rundll32.
-Start-Process rundll32 -ArgumentList ('"' + (Join-Path $dir 'winfiles_preview.dll') + '",Diagnosi') -Wait
+# (Start-Process -Wait aspetterebbe anche il Blocco note che la diagnosi apre: si aspetta solo rundll32.)
+$p = Start-Process rundll32 -ArgumentList ('"' + (Join-Path $dir 'winfiles_preview.dll') + '",Diagnosi') -PassThru
+if (-not $p.WaitForExit(300000)) { throw "La diagnosi non ha finito in 5 minuti" }
 $diagnosi = Join-Path $env:TEMP 'winfiles-diagnosi.txt'
 if (-not (Test-Path $diagnosi)) { throw "La diagnosi non ha scritto il resoconto" }
 Get-Content $diagnosi
