@@ -113,11 +113,25 @@ fn render(bytes: &[u8], ext: &str, side: u32) -> std::result::Result<winfiles_th
     };
     let path = dir.join(format!("{}-{n}.{ext}", std::process::id()));
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-    let result = catch_unwind(AssertUnwindSafe(|| crate::thumbnail(&path, side)))
-        .unwrap_or_else(|_| Err("errore interno".into()));
+    // Il processo delle anteprime di Windows (dllhost) ha una pila piccola (256 KB): i PDF
+    // complessi, i PSD e gli AI la superano e il processo cade senza anteprima. Si disegna
+    // allora in un thread con una pila grande, come fanno i lavoratori di WinFiles.
+    let job = path.clone();
+    let result = std::thread::Builder::new()
+        .name("anteprima".into())
+        .stack_size(RENDER_STACK)
+        .spawn(move || {
+            catch_unwind(AssertUnwindSafe(|| crate::thumbnail(&job, side)))
+                .unwrap_or_else(|_| Err("errore interno".into()))
+        })
+        .map_err(|e| e.to_string())
+        .and_then(|h| h.join().unwrap_or_else(|_| Err("errore interno".into())));
     let _ = std::fs::remove_file(&path);
     result
 }
+
+/// La pila del thread che disegna l'anteprima.
+const RENDER_STACK: usize = 64 * 1024 * 1024;
 
 /// L'immagine in una bitmap di Windows: dall'alto in basso, BGRA premoltiplicato.
 fn bitmap(t: &winfiles_thumbs::Thumb) -> Result<HBITMAP> {
