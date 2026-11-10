@@ -130,10 +130,11 @@ fn work_dir() -> Option<&'static std::path::Path> {
     DIR.get_or_init(|| {
         let temp = std::env::temp_dir();
         let mut candidates = vec![temp.join("winfiles-anteprime")];
-        if let Some(local) = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from) {
-            if let Some(parent) = local.parent() {
-                candidates.push(parent.join("LocalLow").join("WinFiles").join("anteprime"));
-            }
+        if let Some(parent) = std::env::var_os("LOCALAPPDATA")
+            .map(std::path::PathBuf::from)
+            .and_then(|l| l.parent().map(std::path::Path::to_path_buf))
+        {
+            candidates.push(parent.join("LocalLow").join("WinFiles").join("anteprime"));
         }
         candidates.push(temp.join("Low").join("winfiles-anteprime"));
         candidates.into_iter().find(|d| {
