@@ -19,6 +19,15 @@ foreach ($v in $valori) {
     New-ItemProperty -Path $chiave -Name $nome -Value $valore -PropertyType $tipo -Force | Out-Null
 }
 Write-Host "Registrate $($valori.Count) chiavi; DLL in $dir"
+# Sul PC della CI tutto gira come amministratore, e un processo elevato non guarda le classi COM
+# registrate per l'utente (HKCU\Software\Classes\CLSID): la classe va anche nella macchina,
+# altrimenti Windows risponde "classe non registrata" senza mai caricare la DLL.
+foreach ($v in $valori | Where-Object { $_.Key -like 'Software\Classes\CLSID\*' }) {
+    $chiave = 'HKLM:\' + $v.Key
+    New-Item -Path $chiave -Force | Out-Null
+    $nome = if ($v.Name) { $v.Name } else { '(default)' }
+    New-ItemProperty -Path $chiave -Name $nome -Value $v.Value.Replace('[INSTALLDIR]', $dir) -PropertyType String -Force | Out-Null
+}
 # Un programma che si è preso il PSD con il suo gestore delle anteprime, come fa Photoshop:
 # DllRegisterServer deve mettere davanti quello di WinFiles.
 New-Item -Path 'HKCU:\Software\Classes\.psd' -Force | Out-Null

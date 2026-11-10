@@ -295,7 +295,7 @@ pub unsafe extern "system" fn DllGetClassObject(
     unsafe {
         *object = core::ptr::null_mut();
         if *rclsid != clsid() {
-            log("DllGetClassObject: classe sconosciuta");
+            log(&format!("DllGetClassObject: classe sconosciuta {:?}", *rclsid));
             return CLASS_E_CLASSNOTAVAILABLE;
         }
         let factory: IClassFactory = Factory.into();
