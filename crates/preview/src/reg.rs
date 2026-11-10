@@ -125,25 +125,24 @@ pub(crate) fn merge(old: &str, new: &[String]) -> String {
 }
 
 /// Il percorso completo di questa DLL.
-fn own_path() -> Option<String> {
+fn own_path() -> windows_core::Result<String> {
     let mut module = HMODULE::default();
-    let marker = own_path as fn() -> Option<String> as *const u16;
+    let marker = own_path as fn() -> windows_core::Result<String> as *const u16;
     // SAFETY: l'indirizzo è una funzione di questa DLL; il conteggio dei riferimenti non cambia.
     unsafe {
         GetModuleHandleExW(
             GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
             PCWSTR(marker),
             &mut module,
-        )
-        .ok()?;
+        )?;
     }
     let mut buf = [0u16; 1024];
     // SAFETY: `buf` è un buffer valido della lunghezza passata.
     let len = unsafe { GetModuleFileNameW(Some(module), &mut buf) } as usize;
     if len == 0 || len >= buf.len() {
-        return None;
+        return Err(windows_core::Error::from_thread());
     }
-    Some(String::from_utf16_lossy(buf.get(..len)?))
+    Ok(String::from_utf16_lossy(buf.get(..len).unwrap_or_default()))
 }
 
 fn notify() {
@@ -158,8 +157,12 @@ pub extern "system" fn DllRegisterServer() -> HRESULT {
     // La classe la scrive la DLL stessa, nella vista a 64 bit del registro: l'MSI di wixl è a
     // 32 bit e Windows Installer mette HKCU\Software\Classes\CLSID in WOW6432Node, dove Esplora
     // file (64 bit) non la vede (diagnosi sul PC di Michel, 2026-11-10).
-    let Some(dll) = own_path() else {
-        return HRESULT(0x8000_4005_u32 as i32);
+    let dll = match own_path() {
+        Ok(dll) => dll,
+        Err(e) => {
+            crate::com::log(&format!("registrazione: percorso della DLL non trovato: {e}"));
+            return e.code();
+        }
     };
     let class = format!(r"Software\Classes\CLSID\{clsid}");
     let inproc = format!(r"{class}\InprocServer32");
@@ -168,8 +171,13 @@ pub extern "system" fn DllRegisterServer() -> HRESULT {
         set(&inproc, None, &dll),
         set(&inproc, Some("ThreadingModel"), "Apartment"),
     ];
-    if written.iter().any(|e| *e != ERROR_SUCCESS) {
-        return HRESULT(0x8000_4005_u32 as i32);
+    if let Some(e) = written.iter().find(|e| **e != ERROR_SUCCESS) {
+        let code = e.to_hresult();
+        crate::com::log(&format!(
+            "registrazione: la classe non si scrive in HKCU\\{inproc}: {}",
+            windows_core::Error::from_hresult(code).message()
+        ));
+        return code;
     }
     let mut touched: Vec<String> = Vec::new();
     for ext in crate::EXTENSIONS {

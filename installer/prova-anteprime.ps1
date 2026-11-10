@@ -38,8 +38,17 @@ New-Item -Path 'HKCU:\Software\Classes\.psd' -Force | Out-Null
 Set-ItemProperty -Path 'HKCU:\Software\Classes\.psd' -Name '(default)' -Value 'Prova.Immagine'
 New-Item -Path 'HKCU:\Software\Classes\Prova.Immagine\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}' -Force | Out-Null
 Set-ItemProperty -Path 'HKCU:\Software\Classes\Prova.Immagine\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}' -Name '(default)' -Value '{00000000-0000-0000-0000-000000000001}'
+# Come sul PC di Michel: la classe per l'utente non c'è (l'MSI a 32 bit la mette in WOW6432Node)
+# e la deve scrivere DllRegisterServer.
+Remove-Item -Path 'HKCU:\Software\Classes\CLSID\{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}' -Recurse -Force -ErrorAction SilentlyContinue
 $p = Start-Process regsvr32 -ArgumentList '/s', (Join-Path $dir 'winfiles_preview.dll') -Wait -PassThru
-if ($p.ExitCode -ne 0) { throw "DllRegisterServer: $($p.ExitCode)" }
+if ($p.ExitCode -ne 0) {
+    Get-Content (Join-Path $env:TEMP 'winfiles-anteprime\errori.txt') -ErrorAction SilentlyContinue
+    throw "DllRegisterServer: $($p.ExitCode)"
+}
+$srv = (Get-ItemProperty 'HKCU:\Software\Classes\CLSID\{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}\InprocServer32' -ErrorAction SilentlyContinue).'(default)'
+if ($srv -ne (Join-Path $dir 'winfiles_preview.dll')) { throw "DllRegisterServer non ha scritto la classe: '$srv'" }
+Write-Host "DllRegisterServer: classe scritta ($srv)"
 $h = (Get-ItemProperty 'HKCU:\Software\Classes\Prova.Immagine\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}').'(default)'
 if ($h -ne '{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}') { throw "Il gestore nel ProgID non è quello di WinFiles: $h" }
 Write-Host "DllRegisterServer: gestore di WinFiles anche nel ProgID Prova.Immagine"

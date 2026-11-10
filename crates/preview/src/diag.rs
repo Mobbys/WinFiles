@@ -70,8 +70,9 @@ fn report() -> String {
     let mut r = String::new();
     let _ = writeln!(
         r,
-        "Diagnosi delle anteprime di WinFiles {}\n",
-        env!("CARGO_PKG_VERSION")
+        "Diagnosi delle anteprime di WinFiles {} (build {})\n",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("GITHUB_SHA").map_or("locale", |s| s.get(..7).unwrap_or(s))
     );
     let server = format!(r"CLSID\{clsid}\InprocServer32");
     let dll = get(HKEY_CLASSES_ROOT, &server, None);

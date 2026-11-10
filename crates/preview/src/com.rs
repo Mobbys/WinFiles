@@ -103,7 +103,7 @@ impl IInitializeWithStream_Impl for Preview_Impl {
 
 /// Una riga nel registro degli errori delle anteprime (`%TEMP%\\winfiles-anteprime\\errori.txt`),
 /// per capire perché un file non ha l'anteprima. Si ferma a 256 KB.
-fn log(msg: &str) {
+pub(crate) fn log(msg: &str) {
     use std::io::Write;
     let Some(dir) = work_dir() else { return };
     let path = dir.join("errori.txt");
