@@ -57,6 +57,11 @@ fn main() -> std::process::ExitCode {
     // SAFETY: inizializzazione di COM e chiamate alla shell con argomenti validi.
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        // Prima la classe dal registro, nel processo: dice se la DLL vera si carica e funziona.
+        let svg_path = dir.join("diretto.svg");
+        if std::fs::write(&svg_path, svg).is_ok() {
+            println!("classe nel processo: {}", direct(&svg_path));
+        }
         for (name, bytes) in files {
             let path = dir.join(name);
             if std::fs::write(&path, bytes).is_err() {
@@ -82,6 +87,37 @@ fn main() -> std::process::ExitCode {
         std::process::ExitCode::SUCCESS
     } else {
         std::process::ExitCode::FAILURE
+    }
+}
+
+/// La classe creata da COM con il registro (come farebbe il processo delle anteprime), nel
+/// processo stesso: carica winfiles_preview.dll e chiede l'anteprima di `path`.
+#[cfg(windows)]
+fn direct(path: &std::path::Path) -> String {
+    use windows::Win32::Graphics::Gdi::HBITMAP;
+    use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, STGM_READ};
+    use windows::Win32::UI::Shell::PropertiesSystem::IInitializeWithStream;
+    use windows::Win32::UI::Shell::{IThumbnailProvider, SHCreateStreamOnFileEx, WTS_ALPHATYPE};
+    use windows_core::{GUID, HSTRING, Interface};
+    let Ok(clsid) = GUID::try_from(winfiles_preview::CLSID.trim_matches(['{', '}'])) else {
+        return "CLSID non valido".into();
+    };
+    // SAFETY: chiamate COM con argomenti validi.
+    let result = unsafe {
+        CoCreateInstance::<_, IThumbnailProvider>(&clsid, None, CLSCTX_INPROC_SERVER).and_then(|p| {
+            let init: IInitializeWithStream = p.cast()?;
+            let stream =
+                SHCreateStreamOnFileEx(&HSTRING::from(path.as_os_str()), STGM_READ.0, 0, false, None)?;
+            init.Initialize(&stream, STGM_READ.0)?;
+            let mut hbmp = HBITMAP::default();
+            let mut alpha = WTS_ALPHATYPE::default();
+            p.GetThumbnail(256, &mut hbmp, &mut alpha)?;
+            Ok(hbmp)
+        })
+    };
+    match result {
+        Ok(_) => "anteprima di WinFiles".into(),
+        Err(e) => format!("ERRORE {e}"),
     }
 }
 

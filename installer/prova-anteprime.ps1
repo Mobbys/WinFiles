@@ -46,6 +46,13 @@ foreach ($c in @((Join-Path $env:TEMP 'winfiles-anteprime'), (Join-Path (Split-P
 }
 & (Join-Path $dir 'examples\esplora.exe') (Join-Path $env:RUNNER_TEMP 'anteprime')
 $esito = $LASTEXITCODE
+# Per capire: le stesse anteprime con la DLL caricata nel processo che le chiede, senza il processo
+# a parte di Windows (DisableProcessIsolation), su file nuovi.
+foreach ($radice in 'HKCU:\', 'HKLM:\') {
+    Set-ItemProperty -Path ($radice + 'Software\Classes\CLSID\{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}') -Name 'DisableProcessIsolation' -Value 1 -Type DWord
+}
+Write-Host "--- senza processo a parte (solo per capire):"
+& (Join-Path $dir 'examples\esplora.exe') (Join-Path $env:RUNNER_TEMP 'anteprime-nel-processo')
 $cartelle = @(
     (Join-Path $env:TEMP 'winfiles-anteprime'),
     (Join-Path (Split-Path $env:LOCALAPPDATA) 'LocalLow\WinFiles\anteprime'),
