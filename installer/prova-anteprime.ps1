@@ -12,19 +12,20 @@ $valori = $wxs.SelectNodes("//w:Component[@Id='Anteprime']/w:RegistryValue", $ns
 if ($valori.Count -lt 3) { throw "Componente Anteprime non trovato in winfiles.wxs" }
 foreach ($v in $valori) {
     $chiave = 'HKCU:\' + $v.GetAttribute('Key')
-    New-Item -Path $chiave -Force | Out-Null
+    if (-not (Test-Path $chiave)) { New-Item -Path $chiave -Force | Out-Null }
     $valore = $v.GetAttribute('Value').Replace('[INSTALLDIR]', $dir)
     $tipo = if ($v.GetAttribute('Type') -eq 'integer') { 'DWord' } else { 'String' }
     $nome = if ($v.GetAttribute("Name")) { $v.GetAttribute("Name") } else { '(default)' }
     New-ItemProperty -Path $chiave -Name $nome -Value $valore -PropertyType $tipo -Force | Out-Null
 }
+# New-Item -Force su una chiave che c'è già ne cancella i valori: si crea solo se manca.
 Write-Host "Registrate $($valori.Count) chiavi; DLL in $dir"
 # Sul PC della CI tutto gira come amministratore, e un processo elevato non guarda le classi COM
 # registrate per l'utente (HKCU\Software\Classes\CLSID): la classe va anche nella macchina,
 # altrimenti Windows risponde "classe non registrata" senza mai caricare la DLL.
 foreach ($v in $valori | Where-Object { $_.GetAttribute('Key') -like 'Software\Classes\CLSID\*' }) {
     $chiave = 'HKLM:\' + $v.GetAttribute('Key')
-    New-Item -Path $chiave -Force | Out-Null
+    if (-not (Test-Path $chiave)) { New-Item -Path $chiave -Force | Out-Null }
     $nome = if ($v.GetAttribute("Name")) { $v.GetAttribute("Name") } else { '(default)' }
     New-ItemProperty -Path $chiave -Name $nome -Value $v.GetAttribute('Value').Replace('[INSTALLDIR]', $dir) -PropertyType String -Force | Out-Null
 }
