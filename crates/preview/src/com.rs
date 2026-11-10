@@ -91,6 +91,7 @@ impl IInitializeWithStream_Impl for Preview_Impl {
         let stream = stream.ok()?;
         let ext = stream_ext(stream);
         let bytes = read_all(stream).inspect_err(|e| log(&format!("«{ext}»: flusso non letto ({e})")))?;
+        trace(&format!("Initialize: «{ext}», {} byte", bytes.len()));
         let mut file = self
             .file
             .lock()
@@ -104,22 +105,51 @@ impl IInitializeWithStream_Impl for Preview_Impl {
 /// per capire perché un file non ha l'anteprima. Si ferma a 256 KB.
 fn log(msg: &str) {
     use std::io::Write;
-    let dir = std::env::temp_dir().join("winfiles-anteprime");
-    let _ = std::fs::create_dir_all(&dir);
+    let Some(dir) = work_dir() else { return };
     let path = dir.join("errori.txt");
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > 256 * 1024) {
         return;
     }
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(f, "{msg}");
+        let _ = writeln!(f, "[{}] {msg}", std::process::id());
     }
+}
+
+/// Una riga nel registro solo se nella cartella c'è il file `traccia` (le prove della CI).
+fn trace(msg: &str) {
+    if work_dir().is_some_and(|d| d.join("traccia").exists()) {
+        log(msg);
+    }
+}
+
+/// La cartella dove scrivere i file temporanei e il registro. Il processo delle anteprime di
+/// Windows può girare a integrità bassa, e allora non scrive nella cartella temporanea normale:
+/// si prova anche `LocalLow` e `Temp\Low`, le cartelle permesse a quel livello.
+fn work_dir() -> Option<&'static std::path::Path> {
+    static DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let temp = std::env::temp_dir();
+        let mut candidates = vec![temp.join("winfiles-anteprime")];
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from) {
+            if let Some(parent) = local.parent() {
+                candidates.push(parent.join("LocalLow").join("WinFiles").join("anteprime"));
+            }
+        }
+        candidates.push(temp.join("Low").join("winfiles-anteprime"));
+        candidates.into_iter().find(|d| {
+            let probe = d.join(format!("prova-{}", std::process::id()));
+            let ok = std::fs::create_dir_all(d).is_ok() && std::fs::write(&probe, b"").is_ok();
+            let _ = std::fs::remove_file(&probe);
+            ok
+        })
+    })
+    .as_deref()
 }
 
 /// Disegna l'anteprima dai byte, passando da un file temporaneo con la stessa estensione.
 fn render(bytes: &[u8], ext: &str, side: u32) -> std::result::Result<winfiles_thumbs::Thumb, String> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let dir = std::env::temp_dir().join("winfiles-anteprime");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir = work_dir().ok_or("nessuna cartella dove scrivere il file temporaneo")?;
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
     // Il nome che dà Windows, se è di un tipo conosciuto; altrimenti il tipo dai primi byte.
     let ext = if crate::EXTENSIONS.contains(&ext) {
@@ -194,6 +224,7 @@ impl IThumbnailProvider_Impl for Preview_Impl {
         if phbmp.is_null() || pdwalpha.is_null() {
             return Err(E_POINTER.into());
         }
+        trace(&format!("GetThumbnail: {cx} px"));
         let file = self
             .file
             .lock()
@@ -258,10 +289,12 @@ pub unsafe extern "system" fn DllGetClassObject(
     if object.is_null() || riid.is_null() || rclsid.is_null() {
         return E_POINTER;
     }
+    trace("DllGetClassObject");
     // SAFETY: puntatori controllati sopra.
     unsafe {
         *object = core::ptr::null_mut();
         if *rclsid != clsid() {
+            log("DllGetClassObject: classe sconosciuta");
             return CLASS_E_CLASSNOTAVAILABLE;
         }
         let factory: IClassFactory = Factory.into();

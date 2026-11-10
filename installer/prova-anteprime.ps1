@@ -30,8 +30,21 @@ if ($p.ExitCode -ne 0) { throw "DllRegisterServer: $($p.ExitCode)" }
 $h = (Get-ItemProperty 'HKCU:\Software\Classes\Prova.Immagine\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}').'(default)'
 if ($h -ne '{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}') { throw "Il gestore nel ProgID non è quello di WinFiles: $h" }
 Write-Host "DllRegisterServer: gestore di WinFiles anche nel ProgID Prova.Immagine"
+# Il file "traccia" fa scrivere alla DLL ogni passo nel suo registro.
+foreach ($c in @((Join-Path $env:TEMP 'winfiles-anteprime'), (Join-Path (Split-Path $env:LOCALAPPDATA) 'LocalLow\WinFiles\anteprime'), (Join-Path $env:TEMP 'Low\winfiles-anteprime'))) {
+    New-Item -ItemType Directory -Force -Path $c | Out-Null
+    New-Item -ItemType File -Force -Path (Join-Path $c 'traccia') | Out-Null
+}
 & (Join-Path $dir 'examples\esplora.exe') (Join-Path $env:RUNNER_TEMP 'anteprime')
 $esito = $LASTEXITCODE
-$errori = Join-Path $env:TEMP 'winfiles-anteprime\errori.txt'
-if (Test-Path $errori) { Write-Host "Errori della DLL:"; Get-Content $errori }
+$cartelle = @(
+    (Join-Path $env:TEMP 'winfiles-anteprime'),
+    (Join-Path (Split-Path $env:LOCALAPPDATA) 'LocalLow\WinFiles\anteprime'),
+    (Join-Path $env:TEMP 'Low\winfiles-anteprime')
+)
+foreach ($c in $cartelle) {
+    $errori = Join-Path $c 'errori.txt'
+    if (Test-Path $errori) { Write-Host "Errori della DLL ($errori):"; Get-Content $errori }
+}
+Get-Process dllhost -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "dllhost $($_.Id): $((Get-Process -Id $_.Id -Module -ErrorAction SilentlyContinue | Where-Object ModuleName -like 'winfiles*').FileName)" }
 if ($esito -ne 0) { throw "Anteprime mancanti" }
