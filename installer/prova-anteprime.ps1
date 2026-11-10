@@ -28,6 +28,9 @@ foreach ($v in $valori | Where-Object { $_.Key -like 'Software\Classes\CLSID\*' 
     $nome = if ($v.Name) { $v.Name } else { '(default)' }
     New-ItemProperty -Path $chiave -Name $nome -Value $v.Value.Replace('[INSTALLDIR]', $dir) -PropertyType String -Force | Out-Null
 }
+foreach ($k in 'HKCU\Software\Classes\CLSID\{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}', 'HKLM\Software\Classes\CLSID\{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}', 'HKCR\CLSID\{8B3C7E21-5D4A-4F96-9C1B-2E7A6D0F4B53}') {
+    Write-Host "reg query $k"; reg query $k /s
+}
 # Un programma che si è preso il PSD con il suo gestore delle anteprime, come fa Photoshop:
 # DllRegisterServer deve mettere davanti quello di WinFiles.
 New-Item -Path 'HKCU:\Software\Classes\.psd' -Force | Out-Null

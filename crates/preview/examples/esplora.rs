@@ -57,6 +57,29 @@ fn main() -> std::process::ExitCode {
     // SAFETY: inizializzazione di COM e chiamate alla shell con argomenti validi.
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        // La DLL caricata a mano, per vedere se si carica ed esporta le sue funzioni.
+        {
+            use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+            use windows_core::s;
+            let dll = std::env::current_exe().ok().and_then(|e| {
+                e.parent()
+                    .and_then(|p| p.parent())
+                    .map(|p| p.join("winfiles_preview.dll"))
+            });
+            if let Some(dll) = dll {
+                match LoadLibraryW(&HSTRING::from(dll.as_os_str())) {
+                    Ok(h) => println!(
+                        "DLL caricata: DllGetClassObject {}",
+                        if GetProcAddress(h, s!("DllGetClassObject")).is_some() {
+                            "c'è"
+                        } else {
+                            "MANCA"
+                        }
+                    ),
+                    Err(e) => println!("DLL NON caricata ({}): {e}", dll.display()),
+                }
+            }
+        }
         // Prima la classe dal registro, nel processo: dice se la DLL vera si carica e funziona.
         let svg_path = dir.join("diretto.svg");
         if std::fs::write(&svg_path, svg).is_ok() {
