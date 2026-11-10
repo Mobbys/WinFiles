@@ -8,7 +8,9 @@
 fn main() -> std::process::ExitCode {
     use windows::Win32::Foundation::SIZE;
     use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
-    use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_THUMBNAILONLY};
+    use windows::Win32::UI::Shell::{
+        IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_THUMBNAILONLY,
+    };
     use windows_core::HSTRING;
 
     let Some(dir) = std::env::args().nth(1).map(std::path::PathBuf::from) else {
