@@ -627,7 +627,8 @@ fn draw_one(
 
 /// La lunghezza vera, in mm, tra due punti della pagina `page` mostrata nella miniatura.
 pub fn true_length(page: &PageInfo, a: Point, b: Point) -> f64 {
-    let s = page.finished();
+    // La miniatura mostra tutta la pagina, abbondanza compresa.
+    let s = page.size;
     ((b.0 - a.0) * s.w).hypot((b.1 - a.1) * s.h)
 }
 

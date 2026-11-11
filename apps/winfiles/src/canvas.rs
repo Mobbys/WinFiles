@@ -38,6 +38,8 @@ const CRUMB_COLORS: [Color32; 5] = [
     Color32::from_rgb(0x55, 0x2b, 0xc4),
 ];
 const TITLE_FILL: Color32 = Color32::from_rgb(246, 247, 249);
+/// Il tratteggio del formato al vivo sulle miniature (lo stesso verde di Visualizza).
+const TRIM_INK: Color32 = Color32::from_rgb(22, 163, 74);
 pub(crate) const FRAME: Color32 = Color32::from_rgb(190, 190, 190);
 
 /// Ingrandimento che fa stare il foglio intero nello spazio `avail` (punti per millimetro).
@@ -92,20 +94,58 @@ pub(crate) fn one_line(text: String, size: f64, weight: Weight, width: f64) -> L
     job
 }
 
-/// La parte della miniatura da mostrare: per i PDF con TrimBox solo il formato finito, senza
-/// l'abbondanza, come il riquadro calcolato dal layout. In frazioni della pagina intera.
-fn trim_crop(page: Option<&PageInfo>) -> MmRect {
-    let full = MmRect::new(0.0, 0.0, 1.0, 1.0);
-    let Some(page) = page else {
-        return full;
-    };
-    let Some(trim) = page.trim else { return full };
+/// Il formato al vivo (TrimBox) dentro la miniatura `image` della pagina intera, se il file ha
+/// l'abbondanza. Il TrimBox si presume centrato, come per le misure.
+fn trim_rect(image: MmRect, page: Option<&PageInfo>) -> Option<MmRect> {
+    let page = page?;
+    let trim = page.trim?;
     let fx = (trim.w / page.size.w).clamp(0.0, 1.0);
     let fy = (trim.h / page.size.h).clamp(0.0, 1.0);
-    if !(fx > 0.0 && fy > 0.0) {
-        return full;
+    if !(fx > 0.0 && fy > 0.0) || (fx > 0.999 && fy > 0.999) {
+        return None;
     }
-    MmRect::new((1.0 - fx) / 2.0, (1.0 - fy) / 2.0, fx, fy)
+    let (w, h) = (image.w * fx, image.h * fy);
+    Some(MmRect::new(
+        image.x + (image.w - w) / 2.0,
+        image.y + (image.h - h) / 2.0,
+        w,
+        h,
+    ))
+}
+
+/// Un rettangolo tratteggiato: il segno del formato al vivo.
+fn dashed_rect(sk: &mut Sketch<'_>, r: MmRect, color: Color32, width: f64) {
+    const DASH: f64 = 1.2;
+    const GAP: f64 = 0.8;
+    let corners = [
+        (r.x, r.y),
+        (r.right(), r.y),
+        (r.right(), r.bottom()),
+        (r.x, r.bottom()),
+        (r.x, r.y),
+    ];
+    for w in corners.windows(2) {
+        let [(x0, y0), (x1, y1)] = [w[0], w[1]];
+        let len = (x1 - x0).hypot(y1 - y0);
+        if len.is_nan() || len <= 0.0 {
+            continue;
+        }
+        let (dx, dy) = ((x1 - x0) / len, (y1 - y0) / len);
+        let mut t = 0.0;
+        // Un tetto ai trattini: una miniatura enorme non riempie la scena.
+        let mut n = 0;
+        while t < len && n < 2000 {
+            let e = (t + DASH).min(len);
+            sk.line(
+                (x0 + dx * t, y0 + dy * t),
+                (x0 + dx * e, y0 + dy * e),
+                color,
+                width,
+            );
+            t += DASH + GAP;
+            n += 1;
+        }
+    }
 }
 
 /// La scena di un foglio di miniature: intestazioni, miniature, didascalie e note, in mm.
@@ -200,9 +240,14 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
                     kind: file.kind,
                     page: slot.page,
                 },
-                crop: trim_crop(page_info),
+                crop: MmRect::new(0.0, 0.0, 1.0, 1.0),
                 dpi: None,
             });
+            // La miniatura mostra tutta la pagina, abbondanza compresa; il tratteggio verde
+            // dice dove si taglia (come in Visualizza).
+            if let Some(trim) = trim_rect(image, page_info) {
+                dashed_rect(&mut sk, trim, TRIM_INK, 0.15);
+            }
             // Un filo sottile attorno alla miniatura: le immagini chiare non si perdono nel foglio.
             sk.rect(grow(image, 0.12), 0.0, None, Some((FRAME, 0.12)));
         }
