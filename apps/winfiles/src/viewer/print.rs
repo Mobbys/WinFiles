@@ -24,6 +24,12 @@ use crate::theme::{Tokens, semibold};
 pub const MAX_SHEETS: usize = 400;
 /// Lo spazio in fondo al foglio per la didascalia, in mm.
 const CAPTION_MM: f64 = 5.0;
+/// Lo spazio in più per la riga del percorso, in mm.
+const PATH_LINE_MM: f64 = 3.4;
+/// Il corpo della didascalia, in mm.
+const CAPTION_SIZE: f64 = 2.4;
+/// Il corpo più piccolo a cui si stringe una riga lunga, in mm: sotto non si legge più.
+const CAPTION_MIN_SIZE: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Turn {
@@ -64,6 +70,8 @@ pub struct Choice {
     /// Il bordo che la stampante non stampa, in mm.
     pub margin: f64,
     pub caption: bool,
+    /// Nella didascalia anche la cartella del file, su una seconda riga.
+    pub path: bool,
     pub gray: bool,
     /// I disegni CAD tutti in nero.
     pub cad_black: bool,
@@ -82,6 +90,7 @@ impl Default for Choice {
             overlap: 10.0,
             margin: 4.0,
             caption: true,
+            path: false,
             gray: false,
             cad_black: true,
         }
@@ -96,6 +105,56 @@ impl Choice {
         self.overlap = ok(self.overlap, 0.0, 50.0, 10.0);
         self.margin = ok(self.margin, 0.0, 30.0, 4.0);
         self
+    }
+
+    /// Lo spazio in fondo al foglio per la didascalia, in mm (0 senza).
+    pub fn caption_mm(&self) -> f64 {
+        match (self.caption, self.path) {
+            (false, _) => 0.0,
+            (true, false) => CAPTION_MM,
+            (true, true) => CAPTION_MM + PATH_LINE_MM,
+        }
+    }
+}
+
+/// Una riga della didascalia: il testo, la sua linea di base dall'alto del foglio e il corpo, in mm.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CaptionLine {
+    pub text: String,
+    pub y: f64,
+    pub size: f64,
+}
+
+/// Il corpo con cui `text` sta in `width` mm: quello normale, o più piccolo per una riga lunga
+/// (un percorso non si taglia mai). Larghezza media di una lettera in Helvetica: circa mezzo corpo.
+fn fitted_size(text: &str, width: f64) -> f64 {
+    let chars = text.chars().count().max(1) as f64;
+    (width / (chars * 0.52)).clamp(CAPTION_MIN_SIZE, CAPTION_SIZE)
+}
+
+/// Le righe della didascalia di un foglio largo `w` e alto `h` mm con bordo `margin`: la prima
+/// con nome, pagina, scala e tassello; con `path` sotto la cartella del file.
+pub fn caption_lines(first: String, path: Option<String>, w: f64, h: f64, margin: f64) -> Vec<CaptionLine> {
+    let width = (w - 2.0 * margin).max(1.0);
+    let bottom = h - margin - 1.2;
+    match path {
+        None => vec![CaptionLine {
+            size: fitted_size(&first, width),
+            text: first,
+            y: bottom,
+        }],
+        Some(p) => vec![
+            CaptionLine {
+                size: fitted_size(&first, width),
+                text: first,
+                y: bottom - PATH_LINE_MM,
+            },
+            CaptionLine {
+                size: fitted_size(&p, width),
+                text: p,
+                y: bottom,
+            },
+        ],
     }
 }
 
@@ -133,8 +192,7 @@ fn sheet(paper: Paper, landscape: bool) -> Size {
 }
 
 /// L'area stampabile del foglio: senza il bordo e, con la didascalia, la riga in fondo.
-fn printable(s: Size, margin: f64, caption: bool) -> Size {
-    let bottom = if caption { CAPTION_MM } else { 0.0 };
+fn printable(s: Size, margin: f64, bottom: f64) -> Size {
     Size::new(
         (s.w - 2.0 * margin).max(1.0),
         (s.h - 2.0 * margin - bottom).max(1.0),
@@ -146,7 +204,7 @@ fn printable(s: Size, margin: f64, caption: bool) -> Size {
 pub fn scale_for(content: Size, true_mm: f64, c: &Choice) -> (f64, bool) {
     let wide = content.w > content.h;
     let fit = |landscape: bool| {
-        let p = printable(sheet(c.paper, landscape), c.margin, c.caption);
+        let p = printable(sheet(c.paper, landscape), c.margin, c.caption_mm());
         (p.w / content.w.max(1e-6)).min(p.h / content.h.max(1e-6))
     };
     match c.mode {
@@ -181,7 +239,7 @@ pub fn plan(page: usize, content: Size, true_mm: f64, c: &Choice) -> Vec<SheetPl
     let full = [0.0, 0.0, content.w, content.h];
     let one = |landscape: bool| {
         let size = sheet(c.paper, landscape);
-        let p = printable(size, c.margin, c.caption);
+        let p = printable(size, c.margin, c.caption_mm());
         // Al centro dell'area stampabile; più grande del foglio si centra lo stesso (e si taglia).
         let e = c.margin + (p.w - shown.w) / 2.0;
         let f = c.margin + (p.h - shown.h) / 2.0;
@@ -195,7 +253,7 @@ pub fn plan(page: usize, content: Size, true_mm: f64, c: &Choice) -> Vec<SheetPl
     };
     let grid = |landscape: bool| {
         let size = sheet(c.paper, landscape);
-        let p = printable(size, c.margin, c.caption);
+        let p = printable(size, c.margin, c.caption_mm());
         let step_w = (p.w - c.overlap).max(p.w * 0.5);
         let step_h = (p.h - c.overlap).max(p.h * 0.5);
         let count = |len: f64, area: f64, step: f64| -> usize {
@@ -214,7 +272,7 @@ pub fn plan(page: usize, content: Size, true_mm: f64, c: &Choice) -> Vec<SheetPl
             count(shown.h, p.h, step_h),
         )
     };
-    let p_now = printable(sheet(c.paper, landscape), c.margin, c.caption);
+    let p_now = printable(sheet(c.paper, landscape), c.margin, c.caption_mm());
     let fits = shown.w <= p_now.w + 0.05 && shown.h <= p_now.h + 0.05;
     if fits || !c.tiles || c.mode == Mode::Fit {
         return vec![one(landscape)];
@@ -427,7 +485,7 @@ impl PrintPage {
             );
             let (s, _) = scale_for(*size, true_mm, &choice);
             let fits = one.first().is_some_and(|p| {
-                let area = printable(p.size, choice.margin, choice.caption);
+                let area = printable(p.size, choice.margin, choice.caption_mm());
                 size.w * s <= area.w + 0.05 && size.h * s <= area.h + 0.05
             });
             if !fits {
@@ -789,7 +847,7 @@ impl PrintPage {
                     },
                 );
                 let too_big = one.first().is_some_and(|p| {
-                    let area = printable(p.size, self.choice.margin, self.choice.caption);
+                    let area = printable(p.size, self.choice.margin, self.choice.caption_mm());
                     printed.w > area.w + 0.05 || printed.h > area.h + 0.05
                 });
                 if too_big && !self.choice.tiles {
@@ -846,6 +904,10 @@ impl PrintPage {
             "Didascalia in fondo al foglio",
         ))
         .on_hover_text("Nome del file, pagina, scala e tassello, in piccolo sotto il disegno");
+        ui.add_enabled_ui(self.choice.caption, |ui| {
+            ui.add(crate::fluent::checkbox(&mut self.choice.path, "Percorso del file"))
+                .on_hover_text("La cartella del file su una seconda riga della didascalia");
+        });
         ui.add(crate::fluent::checkbox(&mut self.choice.gray, "Bianco e nero"));
         if cad {
             let before = self.choice.cad_black;
@@ -1024,7 +1086,7 @@ impl PrintPage {
         let to = |x: f64, y: f64| pos2(paper.left() + x as f32 * k, paper.top() + y as f32 * k);
         // L'area stampabile, tratteggiata.
         let m = self.choice.margin;
-        let area = printable(sp.size, m, self.choice.caption);
+        let area = printable(sp.size, m, self.choice.caption_mm());
         let ar = Rect::from_min_max(to(m, m), to(m + area.w, m + area.h));
         let dashes = [
             ar.left_top(),
@@ -1086,17 +1148,34 @@ impl PrintPage {
             }
         }
         if self.choice.caption {
-            painter.text(
-                to(m, sp.size.h - m - 1.2),
-                egui::Align2::LEFT_BOTTOM,
-                self.caption(&sp, unit),
-                egui::FontId::proportional((2.4 * k).clamp(6.0, 13.0)),
-                Color32::from_gray(80),
-            );
+            for line in self.caption(&sp, unit) {
+                painter.text(
+                    to(m, line.y),
+                    egui::Align2::LEFT_BOTTOM,
+                    line.text,
+                    egui::FontId::proportional((line.size as f32 * k).clamp(4.0, 13.0)),
+                    Color32::from_gray(80),
+                );
+            }
         }
     }
 
-    fn caption(&self, sp: &SheetPlan, unit: Unit) -> String {
+    fn caption(&self, sp: &SheetPlan, unit: Unit) -> Vec<CaptionLine> {
+        let folder = self
+            .choice
+            .path
+            .then(|| self.path.parent().map(|d| d.display().to_string()))
+            .flatten();
+        caption_lines(
+            self.caption_text(sp, unit),
+            folder,
+            sp.size.w,
+            sp.size.h,
+            self.choice.margin,
+        )
+    }
+
+    fn caption_text(&self, sp: &SheetPlan, unit: Unit) -> String {
         let mut s = super::file_name(&self.path);
         if self.pages.len() > 1 {
             s.push_str(&format!(" · pagina {}", sp.page + 1));
@@ -1116,7 +1195,7 @@ impl PrintPage {
     /// Compone il PDF dei fogli e lo manda alla stampante, in un thread a parte.
     fn start(&mut self, sheets: &[SheetPlan], calibration: Option<Calibration>, unit: Unit) {
         let sheets = sheets.to_vec();
-        let captions: Vec<Option<String>> = sheets
+        let captions: Vec<Option<Vec<CaptionLine>>> = sheets
             .iter()
             .map(|sp| self.choice.caption.then(|| self.caption(sp, unit)))
             .collect();
@@ -1167,7 +1246,7 @@ impl PrintPage {
 fn build(
     source: &Source,
     sheets: &[SheetPlan],
-    captions: &[Option<String>],
+    captions: &[Option<Vec<CaptionLine>>],
     calibration: Option<Calibration>,
     true_mm: f64,
     cad_unit_mm: f64,
@@ -1228,12 +1307,13 @@ fn build(
         }
         let texts: Vec<winfiles_cad::TextLine> = text
             .iter()
+            .flatten()
             .map(|t| winfiles_cad::TextLine {
                 x: margin,
-                y: sp.size.h - margin - 1.2,
-                size: 2.4,
+                y: t.y,
+                size: t.size,
                 gray: 0.3,
-                text: t.clone(),
+                text: t.text.clone(),
             })
             .collect();
         let pdf = if texts.is_empty() && lines.is_empty() {
@@ -1299,6 +1379,30 @@ mod tests {
         assert!(parse_pages("0", 10).is_err());
         assert!(parse_pages("due", 10).is_err());
         assert!(parse_pages("  ", 10).is_err());
+    }
+
+    #[test]
+    fn il_percorso_va_su_una_seconda_riga_intera() {
+        let lines = caption_lines("a.pdf · scala 1:1".into(), Some("C:\\Lavori".into()), 210.0, 297.0, 4.0);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].y < lines[1].y);
+        assert!((lines[1].size - CAPTION_SIZE).abs() < 1e-9);
+        // Un percorso lunghissimo si stringe ma resta intero.
+        let long = format!("C:\\{}", "cartella\\".repeat(30));
+        let lines = caption_lines("a.pdf".into(), Some(long.clone()), 210.0, 297.0, 4.0);
+        assert_eq!(lines[1].text, long);
+        assert!(lines[1].size < CAPTION_SIZE);
+        assert!(lines[1].size >= CAPTION_MIN_SIZE);
+    }
+
+    #[test]
+    fn con_il_percorso_la_didascalia_prende_piu_spazio() {
+        let mut c = Choice::default();
+        let one = c.caption_mm();
+        c.path = true;
+        assert!(c.caption_mm() > one);
+        c.caption = false;
+        assert_eq!(c.caption_mm(), 0.0);
     }
 
     fn a4() -> Choice {
@@ -1386,7 +1490,18 @@ mod tests {
             ..Choice::default()
         };
         let sheets = plan(0, Size::new(500.0, 700.0), 1.0, &c);
-        let caps: Vec<Option<String>> = sheets.iter().map(|_| Some("prova".into())).collect();
+        let caps: Vec<Option<Vec<CaptionLine>>> = sheets
+            .iter()
+            .map(|sp| {
+                Some(caption_lines(
+                    "prova".into(),
+                    Some("C:\\Lavori".into()),
+                    sp.size.w,
+                    sp.size.h,
+                    4.0,
+                ))
+            })
+            .collect();
         let pdf = build(&Source::Pdf(Arc::new(page)), &sheets, &caps, None, 1.0, 1.0, 4.0).unwrap();
         let pages = winfiles_thumbs::PdfPages::open(pdf).unwrap();
         assert_eq!(pages.len(), sheets.len());
