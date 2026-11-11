@@ -17,6 +17,21 @@ fn c32(c: Color) -> Color32 {
 
 /// Disegna `page` con l'angolo in alto a sinistra in `origin`, a `scale` punti per mm.
 pub fn page(painter: &egui::Painter, origin: Pos2, scale: f32, page: &Page, thumbs: &mut Thumbnails) {
+    items(painter, origin, scale, page, Some(thumbs));
+}
+
+/// Disegna solo linee, forme e testi di `page` (le annotazioni del Visualizza): niente immagini.
+pub fn vectors(painter: &egui::Painter, origin: Pos2, scale: f32, page: &Page) {
+    items(painter, origin, scale, page, None);
+}
+
+fn items(
+    painter: &egui::Painter,
+    origin: Pos2,
+    scale: f32,
+    page: &Page,
+    mut thumbs: Option<&mut Thumbnails>,
+) {
     let mm = |v: f64| v as f32 * scale;
     let map = |r: winfiles_geom::Rect| to_screen(origin, r, scale);
     let at = |(x, y): (f64, f64)| origin + Vec2::new(mm(x), mm(y));
@@ -54,7 +69,11 @@ pub fn page(painter: &egui::Painter, origin: Pos2, scale: f32, page: &Page, thum
                 );
             }
             Item::Text(text) => draw_text(painter, origin, scale, text),
-            Item::Picture(p) => picture(painter, map(p.rect), p, thumbs, scale),
+            Item::Picture(p) => {
+                if let Some(thumbs) = thumbs.as_deref_mut() {
+                    picture(painter, map(p.rect), p, thumbs, scale);
+                }
+            }
             Item::Path {
                 points,
                 closed,

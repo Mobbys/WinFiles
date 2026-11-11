@@ -13,7 +13,7 @@ use winfiles_scene::Page;
 
 use crate::theme::{INTER_REGULAR, INTER_SEMIBOLD};
 
-const FONTS: Fonts = Fonts {
+pub(crate) const FONTS: Fonts = Fonts {
     regular: INTER_REGULAR,
     semibold: INTER_SEMIBOLD,
 };

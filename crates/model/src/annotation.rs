@@ -95,6 +95,31 @@ pub enum Annotation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         width: Option<f64>,
     },
+    /// Un richiamo: un testo in un riquadro (angolo in alto a sinistra in `at`) con una freccia
+    /// che indica `tip`. La freccia parte dal lato del riquadro più vicino alla punta; spostando
+    /// il riquadro la punta resta dov'è.
+    Richiamo {
+        tip: Point,
+        at: Point,
+        text: String,
+        /// Colore di testo, freccia e bordo.
+        color: Rgba,
+        /// Corpo in mm.
+        size: f64,
+        #[serde(default)]
+        bold: bool,
+        /// Spessore della freccia (e del bordo), in mm.
+        line: f64,
+        /// Il riquadro ha il fondo bianco.
+        #[serde(default = "yes")]
+        background: bool,
+        /// Il riquadro ha il bordo nel colore della freccia.
+        #[serde(default = "yes")]
+        border: bool,
+        /// Larghezza a cui il testo va a capo, in mm.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<f64>,
+    },
     /// Un tratto a mano libera dell'evidenziatore, largo e trasparente.
     Evidenziatore {
         points: Vec<Point>,
@@ -124,6 +149,10 @@ fn quote_size() -> f64 {
     QUOTE_SIZE
 }
 
+fn yes() -> bool {
+    true
+}
+
 /// Un punto attaccato a un'altra miniatura: il file (per percorso, che non cambia riordinando),
 /// la pagina e il punto in frazioni di quella miniatura.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -142,7 +171,24 @@ impl Annotation {
             | Annotation::Ovale { a, b, .. }
             | Annotation::Quota { a, b, .. } => vec![*a, *b],
             Annotation::Testo { at, .. } => vec![*at],
+            Annotation::Richiamo { tip, at, .. } => vec![*tip, *at],
             Annotation::Evidenziatore { points, .. } => points.clone(),
+        }
+    }
+
+    /// Il testo da scrivere, per i testi e i richiami.
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Annotation::Testo { text, .. } | Annotation::Richiamo { text, .. } => Some(text),
+            _ => None,
+        }
+    }
+
+    /// Il testo da cambiare, per i testi e i richiami.
+    pub fn text_mut(&mut self) -> Option<&mut String> {
+        match self {
+            Annotation::Testo { text, .. } | Annotation::Richiamo { text, .. } => Some(text),
+            _ => None,
         }
     }
 
@@ -159,6 +205,10 @@ impl Annotation {
                 *b = m(b);
             }
             Annotation::Testo { at, .. } => *at = m(at),
+            Annotation::Richiamo { tip, at, .. } => {
+                *tip = m(tip);
+                *at = m(at);
+            }
             Annotation::Evidenziatore { points, .. } => {
                 for p in points.iter_mut() {
                     *p = m(p);
@@ -226,6 +276,27 @@ impl Annotation {
                 }
                 return !text.trim().is_empty();
             }
+            Annotation::Richiamo {
+                tip,
+                at,
+                text,
+                size,
+                line,
+                width: w,
+                ..
+            } => {
+                point(tip);
+                point(at);
+                *size = clean(*size, 4.0).clamp(0.5, 100.0);
+                width(line);
+                if let Some(w) = w {
+                    *w = clean(*w, 40.0).clamp(2.0, 2000.0);
+                }
+                if text.chars().count() > MAX_TEXT_CHARS {
+                    *text = text.chars().take(MAX_TEXT_CHARS).collect();
+                }
+                return !text.trim().is_empty();
+            }
             Annotation::Evidenziatore { points, width: w, .. } => {
                 points.truncate(MAX_MARKER_POINTS);
                 points.iter_mut().for_each(point);
@@ -282,6 +353,40 @@ mod tests {
             width: 4.0,
         };
         assert!(!m.sanitize());
+    }
+
+    #[test]
+    fn un_richiamo_si_salva_e_si_rilegge() {
+        let r = Annotation::Richiamo {
+            tip: (0.2, 0.3),
+            at: (0.6, 0.1),
+            text: "Colore da controllare".into(),
+            color: Rgba::rgb(220, 38, 38),
+            size: 4.0,
+            bold: false,
+            line: 0.5,
+            background: true,
+            border: true,
+            width: None,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains("\"tipo\":\"richiamo\""));
+        let back: Annotation = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, r);
+        // Senza fondo e bordo scritti valgono accesi.
+        let old = r#"{"tipo":"richiamo","tip":[0.1,0.1],"at":[0.5,0.5],"text":"a","color":{"r":0,"g":0,"b":0,"a":255},"size":4.0,"line":0.5}"#;
+        let Annotation::Richiamo {
+            background, border, ..
+        } = serde_json::from_str(old).unwrap()
+        else {
+            panic!("tipo cambiato");
+        };
+        assert!(background && border);
+        let mut empty = r.clone();
+        if let Some(t) = empty.text_mut() {
+            t.clear();
+        }
+        assert!(!empty.sanitize());
     }
 
     #[test]

@@ -24,6 +24,12 @@ use crate::theme::{Tokens, semibold};
 pub const MAX_SHEETS: usize = 400;
 /// Lo spazio in fondo al foglio per la didascalia, in mm.
 const CAPTION_MM: f64 = 5.0;
+/// Lo spazio in più per la riga del percorso, in mm.
+const PATH_LINE_MM: f64 = 3.4;
+/// Il corpo della didascalia, in mm.
+const CAPTION_SIZE: f64 = 2.4;
+/// Il corpo più piccolo a cui si stringe una riga lunga, in mm: sotto non si legge più.
+const CAPTION_MIN_SIZE: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Turn {
@@ -64,6 +70,10 @@ pub struct Choice {
     /// Il bordo che la stampante non stampa, in mm.
     pub margin: f64,
     pub caption: bool,
+    /// Nella didascalia anche la cartella del file, su una seconda riga.
+    pub path: bool,
+    /// Le annotazioni della riga Annota sopra la pagina.
+    pub annotations: bool,
     pub gray: bool,
     /// I disegni CAD tutti in nero.
     pub cad_black: bool,
@@ -82,6 +92,8 @@ impl Default for Choice {
             overlap: 10.0,
             margin: 4.0,
             caption: true,
+            path: false,
+            annotations: true,
             gray: false,
             cad_black: true,
         }
@@ -96,6 +108,56 @@ impl Choice {
         self.overlap = ok(self.overlap, 0.0, 50.0, 10.0);
         self.margin = ok(self.margin, 0.0, 30.0, 4.0);
         self
+    }
+
+    /// Lo spazio in fondo al foglio per la didascalia, in mm (0 senza).
+    pub fn caption_mm(&self) -> f64 {
+        match (self.caption, self.path) {
+            (false, _) => 0.0,
+            (true, false) => CAPTION_MM,
+            (true, true) => CAPTION_MM + PATH_LINE_MM,
+        }
+    }
+}
+
+/// Una riga della didascalia: il testo, la sua linea di base dall'alto del foglio e il corpo, in mm.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CaptionLine {
+    pub text: String,
+    pub y: f64,
+    pub size: f64,
+}
+
+/// Il corpo con cui `text` sta in `width` mm: quello normale, o più piccolo per una riga lunga
+/// (un percorso non si taglia mai). Larghezza media di una lettera in Helvetica: circa mezzo corpo.
+fn fitted_size(text: &str, width: f64) -> f64 {
+    let chars = text.chars().count().max(1) as f64;
+    (width / (chars * 0.52)).clamp(CAPTION_MIN_SIZE, CAPTION_SIZE)
+}
+
+/// Le righe della didascalia di un foglio largo `w` e alto `h` mm con bordo `margin`: la prima
+/// con nome, pagina, scala e tassello; con `path` sotto la cartella del file.
+pub fn caption_lines(first: String, path: Option<String>, w: f64, h: f64, margin: f64) -> Vec<CaptionLine> {
+    let width = (w - 2.0 * margin).max(1.0);
+    let bottom = h - margin - 1.2;
+    match path {
+        None => vec![CaptionLine {
+            size: fitted_size(&first, width),
+            text: first,
+            y: bottom,
+        }],
+        Some(p) => vec![
+            CaptionLine {
+                size: fitted_size(&first, width),
+                text: first,
+                y: bottom - PATH_LINE_MM,
+            },
+            CaptionLine {
+                size: fitted_size(&p, width),
+                text: p,
+                y: bottom,
+            },
+        ],
     }
 }
 
@@ -133,8 +195,7 @@ fn sheet(paper: Paper, landscape: bool) -> Size {
 }
 
 /// L'area stampabile del foglio: senza il bordo e, con la didascalia, la riga in fondo.
-fn printable(s: Size, margin: f64, caption: bool) -> Size {
-    let bottom = if caption { CAPTION_MM } else { 0.0 };
+fn printable(s: Size, margin: f64, bottom: f64) -> Size {
     Size::new(
         (s.w - 2.0 * margin).max(1.0),
         (s.h - 2.0 * margin - bottom).max(1.0),
@@ -146,7 +207,7 @@ fn printable(s: Size, margin: f64, caption: bool) -> Size {
 pub fn scale_for(content: Size, true_mm: f64, c: &Choice) -> (f64, bool) {
     let wide = content.w > content.h;
     let fit = |landscape: bool| {
-        let p = printable(sheet(c.paper, landscape), c.margin, c.caption);
+        let p = printable(sheet(c.paper, landscape), c.margin, c.caption_mm());
         (p.w / content.w.max(1e-6)).min(p.h / content.h.max(1e-6))
     };
     match c.mode {
@@ -181,7 +242,7 @@ pub fn plan(page: usize, content: Size, true_mm: f64, c: &Choice) -> Vec<SheetPl
     let full = [0.0, 0.0, content.w, content.h];
     let one = |landscape: bool| {
         let size = sheet(c.paper, landscape);
-        let p = printable(size, c.margin, c.caption);
+        let p = printable(size, c.margin, c.caption_mm());
         // Al centro dell'area stampabile; più grande del foglio si centra lo stesso (e si taglia).
         let e = c.margin + (p.w - shown.w) / 2.0;
         let f = c.margin + (p.h - shown.h) / 2.0;
@@ -195,7 +256,7 @@ pub fn plan(page: usize, content: Size, true_mm: f64, c: &Choice) -> Vec<SheetPl
     };
     let grid = |landscape: bool| {
         let size = sheet(c.paper, landscape);
-        let p = printable(size, c.margin, c.caption);
+        let p = printable(size, c.margin, c.caption_mm());
         let step_w = (p.w - c.overlap).max(p.w * 0.5);
         let step_h = (p.h - c.overlap).max(p.h * 0.5);
         let count = |len: f64, area: f64, step: f64| -> usize {
@@ -214,7 +275,7 @@ pub fn plan(page: usize, content: Size, true_mm: f64, c: &Choice) -> Vec<SheetPl
             count(shown.h, p.h, step_h),
         )
     };
-    let p_now = printable(sheet(c.paper, landscape), c.margin, c.caption);
+    let p_now = printable(sheet(c.paper, landscape), c.margin, c.caption_mm());
     let fits = shown.w <= p_now.w + 0.05 && shown.h <= p_now.h + 0.05;
     if fits || !c.tiles || c.mode == Mode::Fit {
         return vec![one(landscape)];
@@ -324,6 +385,38 @@ pub fn parse_pages(text: &str, count: usize) -> Result<Vec<usize>, String> {
     Ok(set.into_iter().collect())
 }
 
+/// Le annotazioni di una pagina da stampare sopra di lei.
+#[derive(Clone, Debug)]
+pub struct Overlay {
+    /// La scena delle annotazioni sul foglio virtuale (`super::annot`).
+    pub scene: winfiles_scene::Page,
+    /// mm del foglio virtuale per mm della pagina mostrata.
+    pub factor: f64,
+    /// Di quanto la pagina mostrata sporge da quella stampata, a sinistra e in alto (mm): i
+    /// disegni CAD si guardano con un po' di carta attorno e si stampano senza.
+    pub offset: (f64, f64),
+}
+
+impl Overlay {
+    /// [s, e, f] che portano le annotazioni dove va la pagina messa con `place`.
+    fn place(&self, place: [f64; 3]) -> [f64; 3] {
+        let [s, e, f] = place;
+        let k = self.factor.max(1e-9);
+        [s / k, e - s * self.offset.0, f - s * self.offset.1]
+    }
+
+    /// Il ritaglio `clip` della pagina stampata nelle misure del foglio virtuale.
+    fn clip(&self, clip: [f64; 4]) -> [f64; 4] {
+        let k = self.factor;
+        [
+            (clip[0] + self.offset.0) * k,
+            (clip[1] + self.offset.1) * k,
+            clip[2] * k,
+            clip[3] * k,
+        ]
+    }
+}
+
 pub struct PrintPage {
     path: PathBuf,
     kind: ViewKind,
@@ -345,9 +438,12 @@ pub struct PrintPage {
     ctx: egui::Context,
     /// La scala vera del disegno CAD: mm veri per unità.
     cad_unit_mm: f64,
+    /// Le annotazioni, per pagina.
+    overlays: BTreeMap<usize, Overlay>,
 }
 
 impl PrintPage {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         ctx: &egui::Context,
         path: &Path,
@@ -356,6 +452,7 @@ impl PrintPage {
         page: usize,
         cad: &CadChoice,
         choice: Choice,
+        overlays: BTreeMap<usize, Overlay>,
     ) -> Self {
         let mut choice = choice.sanitized();
         let mut true_mm = 1.0;
@@ -427,7 +524,7 @@ impl PrintPage {
             );
             let (s, _) = scale_for(*size, true_mm, &choice);
             let fits = one.first().is_some_and(|p| {
-                let area = printable(p.size, choice.margin, choice.caption);
+                let area = printable(p.size, choice.margin, choice.caption_mm());
                 size.w * s <= area.w + 0.05 && size.h * s <= area.h + 0.05
             });
             if !fits {
@@ -458,7 +555,27 @@ impl PrintPage {
             sending: None,
             ctx: ctx.clone(),
             cad_unit_mm,
+            overlays,
         }
+        .with_offsets(opened)
+    }
+
+    /// Lo scarto fra la pagina mostrata e quella stampata (il margine dei disegni CAD).
+    fn with_offsets(mut self, opened: &Opened) -> Self {
+        for (i, o) in &mut self.overlays {
+            if let (Some(shown), Some(printed)) = (opened.pages.get(*i), self.pages.get(*i)) {
+                o.offset = (
+                    ((shown.size.w - printed.w) / 2.0).max(0.0),
+                    ((shown.size.h - printed.h) / 2.0).max(0.0),
+                );
+            }
+        }
+        self
+    }
+
+    /// Le annotazioni di un foglio, se vanno stampate.
+    fn overlay(&self, page: usize) -> Option<&Overlay> {
+        self.overlays.get(&page).filter(|_| self.choice.annotations)
     }
 
     fn cad(&self) -> bool {
@@ -789,7 +906,7 @@ impl PrintPage {
                     },
                 );
                 let too_big = one.first().is_some_and(|p| {
-                    let area = printable(p.size, self.choice.margin, self.choice.caption);
+                    let area = printable(p.size, self.choice.margin, self.choice.caption_mm());
                     printed.w > area.w + 0.05 || printed.h > area.h + 0.05
                 });
                 if too_big && !self.choice.tiles {
@@ -846,6 +963,20 @@ impl PrintPage {
             "Didascalia in fondo al foglio",
         ))
         .on_hover_text("Nome del file, pagina, scala e tassello, in piccolo sotto il disegno");
+        ui.add_enabled_ui(self.choice.caption, |ui| {
+            ui.add(crate::fluent::checkbox(
+                &mut self.choice.path,
+                "Percorso del file",
+            ))
+            .on_hover_text("La cartella del file su una seconda riga della didascalia");
+        });
+        if !self.overlays.is_empty() {
+            ui.add(crate::fluent::checkbox(
+                &mut self.choice.annotations,
+                "Annotazioni",
+            ))
+            .on_hover_text("Testi, frecce e forme disegnati con Annota sopra la pagina");
+        }
         ui.add(crate::fluent::checkbox(&mut self.choice.gray, "Bianco e nero"));
         if cad {
             let before = self.choice.cad_black;
@@ -1024,7 +1155,7 @@ impl PrintPage {
         let to = |x: f64, y: f64| pos2(paper.left() + x as f32 * k, paper.top() + y as f32 * k);
         // L'area stampabile, tratteggiata.
         let m = self.choice.margin;
-        let area = printable(sp.size, m, self.choice.caption);
+        let area = printable(sp.size, m, self.choice.caption_mm());
         let ar = Rect::from_min_max(to(m, m), to(m + area.w, m + area.h));
         let dashes = [
             ar.left_top(),
@@ -1073,6 +1204,10 @@ impl PrintPage {
                 clipped.rect_filled(page_rect, 0.0, Color32::from_gray(235));
             }
         }
+        if let Some(o) = self.overlay(sp.page) {
+            let [os, oe, of] = o.place(sp.place);
+            crate::paint::vectors(&clipped, to(oe, of), k * os as f32, &o.scene);
+        }
         // I bordi della sovrapposizione dei tasselli.
         if sp.tile.is_some() && self.choice.overlap > 0.0 {
             let o = self.choice.overlap as f32 * k;
@@ -1086,17 +1221,34 @@ impl PrintPage {
             }
         }
         if self.choice.caption {
-            painter.text(
-                to(m, sp.size.h - m - 1.2),
-                egui::Align2::LEFT_BOTTOM,
-                self.caption(&sp, unit),
-                egui::FontId::proportional((2.4 * k).clamp(6.0, 13.0)),
-                Color32::from_gray(80),
-            );
+            for line in self.caption(&sp, unit) {
+                painter.text(
+                    to(m, line.y),
+                    egui::Align2::LEFT_BOTTOM,
+                    line.text,
+                    egui::FontId::proportional((line.size as f32 * k).clamp(4.0, 13.0)),
+                    Color32::from_gray(80),
+                );
+            }
         }
     }
 
-    fn caption(&self, sp: &SheetPlan, unit: Unit) -> String {
+    fn caption(&self, sp: &SheetPlan, unit: Unit) -> Vec<CaptionLine> {
+        let folder = self
+            .choice
+            .path
+            .then(|| self.path.parent().map(|d| d.display().to_string()))
+            .flatten();
+        caption_lines(
+            self.caption_text(sp, unit),
+            folder,
+            sp.size.w,
+            sp.size.h,
+            self.choice.margin,
+        )
+    }
+
+    fn caption_text(&self, sp: &SheetPlan, unit: Unit) -> String {
         let mut s = super::file_name(&self.path);
         if self.pages.len() > 1 {
             s.push_str(&format!(" · pagina {}", sp.page + 1));
@@ -1116,11 +1268,18 @@ impl PrintPage {
     /// Compone il PDF dei fogli e lo manda alla stampante, in un thread a parte.
     fn start(&mut self, sheets: &[SheetPlan], calibration: Option<Calibration>, unit: Unit) {
         let sheets = sheets.to_vec();
-        let captions: Vec<Option<String>> = sheets
+        let captions: Vec<Option<Vec<CaptionLine>>> = sheets
             .iter()
             .map(|sp| self.choice.caption.then(|| self.caption(sp, unit)))
             .collect();
         let source = self.source.clone();
+        let overlays: BTreeMap<usize, Overlay> = self
+            .overlays
+            .iter()
+            .filter(|_| self.choice.annotations)
+            .filter(|(i, _)| sheets.iter().any(|sp| sp.page == **i))
+            .map(|(i, o)| (*i, o.clone()))
+            .collect();
         let true_mm = self.true_mm;
         let cad_unit_mm = self.cad_unit_mm;
         let margin = self.choice.margin;
@@ -1143,6 +1302,7 @@ impl PrintPage {
                     &source,
                     &sheets,
                     &captions,
+                    &overlays,
                     calibration,
                     true_mm,
                     cad_unit_mm,
@@ -1164,10 +1324,12 @@ impl PrintPage {
 
 /// Il PDF di stampa: per ogni foglio la pagina messa al suo posto, ritagliata al tassello, con la
 /// didascalia; tutto passato per la correzione della stampante.
+#[allow(clippy::too_many_arguments)]
 fn build(
     source: &Source,
     sheets: &[SheetPlan],
-    captions: &[Option<String>],
+    captions: &[Option<Vec<CaptionLine>>],
+    overlays: &BTreeMap<usize, Overlay>,
     calibration: Option<Calibration>,
     true_mm: f64,
     cad_unit_mm: f64,
@@ -1228,12 +1390,13 @@ fn build(
         }
         let texts: Vec<winfiles_cad::TextLine> = text
             .iter()
+            .flatten()
             .map(|t| winfiles_cad::TextLine {
                 x: margin,
-                y: sp.size.h - margin - 1.2,
-                size: 2.4,
+                y: t.y,
+                size: t.size,
                 gray: 0.3,
-                text: t.clone(),
+                text: t.text.clone(),
             })
             .collect();
         let pdf = if texts.is_empty() && lines.is_empty() {
@@ -1244,7 +1407,20 @@ fn build(
         };
         caption_files.push(pdf);
     }
+    // Le annotazioni: un PDF con una pagina per ogni pagina annotata, nell'ordine delle pagine.
+    let notes = if overlays.is_empty() {
+        None
+    } else {
+        let scenes: Vec<winfiles_scene::Page> = overlays.values().map(|o| o.scene.clone()).collect();
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let (bytes, _) = winfiles_pdf_out::write(&scenes, &crate::export::FONTS, &never, |_| {})
+            .map_err(|e| e.to_string())?;
+        Some(PdfFile::from_bytes(bytes).map_err(|e| e.to_string())?)
+    };
     let mut sources: Vec<&PdfFile> = vec![&file];
+    if let Some(n) = &notes {
+        sources.push(n);
+    }
     let mut nest = Vec::new();
     for (sp, cap) in sheets.iter().zip(&caption_files) {
         let [s, e, f] = sp.place;
@@ -1262,6 +1438,24 @@ fn build(
             clip,
             hide: Vec::new(),
         }];
+        if let Some(n) = overlays.keys().position(|p| *p == sp.page)
+            && let Some(o) = overlays.get(&sp.page)
+        {
+            let [os, oe, of] = o.place(sp.place);
+            let c = o.clip(sp.clip);
+            pieces.push(SheetPiece {
+                source: 1,
+                page: n,
+                matrix: matrix(os, oe, of),
+                clip: vec![vec![
+                    [c[0], c[1]],
+                    [c[0] + c[2], c[1]],
+                    [c[0] + c[2], c[1] + c[3]],
+                    [c[0], c[1] + c[3]],
+                ]],
+                hide: Vec::new(),
+            });
+        }
         if let Some(cf) = cap {
             sources.push(cf);
             pieces.push(SheetPiece {
@@ -1299,6 +1493,88 @@ mod tests {
         assert!(parse_pages("0", 10).is_err());
         assert!(parse_pages("due", 10).is_err());
         assert!(parse_pages("  ", 10).is_err());
+    }
+
+    #[test]
+    fn le_annotazioni_vanno_sulla_pagina_stampata() {
+        // Una pagina A4 bianca e un rettangolo rosso pieno in alto a sinistra, sul foglio virtuale.
+        let page = winfiles_cad::text_page(210.0, 297.0, &[], &[]).unwrap();
+        let mut scene = winfiles_scene::Page::new(Size::new(210.0, 297.0));
+        scene.push(winfiles_scene::Item::Rect {
+            rect: winfiles_geom::Rect::new(20.0, 20.0, 40.0, 40.0),
+            radius: 0.0,
+            fill: Some(winfiles_scene::Color::rgb(255, 0, 0)),
+            stroke: None,
+        });
+        let overlays = BTreeMap::from([(
+            0,
+            Overlay {
+                scene,
+                factor: 1.0,
+                offset: (0.0, 0.0),
+            },
+        )]);
+        let c = Choice {
+            caption: false,
+            mode: Mode::Fit,
+            ..Choice::default()
+        };
+        let sheets = plan(0, Size::new(210.0, 297.0), 1.0, &c);
+        let pdf = build(
+            &Source::Pdf(Arc::new(page)),
+            &sheets,
+            &[None],
+            &overlays,
+            None,
+            1.0,
+            1.0,
+            4.0,
+        )
+        .unwrap();
+        let pages = winfiles_thumbs::PdfPages::open(pdf).unwrap();
+        let img = pages.render(0, 297).unwrap();
+        let px = |x: u32, y: u32| {
+            let i = ((y * img.width + x) * 4) as usize;
+            (img.rgba[i], img.rgba[i + 1], img.rgba[i + 2])
+        };
+        // Al centro del rettangolo (40 mm, 40 mm della pagina, ridotta ad Adatta) è rosso; fuori no.
+        let [s, e, f] = sheets[0].place;
+        let k = img.width as f64 / sheets[0].size.w;
+        let (x, y) = (((e + s * 40.0) * k) as u32, ((f + s * 40.0) * k) as u32);
+        let (r, g, b) = px(x, y);
+        assert!(r > 200 && g < 60 && b < 60, "{r} {g} {b}");
+        let (r, g, b) = px(((e + s * 120.0) * k) as u32, ((f + s * 150.0) * k) as u32);
+        assert!(r > 200 && g > 200 && b > 200, "{r} {g} {b}");
+    }
+
+    #[test]
+    fn il_percorso_va_su_una_seconda_riga_intera() {
+        let lines = caption_lines(
+            "a.pdf · scala 1:1".into(),
+            Some("C:\\Lavori".into()),
+            210.0,
+            297.0,
+            4.0,
+        );
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].y < lines[1].y);
+        assert!((lines[1].size - CAPTION_SIZE).abs() < 1e-9);
+        // Un percorso lunghissimo si stringe ma resta intero.
+        let long = format!("C:\\{}", "cartella\\".repeat(30));
+        let lines = caption_lines("a.pdf".into(), Some(long.clone()), 210.0, 297.0, 4.0);
+        assert_eq!(lines[1].text, long);
+        assert!(lines[1].size < CAPTION_SIZE);
+        assert!(lines[1].size >= CAPTION_MIN_SIZE);
+    }
+
+    #[test]
+    fn con_il_percorso_la_didascalia_prende_piu_spazio() {
+        let mut c = Choice::default();
+        let one = c.caption_mm();
+        c.path = true;
+        assert!(c.caption_mm() > one);
+        c.caption = false;
+        assert_eq!(c.caption_mm(), 0.0);
     }
 
     fn a4() -> Choice {
@@ -1386,8 +1662,29 @@ mod tests {
             ..Choice::default()
         };
         let sheets = plan(0, Size::new(500.0, 700.0), 1.0, &c);
-        let caps: Vec<Option<String>> = sheets.iter().map(|_| Some("prova".into())).collect();
-        let pdf = build(&Source::Pdf(Arc::new(page)), &sheets, &caps, None, 1.0, 1.0, 4.0).unwrap();
+        let caps: Vec<Option<Vec<CaptionLine>>> = sheets
+            .iter()
+            .map(|sp| {
+                Some(caption_lines(
+                    "prova".into(),
+                    Some("C:\\Lavori".into()),
+                    sp.size.w,
+                    sp.size.h,
+                    4.0,
+                ))
+            })
+            .collect();
+        let pdf = build(
+            &Source::Pdf(Arc::new(page)),
+            &sheets,
+            &caps,
+            &BTreeMap::new(),
+            None,
+            1.0,
+            1.0,
+            4.0,
+        )
+        .unwrap();
         let pages = winfiles_thumbs::PdfPages::open(pdf).unwrap();
         assert_eq!(pages.len(), sheets.len());
     }

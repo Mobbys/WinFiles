@@ -16,6 +16,7 @@ use crate::app::{POINTS_PER_MM, card};
 use crate::icons;
 use crate::theme::{Tokens, semibold};
 
+pub mod annot;
 mod info;
 pub mod load;
 mod office;
@@ -183,6 +184,10 @@ pub struct ViewerModule {
     /// Il punto (mm della pagina) da cui parte la zona che si sta tracciando.
     sel_anchor: Option<[f64; 2]>,
     quotes: crate::quotes::Quotes,
+    /// Le annotazioni sopra le pagine (la riga Annota).
+    pub notes: annot::Notes,
+    /// L'altezza della riga Annota all'ultimo disegno.
+    annot_row: f32,
     pub print: Option<print::PrintPage>,
     /// Le scelte della pagina Stampa, ricordate nelle impostazioni.
     pub print_choice: print::Choice,
@@ -222,6 +227,8 @@ impl ViewerModule {
             selection: None,
             sel_anchor: None,
             quotes: crate::quotes::Quotes::default(),
+            notes: annot::Notes::new(),
+            annot_row: 0.0,
             print: None,
             print_choice: print::Choice::default(),
             calibrations: std::collections::BTreeMap::new(),
@@ -499,6 +506,9 @@ impl ViewerModule {
     // --- Tastiera e menu ------------------------------------------------------------------
 
     pub fn shortcuts(&mut self, ctx: &egui::Context) {
+        if self.print.is_none() {
+            self.notes.keys(ctx);
+        }
         if ctx.egui_wants_keyboard_input() {
             return;
         }
@@ -631,6 +641,23 @@ impl ViewerModule {
             self.status = "Aspetta che il file sia aperto".into();
             return;
         };
+        // Le annotazioni delle pagine, se si vedono.
+        let mut overlays = std::collections::BTreeMap::new();
+        if self.notes.show {
+            for (i, p) in o.pages.iter().enumerate() {
+                let list = self.notes.list(&d.path, i);
+                if !list.is_empty() {
+                    overlays.insert(
+                        i,
+                        print::Overlay {
+                            scene: annot::scene(&self.ctx, list, p.size, Unit::Mm),
+                            factor: annot::factor(p.size),
+                            offset: (0.0, 0.0),
+                        },
+                    );
+                }
+            }
+        }
         self.print = Some(print::PrintPage::new(
             &self.ctx,
             &d.path,
@@ -639,6 +666,7 @@ impl ViewerModule {
             d.page,
             &d.cad,
             self.print_choice.clone(),
+            overlays,
         ));
     }
 
@@ -860,6 +888,41 @@ impl ViewerModule {
                     .clicked()
                     {
                         self.toggle_side(SideTab::Quotes);
+                        if self.side_open && self.side_tab == SideTab::Quotes {
+                            self.notes.annot.close();
+                        }
+                    }
+                    separator(ui);
+                    let on = self.notes.annot.on;
+                    let tint = if on { t.on_primary } else { t.text_strong };
+                    let mut b = egui::Button::image_and_text(
+                        icons::image("pencil", 17.0, tint),
+                        egui::RichText::new("Annota").color(tint),
+                    )
+                    .min_size(vec2(0.0, 32.0));
+                    if on {
+                        b = b.fill(t.primary);
+                    }
+                    if ui
+                        .add_enabled(has, b)
+                        .on_hover_text(
+                            "Testo, frecce, forme ed evidenziatore sopra la pagina: il file non cambia, \
+                             le annotazioni restano in WinFiles e vanno in stampa",
+                        )
+                        .clicked()
+                    {
+                        if on {
+                            self.notes.annot.close();
+                        } else {
+                            self.notes.annot.on = true;
+                            self.notes.show = true;
+                            self.selecting = false;
+                            self.selection = None;
+                            if self.side_open && self.side_tab == SideTab::Quotes {
+                                self.side_open = false;
+                                self.quoting = false;
+                            }
+                        }
                     }
                 }
                 let height = left.min_rect().height().max(38.0) + 8.0;
@@ -1042,7 +1105,31 @@ impl ViewerModule {
         let tabs_h = 34.0;
         let tabs = Rect::from_min_size(full.min, vec2(full.width(), tabs_h));
         self.tabs(ui, tabs);
-        let rest = full.with_min_y(tabs.bottom() + 6.0);
+        let mut rest = full.with_min_y(tabs.bottom() + 6.0);
+        // La riga Annota sopra la pagina: va a capo quando la finestra è stretta.
+        if self.notes.annot.on {
+            let area = rest.with_max_y(rest.bottom() - 100.0);
+            let mut row = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(area)
+                    .layout(egui::Layout::top_down(Align::Min)),
+            );
+            row.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                ui.spacing_mut().interact_size.y = 32.0;
+                self.notes.bar(ui);
+            });
+            // L'altezza resta la più alta vista: scegliendo un'annotazione la riga cambia
+            // comandi, e la pagina non deve saltare sotto il puntatore.
+            let h = row.min_rect().height().max(32.0);
+            if h > self.annot_row + 0.5 {
+                self.annot_row = h;
+                ui.ctx().request_repaint();
+            }
+            rest = rest.with_min_y(rest.top() + self.annot_row + 6.0);
+        } else {
+            self.annot_row = 0.0;
+        }
         let side_w = if self.side_open {
             (rest.width() * 0.26).clamp(260.0, 340.0)
         } else {
@@ -1365,7 +1452,7 @@ impl ViewerModule {
         // Trascinare sposta la pagina (le quote, se attive, usano il trascinamento).
         if let Some(dv) = hand {
             self.pan += dv;
-        } else if !self.quoting && !self.selecting && resp.dragged() {
+        } else if !self.quoting && !self.selecting && !self.notes.annot.on && resp.dragged() {
             self.pan += resp.drag_delta();
         }
         // La rotella scorre la pagina; arrivati in fondo (o in cima) passa alla pagina dopo.
@@ -1543,6 +1630,24 @@ impl ViewerModule {
                 dash(tr, Color32::from_rgb(22, 163, 74));
             }
         }
+        // Le annotazioni (e, con Annota aperta, i gesti per tracciarle). Non con la mano del pan.
+        {
+            let path = d.path.clone();
+            let pages = d.page_count();
+            if hand.is_some() {
+                let on = self.notes.annot.on;
+                self.notes.annot.on = false;
+                self.notes
+                    .view(ui, &resp, board, paper, scale, size, &path, page_no, pages, unit);
+                self.notes.annot.on = on;
+            } else {
+                self.notes
+                    .view(ui, &resp, board, paper, scale, size, &path, page_no, pages, unit);
+            }
+        }
+        let Some(d) = self.docs.get_mut(self.current) else {
+            return;
+        };
         // Il puntatore in mm, dall'angolo in alto a sinistra della pagina.
         // I disegni CAD grandi si guardano ridotti: righelli, puntatore e quote dicono i mm veri.
         let real_k = match d.opened().map(|o| &o.facts) {
@@ -1766,7 +1871,7 @@ impl ViewerModule {
             );
         }
         // Il doppio clic rimette la pagina intera.
-        if resp.double_clicked() && !self.quoting {
+        if resp.double_clicked() && !self.quoting && !self.notes.annot.on {
             self.zoom = Zoom::Fit;
             self.pan = Vec2::ZERO;
         }
