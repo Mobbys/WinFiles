@@ -1649,3 +1649,88 @@ fn un_rotolo_di_50_metri_usa_la_user_unit() {
     let pdf = Pdf::new(out.to_bytes().unwrap()).unwrap();
     assert!(pdf.pages()[0].raw().get::<f64>(b"UserUnit").is_none());
 }
+
+#[test]
+fn ogni_copia_porta_solo_i_suoi_tracciati() {
+    // Tre quadrati rossi, ognuno con la sua fustella nera, sulla stessa pagina: tre sagome. Ogni
+    // copia ritagliata deve contenere il suo quadrato e la sua fustella, non quelli delle altre
+    // (il RIP vede anche quello che il ritaglio nasconde). In più un quadrato verde che il suo
+    // ritaglio, vicino al terzo quadrato, nasconde del tutto: non deve arrivare in nessuna copia.
+    let content = leak(
+        "1 0 0 rg 10 10 80 80 re f 110 10 80 80 re f 210 10 80 80 re f \
+         0 0 0 1 K 1 w 10 10 80 80 re S 110 10 80 80 re S 210 10 80 80 re S \
+         q 291 91 4 4 re W n 0 1 0 rg 0 0 50 50 re f Q"
+            .to_string(),
+    );
+    let file = PdfFile::from_bytes(pdf(&[page([0.0, 0.0, 300.0, 100.0], 0, content)])).unwrap();
+    let scan = file.scan_page(0).unwrap();
+    assert_eq!(scan.paths.len(), 6);
+    assert_eq!(scan.unseen.len(), 1);
+    let die: Vec<PathId> = scan
+        .paths
+        .iter()
+        .filter(|p| p.line.is_some())
+        .map(|p| p.id)
+        .collect();
+    let shape = die_shape(&scan, &die).unwrap();
+    let pieces = split_shape(&shape);
+    assert_eq!(pieces.len(), 3);
+    // Ogni sagoma due volte, una sotto l'altra, nella stessa colonna della pagina.
+    let (w, h) = (pt_to_mm(300.0), pt_to_mm(100.0));
+    let mut list = Vec::new();
+    for shape in &pieces {
+        for row in 0..2 {
+            list.push(SheetPiece {
+                source: 0,
+                page: 0,
+                matrix: [1.0, 0.0, 0.0, 1.0, 0.0, row as f64 * h],
+                clip: grow_shape(shape, 2.0),
+                hide: Vec::new(),
+            });
+        }
+    }
+    let sheet = NestSheet {
+        width: w,
+        height: 2.0 * h,
+        pieces: list,
+        lines: Vec::new(),
+    };
+    let out = nest_document(&[&file], &[sheet], None).unwrap();
+    let bytes = out.to_bytes().unwrap();
+    // Sei copie, sei quadrati pieni e sei fustelle in tutto: non 36.
+    let scan = out.scan_page(0).unwrap();
+    assert_eq!(scan.paths.iter().filter(|p| p.fill.is_some()).count(), 6);
+    assert_eq!(scan.paths.iter().filter(|p| p.line.is_some()).count(), 6);
+    // Le copie della stessa sagoma usano lo stesso modulo: tre in tutto, e la pagina intera,
+    // che nessuno usa, non resta nel file.
+    let reread = PdfFile::from_bytes(bytes.clone()).unwrap();
+    let forms = reread
+        .0
+        .scan_objects()
+        .filter(|(_, o)| {
+            matches!(&**o, pdfcraft_cos::Object::Stream(st)
+                if st.dict.get(b"Subtype").and_then(pdfcraft_cos::Object::as_name) == Some(&b"Form"[..]))
+        })
+        .count();
+    assert_eq!(forms, 3);
+    // Il quadrato verde nascosto non c'è; il suo ritaglio resta solo nella copia del terzo
+    // quadrato, nelle altre è vuoto.
+    let mut kept = 0;
+    for (_, o) in reread.0.scan_objects() {
+        if let pdfcraft_cos::Object::Stream(st) = &*o {
+            let text = String::from_utf8_lossy(&st.decoded().unwrap()).to_string();
+            assert!(!text.contains("50 50 re"), "{text}");
+            kept += usize::from(text.contains("291 91 4 4 re"));
+        }
+    }
+    assert_eq!(kept, 1);
+    let pdf = Pdf::new(bytes).unwrap();
+    // A vista non cambia nulla: il centro di ogni quadrato è rosso, fra un quadrato e l'altro
+    // bianco.
+    let img = render(&pdf, 0);
+    for cx in [50, 150, 250] {
+        assert!(is_red(pixel(&img, cx, 50)));
+        assert!(is_red(pixel(&img, cx, 150)));
+    }
+    assert!(is_white(pixel(&img, 100, 50)));
+}

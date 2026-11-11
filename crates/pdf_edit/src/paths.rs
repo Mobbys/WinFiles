@@ -184,9 +184,17 @@ pub struct PageScan {
     pub truncated: bool,
     /// I tracciati che ritagliano quello che viene dopo (le maschere), senza colore.
     masks: Vec<PathInfo>,
+    /// I tracciati dipinti tutti fuori dal loro ritaglio: non si vedono, ma ci sono (il RIP li
+    /// legge lo stesso). Non stanno in `paths`.
+    pub(crate) unseen: Vec<PathId>,
 }
 
 impl PageScan {
+    /// I tracciati che ritagliano (le maschere).
+    pub(crate) fn masks(&self) -> &[PathInfo] {
+        &self.masks
+    }
+
     /// I tracciati di ritaglio con una forma vera (lo scontorno di Photoshop, i gruppi di
     /// ritaglio di Illustrator): i loro pezzi chiusi, in mm della pagina come si vede. I
     /// rettangoli (la pagina, la tavola da disegno, una foto squadrata) e i ritagli di pochi
@@ -727,6 +735,9 @@ impl Scanner<'_> {
         if let Some(c) = s.clip
             && intersect(c, bounds).is_none()
         {
+            if self.out.unseen.len() < MAX_PATHS {
+                self.out.unseen.push(PathId { owner, op });
+            }
             return;
         }
         let [a, b, c, d, _, _] = s.ctm.0;
@@ -1162,17 +1173,65 @@ pub(crate) fn without(doc: &Document, page: usize, ids: &[PathId]) -> Result<(Ve
     Ok((serialize_ops(&out), left))
 }
 
-/// Toglie dalla pagina i tracciati `ids` (vedi [`without`]): restituisce quanti stanno dentro i
-/// moduli e restano.
-pub(crate) fn hide(doc: &mut Document, page: usize, ids: &[PathId]) -> Result<usize, EditError> {
-    let (data, left) = without(doc, page, ids)?;
+/// Il contenuto della pagina senza i tracciati `ids`, tolti del tutto (costruzione e pittura):
+/// per il RIP non esistono più, nemmeno come tracciati vuoti. Un tracciato che ritaglia fra gli
+/// `ids` diventa un ritaglio vuoto (`0 0 0 0 re W n`): quello che ritagliava non si vede più,
+/// come quando il suo ritaglio cadeva fuori dalla copia.
+pub(crate) fn pruned(doc: &Document, page: usize, ids: &[PathId]) -> Result<Vec<u8>, EditError> {
     let page_ref = organize::pages(doc)?
         .get(page)
         .map(|p| p.obj)
         .ok_or(EditError::NoPage(page.saturating_add(1)))?;
-    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), &data)));
-    doc.update_dict(page_ref, |d| d.set(b"Contents".to_vec(), Object::Ref(contents)))?;
-    Ok(left)
+    let data = page_content(doc, page_ref)?;
+    let targets: HashSet<usize> = ids
+        .iter()
+        .filter(|id| id.owner == Owner::Page(page_ref))
+        .map(|id| id.op)
+        .collect();
+    if targets.is_empty() {
+        return Ok(data);
+    }
+    let resources = page_resources(doc, page_ref);
+    let res = read_res(doc, &resources);
+    let ops = parse(&data).ops;
+    let spots = locate(&ops, &res);
+    // Gli operatori da togliere: la pittura e la costruzione del suo tracciato.
+    let mut drop: HashSet<usize> = HashSet::new();
+    // I ritagli svuotati: dove comincia il tracciato va il rettangolo vuoto.
+    let mut empty: HashSet<usize> = HashSet::new();
+    for (&i, sp) in &spots {
+        if !targets.contains(&i) {
+            continue;
+        }
+        if sp.clips {
+            empty.insert(sp.start);
+        } else {
+            drop.insert(i);
+        }
+        for j in sp.start..i {
+            let building = ops
+                .get(j)
+                .is_some_and(|o| matches!(o.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re"));
+            if building {
+                drop.insert(j);
+            }
+        }
+    }
+    let out: Vec<Op> = ops
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, op)| {
+            if empty.contains(&i) {
+                let zero = || Object::Int(0);
+                Some(Op::new("re", vec![zero(), zero(), zero(), zero()]))
+            } else if drop.contains(&i) {
+                None
+            } else {
+                Some(op)
+            }
+        })
+        .collect();
+    Ok(serialize_ops(&out))
 }
 
 /// Le risorse per tracciare in una tinta piatta nuova: lo spazio colore e lo stato grafico con la
