@@ -312,7 +312,7 @@ pub fn items(ctx: &egui::Context, project: &Project, slots: &[Slot]) -> Vec<Item
         };
         out.push(Item {
             id,
-            content: page.map_or_else(|| placeholder_size(f.kind), PageInfo::finished),
+            content: page.map_or_else(|| placeholder_size(f.kind), |p| p.size),
             folder: label.clone(),
             caption: caption_height(
                 ctx,

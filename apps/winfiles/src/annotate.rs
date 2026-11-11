@@ -124,6 +124,20 @@ pub struct Style {
     pub callout_border: bool,
 }
 
+impl Style {
+    /// Lo stesso stile con spessori e corpi moltiplicati per `k`.
+    pub fn scaled(&self, k: f64) -> Self {
+        let k = if k.is_finite() && k > 0.0 { k } else { 1.0 };
+        Self {
+            width: self.width * k,
+            text_size: self.text_size * k,
+            marker_width: self.marker_width * k,
+            quote_size: self.quote_size * k,
+            ..self.clone()
+        }
+    }
+}
+
 impl Default for Style {
     fn default() -> Self {
         Self {
@@ -613,7 +627,8 @@ fn draw_one(
 
 /// La lunghezza vera, in mm, tra due punti della pagina `page` mostrata nella miniatura.
 pub fn true_length(page: &PageInfo, a: Point, b: Point) -> f64 {
-    let s = page.finished();
+    // La miniatura mostra tutta la pagina, abbondanza compresa.
+    let s = page.size;
     ((b.0 - a.0) * s.w).hypot((b.1 - a.1) * s.h)
 }
 
@@ -879,6 +894,21 @@ fn screen_bounds(ctx: &egui::Context, a: &Annotation, image: MmRect, origin: Pos
             r
         }
     }
+}
+
+/// Il riquadro (mm) di un'annotazione sulla pagina `image`, senza spessori.
+pub fn bounds_mm(ctx: &egui::Context, a: &Annotation, image: MmRect) -> MmRect {
+    let r = screen_bounds(ctx, a, image, Pos2::ZERO, 1.0);
+    if !r.is_finite() || r.is_negative() {
+        let (x, y) = to_mm(image, (0.5, 0.5));
+        return MmRect::new(x, y, 0.0, 0.0);
+    }
+    MmRect::new(
+        f64::from(r.left()),
+        f64::from(r.top()),
+        f64::from(r.width()),
+        f64::from(r.height()),
+    )
 }
 
 /// Il solo riquadro di un richiamo a schermo (senza la freccia).

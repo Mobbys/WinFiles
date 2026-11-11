@@ -113,7 +113,7 @@ jobs:
           pattern: convertitore-*
           path: convertitori
           merge-multiple: true
-      - run: sudo apt-get update -q && sudo apt-get install -y -q wixl
+      - run: installer/installa-wixl.sh
       - name: Installer e copia portatile
         env:
           VERSION: ${{ needs.versione.outputs.version }}

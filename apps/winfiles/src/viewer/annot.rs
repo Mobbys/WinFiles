@@ -17,7 +17,7 @@ use winfiles_layout::{Placed, Sheet};
 use winfiles_model::{Annotation, FileEntry, FileKind, MAX_PER_PAGE, Project};
 use winfiles_scene::Page;
 
-use crate::annotate::Annotator;
+use crate::annotate::{Annotator, Style};
 use crate::captions::Slot;
 use crate::sketch::Sketch;
 
@@ -41,31 +41,59 @@ pub fn factor(size: Size) -> f64 {
 }
 
 /// Il foglio virtuale di una pagina, con la pagina che lo riempie.
+#[cfg(test)]
 fn sheet(size: Size) -> (Sheet, MmRect) {
     let f = factor(size);
-    let v = Size::new(size.w * f, size.h * f);
-    let image = MmRect::new(0.0, 0.0, v.w, v.h);
-    let sheet = Sheet {
-        size: v,
-        area: image,
+    let image = MmRect::new(0.0, 0.0, size.w * f, size.h * f);
+    (sheet_with(Size::new(image.w, image.h), image), image)
+}
+
+/// Un foglio virtuale grande `size` con la pagina in `image`: le annotazioni possono andare
+/// anche fuori dalla pagina, fin dove arriva il foglio.
+fn sheet_with(size: Size, image: MmRect) -> Sheet {
+    Sheet {
+        size,
+        area: MmRect::new(0.0, 0.0, size.w, size.h),
         title: None,
         headers: Vec::new(),
         items: vec![Placed {
             id: 0,
             cell: image,
             image,
-            caption: MmRect::new(0.0, v.h, 0.0, 0.0),
+            caption: MmRect::new(image.x, image.bottom(), 0.0, 0.0),
         }],
-    };
-    (sheet, image)
+    }
 }
 
-/// La scena delle annotazioni di una pagina sul suo foglio virtuale.
-pub fn scene(ctx: &egui::Context, list: &[Annotation], size: Size, unit: Unit) -> Page {
-    let (sheet, image) = sheet(size);
+/// Margine attorno alle annotazioni nella scena di stampa (mm del foglio virtuale): punte e
+/// spessori escono un poco dal riquadro dei punti.
+const SCENE_PAD: f64 = 10.0;
+/// Fin dove una scena di stampa si allarga oltre la pagina (mm del foglio virtuale).
+const SCENE_REACH: f64 = 3000.0;
+
+/// La scena delle annotazioni di una pagina, grande quanto serve a contenerle tutte, anche
+/// quelle fuori dalla pagina; con il posto dell'angolo della pagina nella scena (mm virtuali).
+pub fn scene(ctx: &egui::Context, list: &[Annotation], size: Size, unit: Unit) -> (Page, (f64, f64)) {
+    let f = factor(size);
+    let v = Size::new(size.w * f, size.h * f);
+    let page = MmRect::new(0.0, 0.0, v.w, v.h);
+    let (mut x0, mut y0, mut x1, mut y1) = (0.0_f64, 0.0_f64, v.w, v.h);
+    for a in list {
+        let b = crate::annotate::bounds_mm(ctx, a, page);
+        x0 = x0.min(b.x - SCENE_PAD);
+        y0 = y0.min(b.y - SCENE_PAD);
+        x1 = x1.max(b.right() + SCENE_PAD);
+        y1 = y1.max(b.bottom() + SCENE_PAD);
+    }
+    let x0 = x0.max(-SCENE_REACH);
+    let y0 = y0.max(-SCENE_REACH);
+    let x1 = x1.min(v.w + SCENE_REACH);
+    let y1 = y1.min(v.h + SCENE_REACH);
+    let image = MmRect::new(-x0, -y0, v.w, v.h);
+    let sheet = sheet_with(Size::new(x1 - x0, y1 - y0), image);
     let mut sk = Sketch::new(ctx, sheet.size);
     crate::annotate::draw(&mut sk, image, list, None, unit, &|_, _| None);
-    sk.page
+    (sk.page, (-x0, -y0))
 }
 
 pub struct Notes {
@@ -79,6 +107,11 @@ pub struct Notes {
     /// Com'erano all'ultimo salvataggio.
     saved: Vec<Stored>,
     store: Option<PathBuf>,
+    /// mm del foglio virtuale per mm di carta, mentre si annota nell'anteprima di stampa: lì
+    /// spessori e corpi si scrivono in mm della carta.
+    pub paper: Option<f64>,
+    /// Lo stile dell'anteprima di stampa, in mm della carta: a parte da quello del Visualizza.
+    paper_style: Style,
 }
 
 impl Notes {
@@ -106,7 +139,23 @@ impl Notes {
             show: true,
             saved,
             store,
+            paper: None,
+            paper_style: Style::default(),
         }
+    }
+
+    /// Fa `f` con lo stile della carta se si annota nella stampa: in mm del foglio virtuale se
+    /// `virtual_mm` (per tracciare), in mm della carta altrimenti (per la riga dei comandi).
+    fn styled<R>(&mut self, virtual_mm: bool, f: impl FnOnce(&mut Self) -> R) -> R {
+        let Some(r) = self.paper else {
+            return f(self);
+        };
+        let k = if virtual_mm { r } else { 1.0 };
+        let own = std::mem::replace(&mut self.annot.style, self.paper_style.scaled(k));
+        let out = f(self);
+        self.paper_style = self.annot.style.scaled(1.0 / k);
+        self.annot.style = own;
+        out
     }
 
     /// Le annotazioni di una pagina di un file.
@@ -137,14 +186,29 @@ impl Notes {
         self.project.files.len() - 1
     }
 
-    /// Le annotazioni sopra la pagina: `paper` è la pagina a schermo, `scale` i punti per mm
-    /// della pagina, `resp` la tavola (che sente clic e trascinamenti).
+    /// I riquadri delle annotazioni di una pagina grande `size`, in mm della pagina.
+    pub fn bounds(&self, ctx: &egui::Context, path: &Path, page: usize, size: Size) -> Vec<MmRect> {
+        let f = factor(size);
+        let image = MmRect::new(0.0, 0.0, size.w * f, size.h * f);
+        self.list(path, page)
+            .iter()
+            .map(|a| {
+                let b = crate::annotate::bounds_mm(ctx, a, image);
+                MmRect::new(b.x / f, b.y / f, b.w / f, b.h / f)
+            })
+            .collect()
+    }
+
+    /// Le annotazioni sopra la pagina: `paper` è la pagina a schermo, `frame` dove le
+    /// annotazioni possono andare (anche fuori dalla pagina), `scale` i punti per mm della
+    /// pagina, `resp` la tavola (che sente clic e trascinamenti).
     #[allow(clippy::too_many_arguments)]
     pub fn view(
         &mut self,
         ui: &mut egui::Ui,
         resp: &egui::Response,
         clip: Rect,
+        frame: Rect,
         paper: Rect,
         scale: f32,
         size: Size,
@@ -160,9 +224,20 @@ impl Notes {
         if !self.annot.busy() {
             self.shown = self.project.clone();
         }
-        let (sheet, image) = sheet(size);
-        let vscale = scale / factor(size) as f32;
-        let origin = paper.min;
+        let f = factor(size);
+        let vscale = (scale / f as f32).max(1e-6);
+        let origin = frame.min;
+        let image = MmRect::new(
+            f64::from((paper.min.x - frame.min.x) / vscale),
+            f64::from((paper.min.y - frame.min.y) / vscale),
+            size.w * f,
+            size.h * f,
+        );
+        let room = Size::new(
+            f64::from(frame.width() / vscale),
+            f64::from(frame.height() / vscale),
+        );
+        let sheet = sheet_with(room, image);
         if self.show || self.annot.on {
             let list = self
                 .shown
@@ -185,8 +260,10 @@ impl Notes {
             }];
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(clip));
             child.set_clip_rect(clip);
-            self.annot
-                .interact(&mut child, resp, origin, vscale, &sheet, &slots, &mut self.shown);
+            self.styled(true, |n| {
+                n.annot
+                    .interact(&mut child, resp, origin, vscale, &sheet, &slots, &mut n.shown);
+            });
             for (f, p) in self.annot.take_pending() {
                 self.annot.commit(&mut self.project, &self.shown, f, p);
             }
@@ -199,9 +276,9 @@ impl Notes {
     pub fn bar(&mut self, ui: &mut egui::Ui) {
         let selected = self.annot.selected_annotation(&self.shown).cloned();
         let mut show = self.show;
-        let out = self.annot.bar(ui, selected.as_ref(), &mut show);
+        let out = self.styled(false, |n| n.annot.bar(ui, selected.as_ref(), &mut show));
         self.show = show;
-        self.annot.apply(&out, &mut self.project);
+        self.styled(true, |n| n.annot.apply(&out, &mut n.project));
         self.save_if_changed();
     }
 
@@ -210,7 +287,7 @@ impl Notes {
         if !self.annot.on {
             return;
         }
-        self.annot.keys(ctx, &mut self.project, &mut self.shown);
+        self.styled(true, |n| n.annot.keys(ctx, &mut n.project, &mut n.shown));
         self.save_if_changed();
     }
 
