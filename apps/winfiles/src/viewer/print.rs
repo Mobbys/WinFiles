@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use winfiles_geom::{Calibration, Paper, Size, Unit, format_length, format_number, format_size};
 use winfiles_pdf_edit::{NestSheet, PdfFile, SheetPiece};
 
+use super::annot::Notes;
 use super::load::{CadChoice, Content, Facts, Opened, Renderer, ViewKind};
 use crate::app::{segmented, stepper};
 use crate::printing::{PrinterScan, pick};
@@ -395,6 +396,9 @@ pub struct Overlay {
     /// Di quanto la pagina mostrata sporge da quella stampata, a sinistra e in alto (mm): i
     /// disegni CAD si guardano con un po' di carta attorno e si stampano senza.
     pub offset: (f64, f64),
+    /// Dove sta l'angolo della pagina nella scena (mm del foglio virtuale): la scena si allarga
+    /// per tenere anche le annotazioni fuori dalla pagina.
+    pub pad: (f64, f64),
 }
 
 impl Overlay {
@@ -402,15 +406,19 @@ impl Overlay {
     fn place(&self, place: [f64; 3]) -> [f64; 3] {
         let [s, e, f] = place;
         let k = self.factor.max(1e-9);
-        [s / k, e - s * self.offset.0, f - s * self.offset.1]
+        [
+            s / k,
+            e - s * (self.offset.0 + self.pad.0 / k),
+            f - s * (self.offset.1 + self.pad.1 / k),
+        ]
     }
 
-    /// Il ritaglio `clip` della pagina stampata nelle misure del foglio virtuale.
+    /// Il ritaglio `clip` della pagina stampata nelle misure della scena.
     fn clip(&self, clip: [f64; 4]) -> [f64; 4] {
         let k = self.factor;
         [
-            (clip[0] + self.offset.0) * k,
-            (clip[1] + self.offset.1) * k,
+            (clip[0] + self.offset.0) * k + self.pad.0,
+            (clip[1] + self.offset.1) * k + self.pad.1,
             clip[2] * k,
             clip[3] * k,
         ]
@@ -438,8 +446,10 @@ pub struct PrintPage {
     ctx: egui::Context,
     /// La scala vera del disegno CAD: mm veri per unità.
     cad_unit_mm: f64,
-    /// Le annotazioni, per pagina.
-    overlays: BTreeMap<usize, Overlay>,
+    /// Le pagine come si vedono nel Visualizza (mm): le annotazioni sono fatte su queste.
+    shown: Vec<Size>,
+    /// L'altezza della riga Annota sopra l'anteprima: resta la più alta vista.
+    annot_row: f32,
 }
 
 impl PrintPage {
@@ -452,7 +462,6 @@ impl PrintPage {
         page: usize,
         cad: &CadChoice,
         choice: Choice,
-        overlays: BTreeMap<usize, Overlay>,
     ) -> Self {
         let mut choice = choice.sanitized();
         let mut true_mm = 1.0;
@@ -555,27 +564,94 @@ impl PrintPage {
             sending: None,
             ctx: ctx.clone(),
             cad_unit_mm,
-            overlays,
+            shown: opened.pages.iter().map(|p| p.size).collect(),
+            annot_row: 0.0,
         }
-        .with_offsets(opened)
+    }
+
+    /// La pagina come si vede nel Visualizza.
+    fn shown_size(&self, page: usize) -> Size {
+        self.shown
+            .get(page)
+            .or_else(|| self.pages.get(page))
+            .copied()
+            .unwrap_or(Size::new(100.0, 100.0))
     }
 
     /// Lo scarto fra la pagina mostrata e quella stampata (il margine dei disegni CAD).
-    fn with_offsets(mut self, opened: &Opened) -> Self {
-        for (i, o) in &mut self.overlays {
-            if let (Some(shown), Some(printed)) = (opened.pages.get(*i), self.pages.get(*i)) {
-                o.offset = (
-                    ((shown.size.w - printed.w) / 2.0).max(0.0),
-                    ((shown.size.h - printed.h) / 2.0).max(0.0),
-                );
-            }
+    fn offset(&self, page: usize) -> (f64, f64) {
+        match (self.shown.get(page), self.pages.get(page)) {
+            (Some(shown), Some(printed)) => (
+                ((shown.w - printed.w) / 2.0).max(0.0),
+                ((shown.h - printed.h) / 2.0).max(0.0),
+            ),
+            _ => (0.0, 0.0),
         }
-        self
     }
 
-    /// Le annotazioni di un foglio, se vanno stampate.
-    fn overlay(&self, page: usize) -> Option<&Overlay> {
-        self.overlays.get(&page).filter(|_| self.choice.annotations)
+    /// Le annotazioni vanno in stampa.
+    fn notes_on(&self, notes: &Notes) -> bool {
+        notes.annot.on || (self.choice.annotations && notes.show)
+    }
+
+    /// Il file ha annotazioni (o si stanno facendo): c'è la casella "Annotazioni".
+    fn has_notes(&self, notes: &Notes) -> bool {
+        notes.annot.on || (notes.show && notes.any(&self.path))
+    }
+
+    /// Le annotazioni di una pagina da stampare, se ci sono e vanno stampate.
+    fn overlay(&self, notes: &Notes, page: usize) -> Option<Overlay> {
+        if !self.notes_on(notes) {
+            return None;
+        }
+        let list = notes.list(&self.path, page);
+        if list.is_empty() {
+            return None;
+        }
+        let size = self.shown_size(page);
+        let (scene, pad) = super::annot::scene(&self.ctx, list, size, Unit::Mm);
+        Some(Overlay {
+            scene,
+            factor: super::annot::factor(size),
+            offset: self.offset(page),
+            pad,
+        })
+    }
+
+    /// Le annotazioni che escono dal foglio (o, con i tasselli, dalla pagina) e non si stampano
+    /// intere.
+    fn outside(&self, notes: &Notes, sheets: &[SheetPlan]) -> usize {
+        if !self.notes_on(notes) {
+            return 0;
+        }
+        let mut pages: Vec<usize> = sheets.iter().map(|sp| sp.page).collect();
+        pages.dedup();
+        let mut n = 0;
+        for page in pages {
+            let Some(sp) = sheets.iter().find(|sp| sp.page == page) else {
+                continue;
+            };
+            let off = self.offset(page);
+            let printed = self.pages.get(page).copied().unwrap_or(Size::new(0.0, 0.0));
+            let [s, e, f] = sp.place;
+            let s = s.max(1e-9);
+            // Dove le annotazioni si stampano, in mm della pagina stampata.
+            let (x0, y0, x1, y1) = if sp.tile.is_some() {
+                (0.0, 0.0, printed.w, printed.h)
+            } else {
+                (-e / s, -f / s, (sp.size.w - e) / s, (sp.size.h - f) / s)
+            };
+            let tol = 0.5 / s;
+            n += notes
+                .bounds(&self.ctx, &self.path, page, self.shown_size(page))
+                .iter()
+                .filter(|b| {
+                    let (bx, by) = (b.x - off.0, b.y - off.1);
+                    bx < x0 - tol || by < y0 - tol || bx + b.w > x1 + tol || by + b.h > y1 + tol
+                })
+                .count();
+        }
+        n
     }
 
     fn cad(&self) -> bool {
@@ -625,6 +701,7 @@ impl PrintPage {
         ui: &mut egui::Ui,
         unit: Unit,
         calibrations: &BTreeMap<String, Calibration>,
+        notes: &mut Notes,
     ) -> Outcome {
         let t = Tokens::get(ui.ctx());
         self.renderer.receive(ui.ctx());
@@ -654,7 +731,7 @@ impl PrintPage {
         let sheets = self.sheets();
         self.sheet = self.sheet.min(sheets.len().saturating_sub(1));
         let mut out = Outcome::Keep;
-        self.preview(ui, view, &sheets, unit);
+        self.preview(ui, view, &sheets, unit, notes);
         crate::app::card(ui, side);
         let inner = side.shrink2(vec2(16.0, 12.0));
         let foot = Rect::from_min_max(pos2(inner.left(), inner.bottom() - 82.0), inner.max);
@@ -665,7 +742,7 @@ impl PrintPage {
                 .max_rect(foot)
                 .layout(egui::Layout::top_down(Align::Min)),
         );
-        if let Some(o) = self.footer(&mut foot_ui, calibrations, &sheets, unit) {
+        if let Some(o) = self.footer(&mut foot_ui, calibrations, &sheets, unit, notes) {
             out = o;
         }
         let mut child = ui.new_child(
@@ -687,7 +764,7 @@ impl PrintPage {
                         .wrap(),
                 );
                 ui.add_space(8.0);
-                if let Some(o) = self.settings(ui, unit, calibrations, &sheets) {
+                if let Some(o) = self.settings(ui, unit, calibrations, &sheets, notes) {
                     out = o;
                 }
             });
@@ -704,6 +781,7 @@ impl PrintPage {
         unit: Unit,
         calibrations: &BTreeMap<String, Calibration>,
         sheets: &[SheetPlan],
+        notes: &Notes,
     ) -> Option<Outcome> {
         let t = Tokens::get(ui.ctx());
         let label = |ui: &mut egui::Ui, s: &str| {
@@ -970,12 +1048,23 @@ impl PrintPage {
             ))
             .on_hover_text("La cartella del file su una seconda riga della didascalia");
         });
-        if !self.overlays.is_empty() {
-            ui.add(crate::fluent::checkbox(
-                &mut self.choice.annotations,
-                "Annotazioni",
-            ))
-            .on_hover_text("Testi, frecce e forme disegnati con Annota sopra la pagina");
+        if self.has_notes(notes) {
+            ui.add_enabled_ui(!notes.annot.on, |ui| {
+                ui.add(crate::fluent::checkbox(
+                    &mut self.choice.annotations,
+                    "Annotazioni",
+                ))
+                .on_hover_text("Testi, frecce e forme disegnati con Annota sopra la pagina e sul foglio");
+            });
+            let out = self.outside(notes, sheets);
+            if out > 0 {
+                let text = if out == 1 {
+                    "1 annotazione esce dal foglio: si stampa solo la parte dentro".to_string()
+                } else {
+                    format!("{out} annotazioni escono dal foglio: si stampa solo la parte dentro")
+                };
+                ui.add(egui::Label::new(egui::RichText::new(text).color(t.warning)).wrap());
+            }
         }
         ui.add(crate::fluent::checkbox(&mut self.choice.gray, "Bianco e nero"));
         if cad {
@@ -999,6 +1088,7 @@ impl PrintPage {
         calibrations: &BTreeMap<String, Calibration>,
         sheets: &[SheetPlan],
         unit: Unit,
+        notes: &Notes,
     ) -> Option<Outcome> {
         let t = Tokens::get(ui.ctx());
         let calibration = self.calibration(calibrations);
@@ -1047,7 +1137,7 @@ impl PrintPage {
             .fill(fill)
             .min_size(vec2(150.0, 40.0));
             if ui.add_enabled(can, b).clicked() {
-                self.start(sheets, calibration, unit);
+                self.start(sheets, calibration, unit, notes);
             }
             if busy {
                 ui.add(egui::Spinner::new().color(t.accent));
@@ -1082,14 +1172,81 @@ impl PrintPage {
         );
     }
 
-    fn preview(&mut self, ui: &mut egui::Ui, rect: Rect, sheets: &[SheetPlan], unit: Unit) {
+    fn preview(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: Rect,
+        sheets: &[SheetPlan],
+        unit: Unit,
+        notes: &mut Notes,
+    ) {
         let t = Tokens::get(ui.ctx());
         crate::app::card(ui, rect);
         let bar = Rect::from_min_size(rect.min + vec2(12.0, 8.0), vec2(rect.width() - 24.0, 34.0));
-        let board = Rect::from_min_max(
-            pos2(rect.left() + 12.0, bar.bottom() + 6.0),
-            rect.max - vec2(12.0, 12.0),
+        // Qui spessori e corpi delle annotazioni si scrivono in mm della carta.
+        notes.paper = sheets
+            .get(self.sheet)
+            .map(|sp| super::annot::factor(self.shown_size(sp.page)) / sp.place[0].max(1e-9));
+        // Il tasto Annota, a destra nella barra dei fogli.
+        let mut annota_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(bar)
+                .layout(egui::Layout::right_to_left(Align::Center)),
         );
+        let on = notes.annot.on;
+        let tint = if on { t.on_primary } else { t.text_strong };
+        let mut b = egui::Button::image_and_text(
+            crate::icons::image("pencil", 17.0, tint),
+            egui::RichText::new("Annota").color(tint),
+        )
+        .min_size(vec2(0.0, 30.0));
+        if on {
+            b = b.fill(t.primary);
+        }
+        if annota_ui
+            .add(b)
+            .on_hover_text(
+                "Testo, frecce, forme ed evidenziatore sul foglio, anche nel bianco attorno al \
+                 file: sono le stesse annotazioni del Visualizza",
+            )
+            .clicked()
+        {
+            if on {
+                notes.annot.close();
+            } else {
+                notes.annot.on = true;
+                notes.show = true;
+                self.choice.annotations = true;
+            }
+        }
+        let bar = bar.with_max_x(annota_ui.min_rect().left() - 8.0);
+        let mut top = bar.bottom() + 6.0;
+        // La riga degli strumenti: va a capo quando la finestra è stretta.
+        if notes.annot.on {
+            let area = Rect::from_min_max(
+                pos2(rect.left() + 12.0, top),
+                pos2(rect.right() - 12.0, rect.bottom() - 100.0),
+            );
+            let mut row = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(area)
+                    .layout(egui::Layout::top_down(Align::Min)),
+            );
+            row.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                ui.spacing_mut().interact_size.y = 32.0;
+                notes.bar(ui);
+            });
+            let h = row.min_rect().height().max(32.0);
+            if h > self.annot_row + 0.5 {
+                self.annot_row = h;
+                ui.ctx().request_repaint();
+            }
+            top += self.annot_row + 6.0;
+        } else {
+            self.annot_row = 0.0;
+        }
+        let board = Rect::from_min_max(pos2(rect.left() + 12.0, top), rect.max - vec2(12.0, 12.0));
         ui.painter().rect_filled(board, t.radius, t.pasteboard);
         let mut bar_ui = ui.new_child(
             egui::UiBuilder::new()
@@ -1204,9 +1361,37 @@ impl PrintPage {
                 clipped.rect_filled(page_rect, 0.0, Color32::from_gray(235));
             }
         }
-        if let Some(o) = self.overlay(sp.page) {
-            let [os, oe, of] = o.place(sp.place);
-            crate::paint::vectors(&clipped, to(oe, of), k * os as f32, &o.scene);
+        // Le annotazioni: su un foglio intero anche nel bianco attorno alla pagina, con i
+        // tasselli solo nel pezzo. Con Annota aperta si tracciano qui, sul foglio.
+        if self.notes_on(notes) {
+            let frame = if sp.tile.is_some() { clip_rect } else { paper };
+            let sense = if notes.annot.on {
+                egui::Sense::click_and_drag()
+            } else {
+                egui::Sense::hover()
+            };
+            let resp = ui.interact(board, ui.id().with("stampa-annota"), sense);
+            let off = self.offset(sp.page);
+            let size = self.shown_size(sp.page);
+            let ks = k * s as f32;
+            let shown_rect = Rect::from_min_size(
+                page_rect.min - vec2(off.0 as f32, off.1 as f32) * ks,
+                vec2(size.w as f32, size.h as f32) * ks,
+            );
+            let path = self.path.clone();
+            notes.view(
+                ui,
+                &resp,
+                frame.intersect(board),
+                frame,
+                shown_rect,
+                ks,
+                size,
+                &path,
+                sp.page,
+                self.pages.len(),
+                unit,
+            );
         }
         // I bordi della sovrapposizione dei tasselli.
         if sp.tile.is_some() && self.choice.overlap > 0.0 {
@@ -1266,20 +1451,21 @@ impl PrintPage {
     }
 
     /// Compone il PDF dei fogli e lo manda alla stampante, in un thread a parte.
-    fn start(&mut self, sheets: &[SheetPlan], calibration: Option<Calibration>, unit: Unit) {
+    fn start(&mut self, sheets: &[SheetPlan], calibration: Option<Calibration>, unit: Unit, notes: &Notes) {
         let sheets = sheets.to_vec();
         let captions: Vec<Option<Vec<CaptionLine>>> = sheets
             .iter()
             .map(|sp| self.choice.caption.then(|| self.caption(sp, unit)))
             .collect();
         let source = self.source.clone();
-        let overlays: BTreeMap<usize, Overlay> = self
-            .overlays
-            .iter()
-            .filter(|_| self.choice.annotations)
-            .filter(|(i, _)| sheets.iter().any(|sp| sp.page == **i))
-            .map(|(i, o)| (*i, o.clone()))
-            .collect();
+        let mut overlays: BTreeMap<usize, Overlay> = BTreeMap::new();
+        for sp in &sheets {
+            if !overlays.contains_key(&sp.page)
+                && let Some(o) = self.overlay(notes, sp.page)
+            {
+                overlays.insert(sp.page, o);
+            }
+        }
         let true_mm = self.true_mm;
         let cad_unit_mm = self.cad_unit_mm;
         let margin = self.choice.margin;
@@ -1442,17 +1628,24 @@ fn build(
             && let Some(o) = overlays.get(&sp.page)
         {
             let [os, oe, of] = o.place(sp.place);
-            let c = o.clip(sp.clip);
-            pieces.push(SheetPiece {
-                source: 1,
-                page: n,
-                matrix: matrix(os, oe, of),
-                clip: vec![vec![
+            // Su un foglio intero le annotazioni vanno anche nel bianco attorno alla pagina; con
+            // i tasselli ognuno tiene il suo pezzo.
+            let clip = if sp.tile.is_some() {
+                let c = o.clip(sp.clip);
+                vec![vec![
                     [c[0], c[1]],
                     [c[0] + c[2], c[1]],
                     [c[0] + c[2], c[1] + c[3]],
                     [c[0], c[1] + c[3]],
-                ]],
+                ]]
+            } else {
+                Vec::new()
+            };
+            pieces.push(SheetPiece {
+                source: 1,
+                page: n,
+                matrix: matrix(os, oe, of),
+                clip,
                 hide: Vec::new(),
             });
         }
@@ -1496,6 +1689,57 @@ mod tests {
     }
 
     #[test]
+    fn le_annotazioni_fuori_dalla_pagina_vanno_sul_foglio() {
+        // Un A5 a misura vera al centro di un A4; un rettangolo rosso a sinistra, fuori dalla
+        // pagina (nella scena, a 10 mm dal bordo: la pagina comincia a 40 mm).
+        let page = winfiles_cad::text_page(148.0, 210.0, &[], &[]).unwrap();
+        let mut scene = winfiles_scene::Page::new(Size::new(188.0, 210.0));
+        scene.push(winfiles_scene::Item::Rect {
+            rect: winfiles_geom::Rect::new(5.0, 100.0, 20.0, 20.0),
+            radius: 0.0,
+            fill: Some(winfiles_scene::Color::rgb(255, 0, 0)),
+            stroke: None,
+        });
+        let overlays = BTreeMap::from([(
+            0,
+            Overlay {
+                scene,
+                factor: 1.0,
+                offset: (0.0, 0.0),
+                pad: (40.0, 0.0),
+            },
+        )]);
+        let c = Choice {
+            caption: false,
+            mode: Mode::Real,
+            ..Choice::default()
+        };
+        let sheets = plan(0, Size::new(148.0, 210.0), 1.0, &c);
+        let pdf = build(
+            &Source::Pdf(Arc::new(page)),
+            &sheets,
+            &[None],
+            &overlays,
+            None,
+            1.0,
+            1.0,
+            4.0,
+        )
+        .unwrap();
+        let pages = winfiles_thumbs::PdfPages::open(pdf).unwrap();
+        let img = pages.render(0, 400).unwrap();
+        let [s, e, f] = sheets[0].place;
+        assert!((s - 1.0).abs() < 1e-9);
+        let k = img.width as f64 / sheets[0].size.w;
+        // Il centro del rettangolo: 15 mm nella scena = 25 mm a sinistra della pagina.
+        let (x, y) = (((e - 25.0) * k) as u32, ((f + 110.0) * k) as u32);
+        assert!(e > 25.0, "la pagina deve lasciare posto a sinistra");
+        let i = ((y * img.width + x) * 4) as usize;
+        let (r, g, b) = (img.rgba[i], img.rgba[i + 1], img.rgba[i + 2]);
+        assert!(r > 200 && g < 60 && b < 60, "{r} {g} {b}");
+    }
+
+    #[test]
     fn le_annotazioni_vanno_sulla_pagina_stampata() {
         // Una pagina A4 bianca e un rettangolo rosso pieno in alto a sinistra, sul foglio virtuale.
         let page = winfiles_cad::text_page(210.0, 297.0, &[], &[]).unwrap();
@@ -1512,6 +1756,7 @@ mod tests {
                 scene,
                 factor: 1.0,
                 offset: (0.0, 0.0),
+                pad: (0.0, 0.0),
             },
         )]);
         let c = Choice {

@@ -506,9 +506,7 @@ impl ViewerModule {
     // --- Tastiera e menu ------------------------------------------------------------------
 
     pub fn shortcuts(&mut self, ctx: &egui::Context) {
-        if self.print.is_none() {
-            self.notes.keys(ctx);
-        }
+        self.notes.keys(ctx);
         if ctx.egui_wants_keyboard_input() {
             return;
         }
@@ -641,23 +639,6 @@ impl ViewerModule {
             self.status = "Aspetta che il file sia aperto".into();
             return;
         };
-        // Le annotazioni delle pagine, se si vedono.
-        let mut overlays = std::collections::BTreeMap::new();
-        if self.notes.show {
-            for (i, p) in o.pages.iter().enumerate() {
-                let list = self.notes.list(&d.path, i);
-                if !list.is_empty() {
-                    overlays.insert(
-                        i,
-                        print::Overlay {
-                            scene: annot::scene(&self.ctx, list, p.size, Unit::Mm),
-                            factor: annot::factor(p.size),
-                            offset: (0.0, 0.0),
-                        },
-                    );
-                }
-            }
-        }
         self.print = Some(print::PrintPage::new(
             &self.ctx,
             &d.path,
@@ -666,7 +647,6 @@ impl ViewerModule {
             d.page,
             &d.cad,
             self.print_choice.clone(),
-            overlays,
         ));
     }
 
@@ -1097,6 +1077,7 @@ impl ViewerModule {
             self.print_body(ui, unit);
             return;
         }
+        self.notes.paper = None;
         let full = ui.max_rect();
         if self.docs.is_empty() {
             self.empty(ui, full);
@@ -1637,12 +1618,14 @@ impl ViewerModule {
             if hand.is_some() {
                 let on = self.notes.annot.on;
                 self.notes.annot.on = false;
-                self.notes
-                    .view(ui, &resp, board, paper, scale, size, &path, page_no, pages, unit);
+                self.notes.view(
+                    ui, &resp, board, board, paper, scale, size, &path, page_no, pages, unit,
+                );
                 self.notes.annot.on = on;
             } else {
-                self.notes
-                    .view(ui, &resp, board, paper, scale, size, &path, page_no, pages, unit);
+                self.notes.view(
+                    ui, &resp, board, board, paper, scale, size, &path, page_no, pages, unit,
+                );
             }
         }
         let Some(d) = self.docs.get_mut(self.current) else {
@@ -1945,7 +1928,7 @@ impl ViewerModule {
         let Some(mut page) = self.print.take() else {
             return;
         };
-        let outcome = page.show(ui, unit, &self.calibrations);
+        let outcome = page.show(ui, unit, &self.calibrations, &mut self.notes);
         self.print_choice = page.choice.clone();
         match outcome {
             print::Outcome::Keep => self.print = Some(page),
