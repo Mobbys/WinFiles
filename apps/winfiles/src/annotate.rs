@@ -719,6 +719,8 @@ pub struct Annotator {
     /// Le miniature del foglio all'ultimo disegno, con il loro file: per attaccare i capi delle
     /// linee alla miniatura su cui finiscono.
     placed: Vec<(Spot, PathBuf)>,
+    /// Senza lo strumento Quota (il Visualizza ha già le sue quote con la misura vera).
+    pub no_quote: bool,
 }
 
 /// Il riquadro di un'annotazione a schermo, per sceglierla e per le maniglie.
@@ -924,6 +926,76 @@ impl Annotator {
         Self {
             style: style.sanitized(),
             ..Self::default()
+        }
+    }
+
+    /// Un gesto o un testo è a metà: la copia mostrata non va rifatta dal lavoro.
+    pub fn busy(&self) -> bool {
+        self.drag.is_some() || self.editing.is_some() || self.typing_value.is_some()
+    }
+
+    /// I tasti delle annotazioni: Esc, Canc, Ctrl+Z/Y, copia e incolla. `project` è dove
+    /// vanno le modifiche, `shown` la copia mostrata. Da chiamare prima degli altri tasti della
+    /// scheda, perché Canc e Ctrl+C valgano per l'annotazione scelta.
+    pub fn keys(&mut self, ctx: &egui::Context, project: &mut Project, shown: &mut Project) {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            self.escape(shown);
+            for (file, page) in self.take_pending() {
+                self.commit(project, shown, file, page);
+            }
+        }
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let pressed = |mods, key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(mods, key)));
+        if self.selected.is_some()
+            && (pressed(Modifiers::NONE, Key::Delete) || pressed(Modifiers::NONE, Key::Backspace))
+        {
+            self.delete_selected(project);
+        }
+        if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z) || pressed(Modifiers::COMMAND, Key::Y) {
+            self.redo(project);
+        } else if pressed(Modifiers::COMMAND, Key::Z) {
+            self.undo(project);
+        }
+        // Copia e incolla arrivano come eventi; con un'annotazione scelta copiano lei.
+        let (copy, paste) = ctx.input(|i| {
+            (
+                i.events.iter().any(|e| matches!(e, egui::Event::Copy)),
+                i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
+                    || i.modifiers.command && i.key_pressed(Key::V),
+            )
+        });
+        if copy && self.copy(shown) {
+            ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Copy)));
+            // Negli appunti va un testo: con appunti vuoti Windows non manda l'Incolla.
+            ctx.copy_text("Annotazione di WinFiles".into());
+        }
+        if paste {
+            self.paste(project);
+        }
+    }
+
+    /// Quello che la riga Annota chiede di fare.
+    pub fn apply(&mut self, out: &BarOutput, project: &mut Project) {
+        if out.undo {
+            self.undo(project);
+        }
+        if out.redo {
+            self.redo(project);
+        }
+        if out.delete {
+            self.delete_selected(project);
+        }
+        if out.restyle {
+            self.restyle_selected(project);
+        }
+        if let Some((start, end)) = out.arrows {
+            self.set_arrows(project, start, end);
+        }
+        if out.true_sizes {
+            self.true_sizes(project);
         }
     }
 
@@ -1919,6 +1991,9 @@ impl Annotator {
         let t = Tokens::get(ui.ctx());
         ui.spacing_mut().item_spacing.x = 4.0;
         for (tool, icon, tip) in Tool::ALL {
+            if self.no_quote && tool == Tool::Quote {
+                continue;
+            }
             if crate::icons::button(ui, icon, tip, self.tool == tool, true, 30.0).clicked() {
                 self.tool = tool;
                 if tool != Tool::Select {

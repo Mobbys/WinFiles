@@ -327,6 +327,7 @@ impl WinFilesApp {
         }
         app.viewer.inks = app.pdf.inks.clone();
         app.viewer.print_choice = app.prefs.viewer.print.clone().sanitized();
+        app.viewer.notes.annot.style = app.prefs.annotate.clone().sanitized();
         app.viewer.cad_dark = !app.prefs.viewer.cad_light;
         // `--visualizza file`: il doppio clic in Esplora file, se WinFiles è il predefinito.
         if !view_files.is_empty() {
@@ -2427,69 +2428,16 @@ static NONE: BTreeSet<usize> = BTreeSet::new();
 impl WinFilesApp {
     /// Quello che la riga Annota chiede di fare nel lavoro.
     fn annot_bar(&mut self, out: crate::annotate::BarOutput) {
-        if out.undo {
-            self.annot.undo(&mut self.project);
-        }
-        if out.redo {
-            self.annot.redo(&mut self.project);
-        }
-        if out.delete {
-            self.annot.delete_selected(&mut self.project);
-        }
-        if out.restyle {
-            self.annot.restyle_selected(&mut self.project);
-        }
-        if let Some((start, end)) = out.arrows {
-            self.annot.set_arrows(&mut self.project, start, end);
-        }
-        if out.true_sizes {
-            self.annot.true_sizes(&mut self.project);
-        }
+        self.annot.apply(&out, &mut self.project);
     }
 
     /// I tasti delle annotazioni, prima di quelli dell'elenco dei file: Canc toglie
     /// l'annotazione scelta e non il file.
     fn annotate_keys(&mut self, ctx: &egui::Context) {
-        use egui::{Key, KeyboardShortcut, Modifiers};
         if !self.annot.on || self.module != Module::Thumbnails {
             return;
         }
-        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-            self.annot.escape(&mut self.shown);
-            for (file, page) in self.annot.take_pending() {
-                self.annot.commit(&mut self.project, &self.shown, file, page);
-            }
-        }
-        if ctx.egui_wants_keyboard_input() {
-            return;
-        }
-        let pressed = |mods, key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(mods, key)));
-        if self.annot.selected.is_some()
-            && (pressed(Modifiers::NONE, Key::Delete) || pressed(Modifiers::NONE, Key::Backspace))
-        {
-            self.annot.delete_selected(&mut self.project);
-        }
-        if pressed(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z) || pressed(Modifiers::COMMAND, Key::Y) {
-            self.annot.redo(&mut self.project);
-        } else if pressed(Modifiers::COMMAND, Key::Z) {
-            self.annot.undo(&mut self.project);
-        }
-        // Copia e incolla arrivano come eventi; con un'annotazione scelta copiano lei.
-        let (copy, paste) = ctx.input(|i| {
-            (
-                i.events.iter().any(|e| matches!(e, egui::Event::Copy)),
-                i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
-                    || i.modifiers.command && i.key_pressed(Key::V),
-            )
-        });
-        if copy && self.annot.copy(&self.shown) {
-            ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Copy)));
-            // Negli appunti va un testo: con appunti vuoti Windows non manda l'Incolla.
-            ctx.copy_text("Annotazione di WinFiles".into());
-        }
-        if paste {
-            self.annot.paste(&mut self.project);
-        }
+        self.annot.keys(ctx, &mut self.project, &mut self.shown);
     }
 }
 
