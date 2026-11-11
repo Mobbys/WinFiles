@@ -668,3 +668,17 @@ fn su_n_fogli_quando_non_ci_sta_usa_meno_fogli_possibile() {
     assert!(fit_to_sheets(&settings, 0, fixed(&items)).is_ok());
     assert_eq!(fit_to_sheets(&settings, 2, fixed(&[])).unwrap().sheets.len(), 1);
 }
+
+#[test]
+fn su_n_fogli_due_strisce_orizzontali_vanno_sul_foglio_orizzontale() {
+    // Segnalato da Michel: due strisce sottili orizzontali su un A4 finivano sul foglio verticale.
+    let settings = PrintSettings::default();
+    let items = vec![item(0, 1000.0, 100.0, "a"), item(1, 1000.0, 100.0, "a")];
+    let fit = fit_to_sheets(&settings, 1, fixed(&items)).unwrap();
+    assert_eq!(fit.orientation, Orientation::Landscape, "colonne {}", fit.columns);
+    assert_eq!(fit.columns, 1);
+    assert_eq!(fit.sheets.len(), 1);
+    // Larghe quanto il foglio orizzontale meno i margini, non quanto quello verticale.
+    let a4 = sheet_size(settings.paper, Orientation::Portrait);
+    assert!(fit.sheets[0].items[0].image.w > a4.w);
+}
