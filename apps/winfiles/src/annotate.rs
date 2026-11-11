@@ -38,6 +38,8 @@ pub const MARKER_YELLOW: Rgba = Rgba::rgb(255, 221, 0);
 pub const SOFT_ALPHA: f64 = 0.4;
 /// Passi annullabili tenuti al più.
 const MAX_UNDO: usize = 200;
+/// Dove va il riquadro di un richiamo fatto con un clic, rispetto alla punta (mm).
+const CALLOUT_OFFSET: (f64, f64) = (12.0, -14.0);
 /// Punti dell'ovale disegnato come poligono: liscio anche a tutta pagina.
 const ELLIPSE_STEPS: usize = 96;
 
@@ -47,6 +49,7 @@ pub enum Tool {
     #[default]
     Select,
     Text,
+    Callout,
     Arrow,
     Line,
     Rect,
@@ -56,12 +59,17 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [(Tool, &'static str, &'static str); 8] = [
+    pub const ALL: [(Tool, &'static str, &'static str); 9] = [
         (Tool::Select, "mouse-pointer-2", "Scegli e sposta (Esc)"),
         (
             Tool::Text,
             "type",
             "Testo: clic e scrivi, oppure trascina per un riquadro che va a capo",
+        ),
+        (
+            Tool::Callout,
+            "message-square-text",
+            "Richiamo: premi sul punto da indicare e trascina fin dove va il testo",
         ),
         (Tool::Arrow, "move-up-right", "Freccia (Maiusc: dritta o a 45°)"),
         (Tool::Line, "minus", "Linea (Maiusc: dritta o a 45°)"),
@@ -110,6 +118,10 @@ pub struct Style {
     pub marker_width: f64,
     /// Corpo della misura delle quote, in mm.
     pub quote_size: f64,
+    /// I richiami hanno il fondo bianco.
+    pub callout_background: bool,
+    /// I richiami hanno il bordo.
+    pub callout_border: bool,
 }
 
 impl Default for Style {
@@ -127,6 +139,8 @@ impl Default for Style {
             marker: MARKER_YELLOW.with_alpha(SOFT_ALPHA),
             marker_width: 4.0,
             quote_size: winfiles_model::QUOTE_SIZE,
+            callout_background: true,
+            callout_border: true,
         }
     }
 }
@@ -186,6 +200,22 @@ impl Style {
                 self.text_size = *size;
                 self.bold = *bold;
                 self.background = *background;
+            }
+            Annotation::Richiamo {
+                color,
+                size,
+                bold,
+                line,
+                background,
+                border,
+                ..
+            } => {
+                self.color = *color;
+                self.text_size = *size;
+                self.bold = *bold;
+                self.width = *line;
+                self.callout_background = *background;
+                self.callout_border = *border;
             }
             Annotation::Evidenziatore { color, width, .. } => {
                 self.marker = *color;
@@ -247,6 +277,22 @@ impl Style {
                 *bold = self.bold;
                 *background = self.background;
             }
+            Annotation::Richiamo {
+                color,
+                size,
+                bold,
+                line,
+                background,
+                border,
+                ..
+            } => {
+                *color = self.color;
+                *size = self.text_size;
+                *bold = self.bold;
+                *line = self.width;
+                *background = self.callout_background;
+                *border = self.callout_border;
+            }
             Annotation::Evidenziatore { color, width, .. } => {
                 *color = self.marker;
                 *width = self.marker_width;
@@ -307,6 +353,47 @@ fn text_box(at: (f64, f64), w: f64, h: f64, size: f64, background: bool, width: 
     let pad = text_pad(size, background);
     let w = width.map_or(w, |b| b.max(w));
     MmRect::new(at.0, at.1, w + 2.0 * pad, h + 2.0 * pad)
+}
+
+/// Il riquadro di un richiamo (mm) e il punto del suo bordo da cui parte la freccia verso `tip`:
+/// il punto del bordo più vicino alla punta, un po' lontano dagli angoli. Nessuna freccia se la
+/// punta è dentro il riquadro.
+fn callout_geometry(r: MmRect, tip: (f64, f64), size: f64) -> Option<(f64, f64)> {
+    if tip.0 >= r.x && tip.0 <= r.right() && tip.1 >= r.y && tip.1 <= r.bottom() {
+        return None;
+    }
+    let ix = (size * 0.6).min(r.w / 2.0);
+    let iy = (size * 0.6).min(r.h / 2.0);
+    let x = tip.0.clamp(r.x + ix, r.right() - ix);
+    let y = tip.1.clamp(r.y + iy, r.bottom() - iy);
+    // Sul lato verso cui sta la punta.
+    let (dx, dy) = (
+        (tip.0 - tip.0.clamp(r.x, r.right())).abs(),
+        (tip.1 - tip.1.clamp(r.y, r.bottom())).abs(),
+    );
+    Some(if dx >= dy {
+        (if tip.0 < r.x { r.x } else { r.right() }, y)
+    } else {
+        (x, if tip.1 < r.y { r.y } else { r.bottom() })
+    })
+}
+
+/// Il margine fra testo e bordo di un richiamo, in mm.
+fn callout_pad(size: f64, background: bool, border: bool) -> f64 {
+    text_pad(size, background || border)
+}
+
+/// Il riquadro di un richiamo sul foglio, in mm.
+fn callout_box(
+    at: (f64, f64),
+    w: f64,
+    h: f64,
+    size: f64,
+    background: bool,
+    border: bool,
+    width: Option<f64>,
+) -> MmRect {
+    text_box(at, w, h, size, background || border, width)
 }
 
 /// Dove sta sul foglio la miniatura di una pagina di un file (per percorso), se c'è.
@@ -457,6 +544,42 @@ fn draw_one(
                 c32(*color),
                 None,
             );
+        }
+        Annotation::Richiamo {
+            tip,
+            at,
+            text,
+            color,
+            size,
+            bold,
+            line,
+            background,
+            border,
+            width,
+        } => {
+            if text.trim().is_empty() {
+                return;
+            }
+            let c = c32(*color);
+            let galley = sk.layout(text_job(text, *size, *bold, *width, c));
+            let (w, h) = Sketch::size_mm(&galley);
+            let at = m(*at);
+            let tip = m(*tip);
+            let r = callout_box(at, w, h, *size, *background, *border, *width);
+            if let Some(from) = callout_geometry(r, tip, *size) {
+                arrow_line(sk, from, tip, c, *line, false, true);
+            }
+            if *background || *border {
+                sk.rect(
+                    r,
+                    size * 0.2,
+                    background.then(|| Color32::from_white_alpha(240)),
+                    border.then_some((c, (line * 0.6).max(0.15))),
+                );
+            }
+            let pad = callout_pad(*size, *background, *border);
+            let weight = if *bold { Weight::SemiBold } else { Weight::Regular };
+            sk.text((at.0 + pad, at.1 + pad), &galley, *size, weight, c, None);
         }
         Annotation::Evidenziatore { points, color, width } => {
             let pts: Vec<(f64, f64)> = points.iter().map(|p| m(*p)).collect();
@@ -743,6 +866,10 @@ fn screen_bounds(ctx: &egui::Context, a: &Annotation, image: MmRect, origin: Pos
             let r = text_box(to_mm(image, *at), w, h, *size, *background, *width);
             Rect::from_min_max(s((r.x, r.y)), s((r.right(), r.bottom())))
         }
+        Annotation::Richiamo { tip, .. } => {
+            let r = callout_screen_box(ctx, a, image, origin, scale);
+            r.union(Rect::from_min_max(s(to_mm(image, *tip)), s(to_mm(image, *tip))))
+        }
         _ => {
             let pts = a.points();
             let mut r = Rect::NOTHING;
@@ -752,6 +879,46 @@ fn screen_bounds(ctx: &egui::Context, a: &Annotation, image: MmRect, origin: Pos
             r
         }
     }
+}
+
+/// Il solo riquadro di un richiamo a schermo (senza la freccia).
+fn callout_screen_box(ctx: &egui::Context, a: &Annotation, image: MmRect, origin: Pos2, scale: f32) -> Rect {
+    let Annotation::Richiamo {
+        at,
+        text,
+        size,
+        bold,
+        background,
+        border,
+        width,
+        ..
+    } = a
+    else {
+        return Rect::NOTHING;
+    };
+    let shown = if text.is_empty() { " " } else { text.as_str() };
+    let galley = ctx.fonts_mut(|f| f.layout_job(text_job(shown, *size, *bold, *width, Color32::BLACK)));
+    let (w, h) = Sketch::size_mm(&galley);
+    let r = callout_box(to_mm(image, *at), w, h, *size, *background, *border, *width);
+    let s = |p: (f64, f64)| origin + vec2(p.0 as f32, p.1 as f32) * scale;
+    Rect::from_min_max(s((r.x, r.y)), s((r.right(), r.bottom())))
+}
+
+/// Il riquadro (mm) di un richiamo e il capo della freccia, se c'è.
+fn callout_arrow(ctx: &egui::Context, a: &Annotation, image: MmRect) -> Option<((f64, f64), (f64, f64))> {
+    let Annotation::Richiamo { tip, size, .. } = a else {
+        return None;
+    };
+    // Il riquadro in mm: quello a schermo con origine 0 e un punto per mm.
+    let r = callout_screen_box(ctx, a, image, Pos2::ZERO, 1.0);
+    let r = MmRect::new(
+        f64::from(r.left()),
+        f64::from(r.top()),
+        f64::from(r.width()),
+        f64::from(r.height()),
+    );
+    let tip = to_mm(image, *tip);
+    callout_geometry(r, tip, *size).map(|from| (from, tip))
 }
 
 /// Quanto è lontano `q` (a schermo) dall'annotazione: 0 sopra, `None` se troppo lontano.
@@ -812,6 +979,15 @@ fn hit_distance(
             let r = screen_bounds(ctx, a, image, origin, scale);
             r.distance_to_pos(q)
         }
+        Annotation::Richiamo { line, .. } => {
+            let r = callout_screen_box(ctx, a, image, origin, scale);
+            let on_box = r.distance_to_pos(q);
+            let on_arrow = callout_arrow(ctx, a, image).map_or(f32::INFINITY, |(from, tip)| {
+                let p = |m: (f64, f64)| origin + vec2(m.0 as f32, m.1 as f32) * scale;
+                (segment_distance(q, p(from), p(tip)) - *line as f32 * scale / 2.0).max(0.0)
+            });
+            on_box.min(on_arrow)
+        }
     };
     (d <= near).then_some(d)
 }
@@ -854,6 +1030,13 @@ fn handles(
         Annotation::Testo { .. } => {
             let r = screen_bounds(ctx, a, image, origin, scale);
             vec![(Handle::TextWidth, r.right_center())]
+        }
+        Annotation::Richiamo { tip, .. } => {
+            let r = callout_screen_box(ctx, a, image, origin, scale);
+            vec![
+                (Handle::End(true), s(*tip)),
+                (Handle::TextWidth, r.right_center()),
+            ]
         }
         Annotation::Evidenziatore { .. } => Vec::new(),
     }
@@ -1343,7 +1526,7 @@ impl Annotator {
         if resp.double_clicked()
             && let Some(q) = resp.interact_pointer_pos()
             && let Some(t) = hit(shown, q, self.selected)
-            && let Some(Annotation::Testo { text, .. }) = annotation(shown, t)
+            && let Some(text) = annotation(shown, t).and_then(|a| a.text().map(str::to_string))
         {
             self.selected = Some(t);
             self.editing = Some((t, text));
@@ -1374,6 +1557,11 @@ impl Annotator {
             if self.tool == Tool::Text && found.is_none() {
                 if let Some(s) = spot_at(to_mm_at(q)) {
                     self.new_text(shown, s, to_mm_at(q), None);
+                }
+            } else if self.tool == Tool::Callout && found.is_none() {
+                // Un clic senza trascinare: la punta lì, il testo in alto a destra.
+                if let Some(s) = spot_at(to_mm_at(q)) {
+                    self.new_callout(shown, s, to_mm_at(q));
                 }
             } else {
                 self.selected = found;
@@ -1444,7 +1632,14 @@ impl Annotator {
                 (Gesture::Move { from, start }, _) => {
                     let (dx, dy) = (at.0 - from.0, at.1 - from.1);
                     let (fx, fy) = (dx / drag.image.w.max(1e-9), dy / drag.image.h.max(1e-9));
-                    Some(start.moved(fx, fy))
+                    let mut moved = start.moved(fx, fy);
+                    // Del richiamo si sposta il riquadro: la punta resta su ciò che indica.
+                    if let (Annotation::Richiamo { tip, .. }, Annotation::Richiamo { tip: old, .. }) =
+                        (&mut moved, start)
+                    {
+                        *tip = *old;
+                    }
+                    Some(moved)
                 }
                 (Gesture::Handle { handle, start }, _) => {
                     Some(pull(&ctx, start, *handle, drag.image, at, shift))
@@ -1471,7 +1666,7 @@ impl Annotator {
             {
                 let r = screen_bounds(&ctx, &a, drag.image, origin, scale);
                 let small = match a {
-                    Annotation::Testo { .. } => false,
+                    Annotation::Testo { .. } | Annotation::Richiamo { .. } => false,
                     Annotation::Linea { .. }
                     | Annotation::Quota { .. }
                     | Annotation::Evidenziatore { .. } => r.width().max(r.height()) < MIN_DRAWN,
@@ -1485,6 +1680,20 @@ impl Annotator {
                     }
                     f.set_annotations(t.page, list);
                     self.selected = None;
+                } else if let Annotation::Richiamo { tip, at, .. } = &a {
+                    // Trascinato poco: il riquadro va un po' in alto a destra della punta.
+                    let (p, q) = (to_mm(drag.image, *tip), to_mm(drag.image, *at));
+                    if (p.0 - q.0).hypot(p.1 - q.1) < 3.0
+                        && let Some(f) = shown.files.get_mut(t.file)
+                    {
+                        let mut list = f.annotations(t.page).to_vec();
+                        if let Some(Annotation::Richiamo { at, .. }) = list.get_mut(t.index) {
+                            *at = to_frac(drag.image, (p.0 + CALLOUT_OFFSET.0, p.1 + CALLOUT_OFFSET.1));
+                        }
+                        f.set_annotations(t.page, list);
+                    }
+                    self.editing = Some((t, a.text().unwrap_or_default().to_string()));
+                    self.focus_text = true;
                 } else if let Annotation::Testo { text, .. } = a {
                     self.editing = Some((t, text));
                     self.focus_text = true;
@@ -1549,6 +1758,36 @@ impl Annotator {
         self.focus_text = true;
     }
 
+    /// Un richiamo nuovo con la punta in `tip` (mm) della miniatura `s`, da scrivere subito.
+    fn new_callout(&mut self, shown: &mut Project, s: Spot, tip: (f64, f64)) {
+        let Some(f) = shown.files.get_mut(s.file) else {
+            return;
+        };
+        if f.annotations(s.page).len() >= MAX_PER_PAGE {
+            return;
+        }
+        let at = (tip.0 + CALLOUT_OFFSET.0, tip.1 + CALLOUT_OFFSET.1);
+        let mut list = f.annotations(s.page).to_vec();
+        let mut a = self.new_shape(to_frac(s.image, tip), to_frac(s.image, at));
+        if let Annotation::Linea { .. } = a {
+            // Lo strumento è cambiato nel frattempo: niente richiamo.
+            return;
+        }
+        if let Annotation::Richiamo { at: p, .. } = &mut a {
+            *p = to_frac(s.image, at);
+        }
+        list.push(a);
+        let t = Target {
+            file: s.file,
+            page: s.page,
+            index: list.len() - 1,
+        };
+        f.set_annotations(s.page, list);
+        self.selected = Some(t);
+        self.editing = Some((t, String::new()));
+        self.focus_text = true;
+    }
+
     /// L'annotazione appena iniziata in `p` (frazioni), con lo strumento e lo stile in uso.
     fn new_shape(&self, a: Point, b: Point) -> Annotation {
         let st = &self.style;
@@ -1585,6 +1824,18 @@ impl Annotator {
                 width: st.width.min(0.5),
                 value: None,
                 size: st.quote_size,
+            },
+            Tool::Callout => Annotation::Richiamo {
+                tip: a,
+                at: b,
+                text: String::new(),
+                color: st.color,
+                size: st.text_size,
+                bold: st.bold,
+                line: st.width,
+                background: st.callout_background,
+                border: st.callout_border,
+                width: None,
             },
             Tool::Text => Annotation::Testo {
                 at: a,
@@ -1637,6 +1888,15 @@ impl Annotator {
                     width: *width,
                 }
             }
+            Annotation::Richiamo { .. } => {
+                // La punta resta dove si è premuto, il riquadro segue il puntatore.
+                let mut out = cur.clone();
+                if let Annotation::Richiamo { tip, at: p, .. } = &mut out {
+                    *tip = f(from);
+                    *p = f(at);
+                }
+                out
+            }
             Annotation::Testo { .. } => {
                 // Trascinando con lo strumento Testo si sceglie la larghezza a cui va a capo.
                 let w = (at.0 - from.0).abs();
@@ -1662,7 +1922,7 @@ impl Annotator {
                     list.remove(t.index);
                 }
                 self.selected = None;
-            } else if let Some(Annotation::Testo { text: old, .. }) = list.get_mut(t.index) {
+            } else if let Some(old) = list.get_mut(t.index).and_then(Annotation::text_mut) {
                 *old = text;
             }
             f.set_annotations(t.page, list);
@@ -1779,7 +2039,7 @@ impl Annotator {
         // Il testo battuto si vede subito sul foglio.
         if let Some(f) = shown.files.get_mut(t.file) {
             let mut list = f.annotations(t.page).to_vec();
-            if let Some(Annotation::Testo { text: old, .. }) = list.get_mut(t.index)
+            if let Some(old) = list.get_mut(t.index).and_then(Annotation::text_mut)
                 && *old != text
             {
                 old.clone_from(&text);
@@ -1968,6 +2228,33 @@ fn pull(
             }
             out
         }
+        (Annotation::Richiamo { .. }, Handle::End(_)) => {
+            // La punta si sposta, il riquadro resta.
+            let mut out = start.clone();
+            if let Annotation::Richiamo { tip, .. } = &mut out {
+                *tip = f(at);
+            }
+            out
+        }
+        (
+            Annotation::Richiamo {
+                at: p,
+                size,
+                background,
+                border,
+                ..
+            },
+            Handle::TextWidth,
+        ) => {
+            let x = m(*p).0;
+            let pad = callout_pad(*size, *background, *border);
+            let w = (at.0 - x - 2.0 * pad).max(3.0);
+            let mut out = start.clone();
+            if let Annotation::Richiamo { width, .. } = &mut out {
+                *width = Some(w);
+            }
+            out
+        }
         _ => start.clone(),
     }
 }
@@ -2009,6 +2296,7 @@ impl Annotator {
             Some(Annotation::Rettangolo { .. }) => Tool::Rect,
             Some(Annotation::Ovale { .. }) => Tool::Ellipse,
             Some(Annotation::Testo { .. }) => Tool::Text,
+            Some(Annotation::Richiamo { .. }) => Tool::Callout,
             Some(Annotation::Evidenziatore { .. }) => Tool::Marker,
             None => self.tool,
         };
@@ -2034,6 +2322,22 @@ impl Annotator {
                     "Sfondo bianco",
                 ))
                 .on_hover_text("Un riquadro bianco sotto il testo, per leggerlo sopra le immagini scure");
+            }
+            Tool::Callout => {
+                crate::app::dim_label(ui, "Colore");
+                swatches(ui, "richiamo", &mut self.style.color, false);
+                crate::app::dim_label(ui, "Corpo");
+                mm_field(ui, &mut self.style.text_size, 1.0, 40.0);
+                crate::app::dim_label(ui, "Freccia");
+                mm_field(ui, &mut self.style.width, 0.1, 5.0);
+                ui.add(crate::fluent::checkbox(&mut self.style.bold, "Grassetto"));
+                ui.add(crate::fluent::checkbox(
+                    &mut self.style.callout_background,
+                    "Sfondo bianco",
+                ))
+                .on_hover_text("Il riquadro bianco sotto il testo, per leggerlo sopra le immagini scure");
+                ui.add(crate::fluent::checkbox(&mut self.style.callout_border, "Bordo"))
+                    .on_hover_text("Il bordo del riquadro, nel colore della freccia");
             }
             Tool::Rect | Tool::Ellipse => {
                 crate::app::segmented(
@@ -2201,6 +2505,21 @@ fn swatches(ui: &mut egui::Ui, salt: &str, color: &mut Rgba, soft: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn la_freccia_del_richiamo_parte_dal_lato_verso_la_punta() {
+        let r = MmRect::new(100.0, 100.0, 50.0, 20.0);
+        // Punta a sinistra: dal lato sinistro, all'altezza della punta se possibile.
+        assert_eq!(callout_geometry(r, (20.0, 110.0), 4.0), Some((100.0, 110.0)));
+        // Punta sotto: dal lato sotto.
+        assert_eq!(callout_geometry(r, (120.0, 200.0), 4.0), Some((120.0, 120.0)));
+        // Punta in alto a destra, lontana: mai proprio dall'angolo.
+        let (x, y) = callout_geometry(r, (300.0, 0.0), 4.0).unwrap();
+        assert!(x <= 150.0 && y >= 100.0 && (x == 150.0 || y == 100.0));
+        assert!(x < 150.0 || y > 100.0);
+        // Punta dentro il riquadro: niente freccia.
+        assert_eq!(callout_geometry(r, (120.0, 110.0), 4.0), None);
+    }
 
     #[test]
     fn le_coordinate_seguono_la_miniatura() {

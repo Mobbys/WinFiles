@@ -65,6 +65,7 @@ static ICONS: &[(&str, &[u8])] = icons![
     "circle",
     "square",
     "highlighter",
+    "message-square-text",
     // Scheda Visualizza.
     "zoom-out",
     "external-link",

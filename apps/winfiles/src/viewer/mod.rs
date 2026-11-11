@@ -228,7 +228,7 @@ impl ViewerModule {
             sel_anchor: None,
             quotes: crate::quotes::Quotes::default(),
             notes: annot::Notes::new(),
-            annot_row: 40.0,
+            annot_row: 0.0,
             print: None,
             print_choice: print::Choice::default(),
             calibrations: std::collections::BTreeMap::new(),
@@ -1119,12 +1119,16 @@ impl ViewerModule {
                 ui.spacing_mut().interact_size.y = 32.0;
                 self.notes.bar(ui);
             });
+            // L'altezza resta la più alta vista: scegliendo un'annotazione la riga cambia
+            // comandi, e la pagina non deve saltare sotto il puntatore.
             let h = row.min_rect().height().max(32.0);
-            if (h - self.annot_row).abs() > 0.5 {
+            if h > self.annot_row + 0.5 {
                 self.annot_row = h;
                 ui.ctx().request_repaint();
             }
-            rest = rest.with_min_y(rest.top() + h + 6.0);
+            rest = rest.with_min_y(rest.top() + self.annot_row + 6.0);
+        } else {
+            self.annot_row = 0.0;
         }
         let side_w = if self.side_open {
             (rest.width() * 0.26).clamp(260.0, 340.0)
