@@ -1,7 +1,9 @@
 //! Nesting (ADR 0027): le sagome da disporre lette dalle pagine, e il PDF dei fogli disposti per
 //! il RIP. Ogni pagina di partenza entra una volta sola come modulo (form XObject) con le sue
 //! risorse, poi si disegna in ogni copia spostata, girata e ritagliata alla sua sagoma più
-//! l'abbondanza. Le tinte piatte (fustella, bianco, vernice) restano com'erano.
+//! l'abbondanza. Una copia ritagliata non si porta dietro i tracciati che stanno tutti fuori
+//! dalla sua sagoma: il ritaglio li nasconderebbe, ma il RIP li leggerebbe lo stesso. Le tinte
+//! piatte (fustella, bianco, vernice) restano com'erano.
 
 use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
@@ -32,6 +34,9 @@ pub const MAX_SHEET_MM: f64 = 1_000_000.0;
 pub fn user_unit(w: f64, h: f64) -> f64 {
     (w.max(h) / MAX_PLAIN_PT).ceil().max(1.0)
 }
+/// Un modulo dei fogli: sorgente, pagina e tracciati tolti.
+type FormKey = (usize, usize, Vec<PathId>);
+
 /// Pagine di partenza diverse in un PDF di fogli.
 const MAX_FORMS: usize = 2000;
 
@@ -193,11 +198,16 @@ pub fn nest_document(
     }
     let mut doc = Document::new_empty();
     let stroke = ink.map(|die| paths::spot_stroke(&mut doc, die));
-    // Ogni pagina di partenza una volta sola: (sorgente, pagina, senza fustella) → (modulo,
-    // altezza in punti).
-    let mut forms: Vec<((usize, usize, bool), pdfcraft_cos::ObjRef, f64)> = Vec::new();
-    // Le copie dei PDF da cui si è tolta la fustella di qualche pagina.
-    let mut stripped: Vec<(usize, Document, Vec<usize>)> = Vec::new();
+    // Ogni pagina di partenza una volta sola, intera: (sorgente, pagina) → (modulo, altezza in
+    // punti, usato così com'è).
+    let mut bases: Vec<((usize, usize), pdfcraft_cos::ObjRef, f64, bool)> = Vec::new();
+    // Le varianti della pagina senza i tracciati che non servono a una sagoma: (sorgente, pagina,
+    // tracciati tolti) → (modulo, altezza). Le copie della stessa sagoma usano la stessa.
+    let mut forms: Vec<(FormKey, pdfcraft_cos::ObjRef, f64)> = Vec::new();
+    // Quello che c'è sulle pagine, letto una volta sola.
+    let mut scans: Vec<((usize, usize), Option<PageScan>)> = Vec::new();
+    // I tracciati fuori da ogni ritaglio già visto: (sorgente, pagina, ritaglio) → tracciati.
+    let mut outside: Vec<((usize, usize), Contours, Vec<PathId>)> = Vec::new();
     for (n, sheet) in sheets.iter().enumerate() {
         let ok = |v: f64| v.is_finite() && (1.0..=MAX_SHEET_MM).contains(&v);
         if !ok(sheet.width) || !ok(sheet.height) {
@@ -220,37 +230,71 @@ pub fn nest_document(
         }
         let mut used = Dict::new();
         for piece in &sheet.pieces {
-            let key = (piece.source, piece.page, !piece.hide.is_empty());
+            let src = sources
+                .get(piece.source)
+                .ok_or_else(|| EditError::Invalid("file mancante".into()))?;
+            let at = (piece.source, piece.page);
+            // Cosa non disegnare: la fustella tolta per le linee comuni e ogni tracciato che sta
+            // tutto fuori dal ritaglio della copia. Il ritaglio li nasconderebbe alla vista, ma il
+            // RIP li leggerebbe lo stesso: con tante sagome sulla stessa pagina, ogni copia si
+            // porterebbe dietro i tracciati di tutte le altre.
+            let mut hide = piece.hide.clone();
+            if !piece.clip.is_empty() {
+                let known = outside
+                    .iter()
+                    .find(|(k, c, _)| *k == at && *c == piece.clip)
+                    .map(|(_, _, ids)| ids.clone());
+                let ids = match known {
+                    Some(ids) => ids,
+                    None => {
+                        if !scans.iter().any(|(k, _)| *k == at) {
+                            scans.push((at, src.scan_page(piece.page).ok()));
+                        }
+                        let ids = scans
+                            .iter()
+                            .find(|(k, _)| *k == at)
+                            .and_then(|(_, s)| s.as_ref())
+                            .map(|s| paths_outside(s, &piece.clip))
+                            .unwrap_or_default();
+                        outside.push((at, piece.clip.clone(), ids.clone()));
+                        ids
+                    }
+                };
+                hide.extend(ids);
+            }
+            hide.sort();
+            hide.dedup();
+            let key = (piece.source, piece.page, hide);
             let (form, h) = match forms.iter().find(|(k, _, _)| *k == key) {
                 Some((_, r, h)) => (*r, *h),
                 None => {
                     if forms.len() >= MAX_FORMS {
                         return Err(EditError::Invalid("troppi file diversi in un foglio".into()));
                     }
-                    let src = sources
-                        .get(piece.source)
-                        .ok_or_else(|| EditError::Invalid("file mancante".into()))?;
-                    let (r, (_, h)) = if piece.hide.is_empty() {
-                        organize::page_as_form(&mut doc, &src.0, piece.page)?
-                    } else {
-                        // La pagina senza la fustella, in una copia del PDF fatta una volta sola.
-                        let at = match stripped.iter().position(|(s, _, _)| *s == piece.source) {
-                            Some(i) => i,
-                            None => {
-                                stripped.push((piece.source, src.0.clone(), Vec::new()));
-                                stripped.len() - 1
-                            }
-                        };
-                        let (_, copy, done) = stripped
-                            .get_mut(at)
-                            .ok_or_else(|| EditError::Invalid("file mancante".into()))?;
-                        if !done.contains(&piece.page) {
-                            paths::hide(copy, piece.page, &piece.hide)?;
-                            done.push(piece.page);
+                    let (base, h) = match bases.iter().find(|(k, _, _, _)| *k == at) {
+                        Some((_, r, h, _)) => (*r, *h),
+                        None => {
+                            let (r, (_, h)) = organize::page_as_form(&mut doc, &src.0, piece.page)?;
+                            bases.push((at, r, h, false));
+                            (r, h)
                         }
-                        organize::page_as_form(&mut doc, copy, piece.page)?
                     };
-                    forms.push((key, r, h));
+                    let r = if key.2.is_empty() {
+                        if let Some(b) = bases.iter_mut().find(|(k, _, _, _)| *k == at) {
+                            b.3 = true;
+                        }
+                        base
+                    } else {
+                        // Lo stesso modulo (risorse, riquadro, matrice) con il contenuto sfoltito:
+                        // le risorse sono in comune, immagini e caratteri non si copiano due volte.
+                        let content = paths::pruned(&src.0, piece.page, &key.2)?;
+                        let dict = match &*doc.get(base) {
+                            Object::Stream(st) => st.dict.clone(),
+                            _ => return Err(EditError::Invalid("pagina non leggibile".into())),
+                        };
+                        doc.add(Object::Stream(Stream::flate(dict, &content)))
+                    };
+                    forms.push((key.clone(), r, h));
                     (r, h)
                 }
             };
@@ -339,5 +383,81 @@ pub fn nest_document(
             }
         })?;
     }
+    // Le pagine intere che nessuna copia usa così com'è non restano nel file.
+    for (_, r, _, used) in &bases {
+        if !used {
+            doc.free(*r);
+        }
+    }
     Ok(PdfFile(doc))
+}
+
+/// I tracciati della pagina che stanno tutti fuori dal ritaglio `clip` (mm, y in giù): quelli
+/// che una copia ritagliata così non mostra. Si guarda la parte visibile di ognuno, allargata di
+/// mezzo spessore se è un contorno; per i soli riempimenti, la forma vera. Ci sono anche quelli
+/// che già sulla pagina il loro ritaglio nasconde del tutto. I tracciati che ritagliano e quelli
+/// dentro i moduli restano sempre; i tracciati che ritagliano solo se cadono tutti fuori.
+fn paths_outside(scan: &PageScan, clip: &[Vec<[f64; 2]>]) -> Vec<PathId> {
+    // Sotto questa area (mm²) il tocco è solo un bordo in comune.
+    const TOUCH_MM2: f64 = 1e-4;
+    let Some(cb) = shape_bounds(clip) else {
+        return Vec::new();
+    };
+    let clip: Contours = clip.to_vec();
+    let hits = |subject: &Contours, rule: FillRule| -> bool {
+        subject
+            .overlay(&clip, OverlayRule::Intersect, rule)
+            .iter()
+            .flatten()
+            .map(|c| paths::signed_area(c).abs())
+            .sum::<f64>()
+            > TOUCH_MM2
+    };
+    // Quelli che già sulla pagina non si vedono (tutti fuori dal loro ritaglio) non servono mai.
+    let mut out = scan.unseen.clone();
+    for p in &scan.paths {
+        if p.clips || p.in_form {
+            continue;
+        }
+        let half = p.line.as_ref().map_or(0.0, |l| l.width.max(0.0) / 2.0);
+        let v = p.visible;
+        let r = [v[0] - half, v[1] - half, v[2] + half, v[3] + half];
+        if !r.iter().all(|x| x.is_finite()) {
+            continue;
+        }
+        // Lontano dal ritaglio: fuori senza fare conti.
+        let apart = r[2] < cb[0] || r[0] > cb[2] || r[3] < cb[1] || r[1] > cb[3];
+        let inside = if apart {
+            false
+        } else {
+            let rect: Contours = vec![vec![[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]]];
+            // Un rettangolo vuoto (una linea dritta senza spessore) si tiene: non si sa misurare.
+            let degenerate = r[2] - r[0] <= 0.0 || r[3] - r[1] <= 0.0;
+            degenerate
+                || (hits(&rect, FillRule::EvenOdd)
+                    && (p.line.is_some() || {
+                        let shape: Contours = p
+                            .parts
+                            .iter()
+                            .filter(|q| q.points.len() >= 3)
+                            .map(|q| q.points.clone())
+                            .collect();
+                        // Non-zero: copre almeno quanto il riempimento vero, qualunque regola usi.
+                        shape.is_empty() || hits(&shape, FillRule::NonZero)
+                    }))
+        };
+        if !inside {
+            out.push(p.id);
+        }
+    }
+    // I ritagli tutti fuori dalla copia: quello che ritagliano non si vede comunque, e il loro
+    // tracciato (a volte di migliaia di punti) non serve.
+    for m in scan.masks() {
+        let v = m.visible;
+        let apart = v[2] < cb[0] || v[0] > cb[2] || v[3] < cb[1] || v[1] > cb[3];
+        if apart && !m.in_form {
+            out.push(m.id);
+        }
+    }
+    out
 }

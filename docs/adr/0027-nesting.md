@@ -66,7 +66,7 @@ Alternativa 3.
 - Con la casella "Linee di taglio comuni (laser)" la distanza fra le sagome è solo quella scritta
   (le abbondanze non la allargano) e la grafica si ritaglia a metà distanza: con distanza 0 i pezzi
   si toccano e la grafica arriva alla fustella. Nel PDF le fustelle dei pezzi non si disegnano più
-  (`paths::hide` sulla copia della pagina, l'operatore che dipinge diventa `n`) e sopra ogni foglio
+  (tolte dal contenuto del modulo della copia, vedi sotto) e sopra ogni foglio
   ci sono le linee comuni, aperte, nella tinta della prima fustella dei file (o quella di taglio),
   in sovrastampa, con il suo spessore.
 - Il motore ora tiene fermi i lati dritti delle sagome con curve: prima, se la semplificazione a
@@ -77,3 +77,19 @@ Alternativa 3.
 - Le fustelle dentro i moduli della pagina (rare) restano: si toglie solo quella del contenuto
   della pagina.
 
+
+## Aggiornamento (0.2.38): ogni copia solo con i suoi tracciati
+Michel ha visto in Onyx una miriade di tracciati che a vista non c'erano: con più sagome sulla
+stessa pagina (lettere, "Scomponi in pezzi") ogni copia disegnava il modulo della pagina intera,
+nascosto dal ritaglio `W*`, e il RIP lo legge lo stesso. Ora `nest_document` legge la pagina una
+volta (`scan_page`) e per ogni ritaglio diverso toglie:
+- i tracciati dipinti tutti fuori dal ritaglio della copia (rettangolo visibile allargato di mezzo
+  spessore; per i soli riempimenti la forma vera, non-zero, contro il ritaglio);
+- i tracciati che già sulla pagina erano tutti fuori dal loro ritaglio (`PageScan::unseen`);
+- i tracciati di ritaglio tutti fuori dalla copia, che diventano `0 0 0 0 re W n`.
+I tracciati si tolgono del tutto, costruzione compresa (`paths::pruned`), non diventano `n`. Il
+modulo ridotto riusa il dizionario (risorse, riquadro, matrice) del modulo della pagina intera, così
+immagini e caratteri non si copiano più volte; le copie con lo stesso ritaglio usano lo stesso modulo e
+la pagina intera, se nessuno la usa così com'è, si toglie dal file. Testi, immagini e moduli
+annidati restano interi (si tolgono solo i tracciati). Alternativa scartata: una copia del PDF per
+ogni sagoma con `page_as_form`, che avrebbe duplicato tutte le risorse.
