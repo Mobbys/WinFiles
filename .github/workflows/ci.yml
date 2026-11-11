@@ -89,7 +89,7 @@ jobs:
           pattern: convertitore-*
           path: convertitori
           merge-multiple: true
-      - run: sudo apt-get update -q && sudo apt-get install -y -q wixl
+      - run: installer/installa-wixl.sh
       - run: installer/crea-msi.sh windows/winfiles.exe WinFiles.msi - convertitori
       - uses: actions/upload-artifact@v4
         with:
