@@ -327,6 +327,22 @@ fn full_pages(settings: &PrintSettings, items: &[Item], title: f64) -> Result<Ve
     Ok(sheets)
 }
 
+/// L'altezza della miniatura più alta della griglia con colonne larghe `cell_w`, come la calcola
+/// [`grid_rows`]: il file nel riquadro quadrato, mai sotto il 5% della colonna.
+fn tallest_image<'a>(items: impl IntoIterator<Item = &'a Item>, cell_w: f64) -> f64 {
+    // Una colonna senza larghezza (impostazioni impossibili) non ha miniature.
+    let cell_w = if cell_w.is_finite() { cell_w.max(0.0) } else { 0.0 };
+    items
+        .into_iter()
+        .map(|i| {
+            i.content
+                .fit_within(Size::new(cell_w, cell_w))
+                .map_or(cell_w, |s| s.h)
+        })
+        .fold(0.0, f64::max)
+        .clamp(cell_w * 0.05, cell_w)
+}
+
 /// Le righe della griglia: fino a `columns` celle della stessa cartella. Ogni riga è alta quanto
 /// la sua immagine più alta più la sua didascalia più alta, e le immagini poggiano sulla
 /// didascalia, così una riga di soli formati orizzontali non lascia un vuoto.
@@ -343,15 +359,7 @@ fn grid_rows(settings: &PrintSettings, items: &[Item], area: Rect, max_text: f64
             .take(cols)
             .take_while(|i| Some(i.folder.as_str()) == folder)
             .collect();
-        let img_h = members
-            .iter()
-            .map(|i| {
-                i.content
-                    .fit_within(Size::new(cell_w, cell_w))
-                    .map_or(cell_w, |s| s.h)
-            })
-            .fold(0.0, f64::max)
-            .clamp(cell_w * 0.05, cell_w);
+        let img_h = tallest_image(members.iter().copied(), cell_w);
         let caption_h = members
             .iter()
             .map(|i| height(i.caption, max_text))
@@ -541,12 +549,19 @@ pub fn grid_with_title(
         View::List => list_thumb(settings),
         View::Nesting => nesting_max(settings),
     };
+    // L'immagine più alta che una riga può contenere. Nella griglia è quella delle miniature vere:
+    // due strisce orizzontali su colonne larghe quanto il foglio orizzontale sono basse, e il
+    // riquadro quadrato (largo come la colonna) non deve per forza stare in altezza.
+    let image_h = match settings.view {
+        View::Grid => tallest_image(items, cell_w),
+        View::List | View::Nesting => cell_w,
+    };
     // Deve starci almeno un'intestazione più una riga, altrimenti l'impaginazione non termina mai.
-    if cell_w <= EPS || settings.header + settings.row_gap + cell_w > area.h + EPS {
+    if cell_w <= EPS || settings.header + settings.row_gap + image_h > area.h + EPS {
         return Err(LayoutError::NothingFits);
     }
     // Un'intestazione che va a capo è più alta, ma mai tanto da non lasciar posto a una riga.
-    let header_cap = area.h - settings.row_gap - cell_w;
+    let header_cap = area.h - settings.row_gap - image_h;
     let head = |h: f64| height(h, header_cap).max(settings.header);
     let tallest = items
         .iter()
@@ -554,7 +569,7 @@ pub fn grid_with_title(
         .fold(settings.header, f64::max);
     // Lo spazio massimo per i testi sotto le immagini e sotto l'intestazione: oltre, il testo
     // viene tagliato, ma la riga sta sempre in un foglio.
-    let max_text = area.h - tallest - settings.row_gap - cell_w;
+    let max_text = area.h - tallest - settings.row_gap - image_h;
     let rows = match settings.view {
         View::Grid => grid_rows(settings, items, area, max_text),
         View::List => list_rows(settings, items, area, max_text),
