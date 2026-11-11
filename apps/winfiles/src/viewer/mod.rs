@@ -67,6 +67,54 @@ struct Browse {
     files: Vec<PathBuf>,
     /// I file vengono dall'elenco delle miniature, non dalla cartella.
     from_job: bool,
+    /// L'elenco della cartella che si sta leggendo in sottofondo: il file si apre subito, le
+    /// frecce arrivano appena la cartella è letta (con migliaia di file, o in rete, ci vuole).
+    listing: Option<Listing>,
+}
+
+/// L'elenco di una cartella letto da un thread a parte.
+type Listing = Arc<std::sync::OnceLock<Vec<PathBuf>>>;
+
+impl Browse {
+    /// Le frecce scorrono la cartella di `path`, letta in sottofondo.
+    fn folder(path: &Path, listing: Listing) -> Self {
+        Self {
+            files: vec![path.to_path_buf()],
+            from_job: false,
+            listing: Some(listing),
+        }
+    }
+
+    /// Prende l'elenco della cartella se è pronto.
+    fn receive(&mut self) {
+        let Some(list) = &self.listing else {
+            return;
+        };
+        if let Some(files) = list.get() {
+            if !files.is_empty() {
+                self.files = files.clone();
+            }
+            self.listing = None;
+        }
+    }
+}
+
+/// Legge in sottofondo la cartella di `path`; `wake` ridisegna la finestra quando ha finito.
+fn start_listing(path: &Path, wake: impl Fn() + Send + 'static) -> Listing {
+    let list: Listing = Arc::default();
+    let out = Arc::clone(&list);
+    let path = path.to_path_buf();
+    let spawned = std::thread::Builder::new()
+        .name("visualizza-cartella".into())
+        .spawn(move || {
+            let _ = out.set(folder_files(&path));
+            wake();
+        });
+    if spawned.is_err() {
+        // Senza thread le frecce restano sul solo file aperto: meglio che bloccare la finestra.
+        let _ = list.set(Vec::new());
+    }
+    list
 }
 
 enum State {
@@ -210,6 +258,8 @@ impl ViewerModule {
     /// primo file.
     pub fn open(&mut self, paths: &[PathBuf]) {
         let mut first = None;
+        // Più file della stessa cartella: la cartella si legge una volta sola.
+        let mut listings: Vec<(PathBuf, Listing)> = Vec::new();
         for p in paths {
             // Un percorso relativo (dalla riga di comando) diventa completo, per la cartella e le
             // frecce.
@@ -217,11 +267,17 @@ impl ViewerModule {
             if p.is_dir() {
                 continue;
             }
-            let browse = Browse {
-                files: folder_files(p),
-                from_job: false,
+            let dir = p.parent().map(Path::to_path_buf).unwrap_or_default();
+            let listing = match listings.iter().find(|(d, _)| *d == dir) {
+                Some((_, l)) => Arc::clone(l),
+                None => {
+                    let wake = self.ctx.clone();
+                    let l = start_listing(p, move || wake.request_repaint());
+                    listings.push((dir, Arc::clone(&l)));
+                    l
+                }
             };
-            let at = self.open_one(p, browse);
+            let at = self.open_one(p, Browse::folder(p, listing));
             first.get_or_insert(at);
         }
         if let Some(at) = first {
@@ -244,6 +300,7 @@ impl ViewerModule {
             Browse {
                 files: job,
                 from_job: true,
+                listing: None,
             },
         );
         if let Some(d) = self.docs.get_mut(at) {
@@ -257,7 +314,7 @@ impl ViewerModule {
     fn open_one(&mut self, path: &Path, browse: Browse) -> usize {
         if let Some(i) = self.docs.iter().position(|d| d.path == path) {
             if let Some(d) = self.docs.get_mut(i)
-                && (browse.from_job || d.browse.files.is_empty())
+                && (browse.from_job || (d.browse.files.len() <= 1 && d.browse.listing.is_none()))
             {
                 d.browse = browse;
             }
@@ -400,6 +457,7 @@ impl ViewerModule {
     fn receive(&mut self) {
         let ctx = self.ctx.clone();
         for d in &mut self.docs {
+            d.browse.receive();
             if let State::Loading(o) = &d.state
                 && let Some(r) = o.poll()
             {
@@ -829,7 +887,10 @@ impl ViewerModule {
         if icons::button(ui, "chevron-left", tip_prev, false, total > 0 && pos > 0, 32.0).clicked() {
             self.step_file(false);
         }
-        let text = if total > 0 {
+        let reading = self.doc().is_some_and(|d| d.browse.listing.is_some());
+        let text = if reading {
+            format!("{} di …", pos + 1)
+        } else if total > 0 {
             format!("{} di {total}", pos + 1)
         } else {
             "–".into()
@@ -1960,7 +2021,6 @@ fn is_pdf_file(path: &Path) -> bool {
         .is_ok_and(|n| head.get(..n).is_some_and(|h| h.windows(5).any(|w| w == b"%PDF-")))
 }
 
-/// I file della cartella di `path` che la scheda sa mostrare, in ordine di nome come Esplora file.
 /// La zona scelta con lo strumento Seleziona, in mm della pagina.
 #[derive(Clone, Debug, PartialEq)]
 struct Selection {
@@ -2010,6 +2070,12 @@ fn copy_image(img: &winfiles_thumbs::Thumb) -> Result<(u32, u32), String> {
         .map_err(|e| e.to_string())
 }
 
+/// I file della cartella di `path` che la scheda sa mostrare, in ordine di nome come Esplora file.
+///
+/// Prima si guarda l'estensione (solo il nome, nessun accesso al disco), poi il tipo di voce che
+/// Windows dà già con l'elenco della cartella. `Path::is_file` su ogni voce apriva ogni file della
+/// cartella uno per uno: con migliaia di file, in rete o con l'antivirus, voleva dire secondi o
+/// minuti prima di vedere il file.
 fn folder_files(path: &Path) -> Vec<PathBuf> {
     let Some(dir) = path.parent() else {
         return vec![path.to_path_buf()];
@@ -2019,8 +2085,16 @@ fn folder_files(path: &Path) -> Vec<PathBuf> {
     };
     let mut files: Vec<PathBuf> = read
         .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_file() && ViewKind::of(p) != ViewKind::Unsupported)
+        .filter_map(|e| {
+            let p = e.path();
+            if ViewKind::of(&p) == ViewKind::Unsupported {
+                return None;
+            }
+            let ty = e.file_type().ok()?;
+            // Solo i collegamenti simbolici chiedono di guardare il file vero.
+            let file = ty.is_file() || (ty.is_symlink() && p.is_file());
+            file.then_some(p)
+        })
         .take(20_000)
         .collect();
     files.sort_by_cached_key(|p| natural_key(&file_name(p)));
@@ -2076,6 +2150,44 @@ mod tests {
         let mut names = vec!["foto10.jpg", "foto2.jpg", "Foto1.jpg", "alfa.pdf"];
         names.sort_by_cached_key(|n| natural_key(n));
         assert_eq!(names, vec!["alfa.pdf", "Foto1.jpg", "foto2.jpg", "foto10.jpg"]);
+    }
+
+    #[test]
+    fn la_cartella_tiene_solo_i_file_che_si_vedono_in_ordine() {
+        let dir = std::env::temp_dir().join(format!("winfiles-cartella-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sotto.pdf")).unwrap();
+        for n in ["b10.pdf", "b2.jpg", "note.txt", "a.ai"] {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        let files = folder_files(&dir.join("b2.jpg"));
+        let names: Vec<String> = files.iter().map(|p| file_name(p)).collect();
+        assert_eq!(names, vec!["a.ai", "b2.jpg", "b10.pdf"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn la_cartella_arriva_dopo_senza_fermare_l_apertura() {
+        let dir = std::env::temp_dir().join(format!("winfiles-sottofondo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["1.pdf", "2.pdf", "3.pdf"] {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        let path = dir.join("2.pdf");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let listing = start_listing(&path, move || {
+            let _ = tx.send(());
+        });
+        // Subito: solo il file aperto, le frecce aspettano.
+        let mut browse = Browse::folder(&path, listing);
+        assert_eq!(browse.files, vec![path.clone()]);
+        rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        browse.receive();
+        assert!(browse.listing.is_none());
+        assert_eq!(browse.files.len(), 3);
+        assert_eq!(browse.files.get(1), Some(&path));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
