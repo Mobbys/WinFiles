@@ -45,6 +45,8 @@ pub enum FileKind {
     Pdf,
     Ai,
     Eps,
+    /// Disegni DXF, DWG, PLT (plotter) e SVG: si leggono con il lettore della scheda Visualizza.
+    Drawing,
     Unsupported,
 }
 
@@ -65,6 +67,7 @@ impl FileKind {
             "pdf" => FileKind::Pdf,
             "ai" => FileKind::Ai,
             "eps" => FileKind::Eps,
+            "dxf" | "dwg" | "plt" | "hpgl" | "hpg" | "svg" | "svgz" => FileKind::Drawing,
             _ => FileKind::Unsupported,
         }
     }
@@ -75,6 +78,7 @@ impl FileKind {
             FileKind::Pdf => "PDF",
             FileKind::Ai => "AI",
             FileKind::Eps => "EPS",
+            FileKind::Drawing => "Disegno",
             FileKind::Unsupported => "Non supportato",
         }
     }
@@ -615,6 +619,13 @@ impl Project {
     pub fn to_json(&self) -> Result<String, ModelError> {
         let mut copy = self.clone();
         copy.version = FORMAT_VERSION;
+        // I disegni si scrivono come "non supportati": le versioni di WinFiles che non li leggono
+        // aprono comunque il progetto; alla lettura il nome del file li fa tornare disegni.
+        for f in &mut copy.files {
+            if f.kind == FileKind::Drawing {
+                f.kind = FileKind::Unsupported;
+            }
+        }
         Ok(serde_json::to_string_pretty(&copy)?)
     }
 
@@ -628,6 +639,9 @@ impl Project {
         }
         let mut project: Project = serde_json::from_value(value)?;
         for f in &mut project.files {
+            if f.kind == FileKind::Unsupported && FileKind::from_path(&f.path) == FileKind::Drawing {
+                f.kind = FileKind::Drawing;
+            }
             let legacy = std::mem::take(&mut f.legacy_note);
             if !legacy.trim().is_empty() {
                 f.notes.entry(0).or_insert(legacy);
@@ -1052,6 +1066,32 @@ mod tests {
             FileKind::from_path(Path::new("senza_estensione")),
             FileKind::Unsupported
         );
+    }
+
+    #[test]
+    fn i_disegni_sono_un_tipo_a_parte() {
+        for name in ["a.dxf", "b.DWG", "c.plt", "d.svg", "e.svgz"] {
+            assert_eq!(FileKind::from_path(Path::new(name)), FileKind::Drawing, "{name}");
+        }
+    }
+
+    #[test]
+    fn i_disegni_restano_leggibili_dalle_versioni_vecchie() {
+        let mut p = Project::default();
+        p.files
+            .push(FileEntry::new(PathBuf::from("/l/pianta.dxf"), FileKind::Drawing));
+        p.files.push(FileEntry::new(
+            PathBuf::from("/l/lettera.docx"),
+            FileKind::Unsupported,
+        ));
+        let json = p.to_json().unwrap();
+        assert!(
+            !json.contains("Drawing"),
+            "le versioni vecchie non conoscono il tipo"
+        );
+        let back = Project::from_json(&json).unwrap();
+        assert_eq!(back.files[0].kind, FileKind::Drawing);
+        assert_eq!(back.files[1].kind, FileKind::Unsupported);
     }
 
     #[test]

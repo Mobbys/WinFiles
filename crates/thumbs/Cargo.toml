@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 winfiles-model.workspace = true
 winfiles-formats.workspace = true
+winfiles-cad.workspace = true
 # Foto RAW e file di Photoshop (ADR 0017).
 winfiles-photo.workspace = true
 thiserror.workspace = true

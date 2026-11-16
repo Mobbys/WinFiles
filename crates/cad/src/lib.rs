@@ -21,9 +21,11 @@ use cadcraft_dxf::{Tag, records, sections};
 
 mod geometry;
 pub mod hpgl;
+mod paper;
 mod pdf;
 pub mod svg;
 
+pub use paper::{DRAWING_EXTENSIONS, Paper, drawing_paper, is_drawing_path, paper, size_mm};
 pub use pdf::{MAX_PAGE_MM, PdfOptions, TextLine, text_page};
 
 /// File più grande che si apre.
@@ -55,6 +57,8 @@ pub enum CadError {
     Svg(String),
     #[error("il disegno è vuoto")]
     Empty,
+    #[error("{0}")]
+    Page(String),
 }
 
 fn io_text(e: &std::io::Error) -> String {

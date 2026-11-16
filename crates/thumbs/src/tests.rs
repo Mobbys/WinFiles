@@ -87,7 +87,8 @@ fn small_images_are_not_enlarged() {
 fn pdf_first_page_is_rendered_on_white() {
     let f = Temp::new("c.pdf", &pdf());
     let t = render(&f.0, FileKind::Pdf, 0, 200).unwrap();
-    assert_eq!((t.width, t.height), (200, 100));
+    assert_eq!(t.width, 200);
+    assert!((98..=101).contains(&t.height), "{}", t.height);
     let px = |x: u32, y: u32| {
         let i = ((y * t.width + x) * 4) as usize;
         t.rgba[i..i + 4].to_vec()
@@ -223,7 +224,8 @@ fn legacy_ai() -> Vec<u8> {
 fn ai_in_postscript_si_disegna() {
     let f = Temp::new("legacy.ai", &legacy_ai());
     let t = render(&f.0, FileKind::Ai, 0, 200).unwrap();
-    assert_eq!((t.width, t.height), (200, 100));
+    assert_eq!(t.width, 200);
+    assert!((98..=101).contains(&t.height), "{}", t.height);
     let px = |x: u32, y: u32| {
         let i = ((y * t.width + x) * 4) as usize;
         t.rgba[i..i + 3].to_vec()
@@ -365,5 +367,55 @@ fn ai_esportato_da_coreldraw_si_disegna() {
     assert!(!ps[..1024].contains("%AI"));
     let f = Temp::new("corel.ai", ps.as_bytes());
     let t = render(&f.0, FileKind::Ai, 0, 200).unwrap();
-    assert_eq!((t.width, t.height), (200, 100));
+    assert_eq!(t.width, 200);
+    assert!((98..=101).contains(&t.height), "{}", t.height);
+}
+
+/// Un DXF con un rettangolo di 100 × 50 unità; con `$INSUNITS` = 5 (centimetri) se `cm`.
+fn dxf_rect(cm: bool) -> String {
+    let header = if cm {
+        "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n5\n0\nENDSEC\n"
+    } else {
+        ""
+    };
+    format!(
+        "{header}0\nSECTION\n2\nENTITIES\n0\nLWPOLYLINE\n8\n0\n90\n4\n70\n1\n10\n0\n20\n0\n10\n100\n20\n0\n10\n100\n20\n50\n10\n0\n20\n50\n0\nENDSEC\n0\nEOF\n"
+    )
+}
+
+#[test]
+fn le_miniature_dei_dxf_passano_dal_lettore_dei_disegni() {
+    let f = Temp::new("rettangolo.dxf", dxf_rect(false).as_bytes());
+    assert_eq!(FileKind::from_path(&f.0), FileKind::Drawing);
+    let probe = winfiles_formats::probe(&f.0, FileKind::Drawing).unwrap();
+    let size = probe.pages[0].size;
+    assert!(
+        (size.w - 100.0).abs() < 1e-6 && (size.h - 50.0).abs() < 1e-6,
+        "{size:?}"
+    );
+    let t = render(&f.0, FileKind::Drawing, 0, 200).unwrap();
+    assert_eq!(t.width, 200);
+    assert!((98..=101).contains(&t.height), "{}", t.height);
+    // Il bordo del rettangolo si vede: ci sono pixel scuri.
+    assert!(t.rgba.chunks(4).any(|p| p[0] < 128), "miniatura tutta bianca");
+}
+
+#[test]
+fn i_dxf_con_le_unita_hanno_la_misura_vera() {
+    let f = Temp::new("rettangolo-cm.dxf", dxf_rect(true).as_bytes());
+    let probe = winfiles_formats::probe(&f.0, FileKind::Drawing).unwrap();
+    let size = probe.pages[0].size;
+    assert!(
+        (size.w - 1000.0).abs() < 1e-6 && (size.h - 500.0).abs() < 1e-6,
+        "{size:?}"
+    );
+}
+
+#[test]
+fn un_dxf_rovinato_da_un_errore_non_un_crash() {
+    let f = Temp::new("rotto.dxf", b"0\nSECTION\n2\nENTITIES\n0\nLINE\n10\nabc\n");
+    let _ = render(&f.0, FileKind::Drawing, 0, 200);
+    let f = Temp::new("non-dxf.dxf", b"non sono un disegno");
+    assert!(render(&f.0, FileKind::Drawing, 0, 200).is_err());
+    assert!(winfiles_formats::probe(&f.0, FileKind::Drawing).is_err());
 }

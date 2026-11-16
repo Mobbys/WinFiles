@@ -33,41 +33,13 @@ pub const MAX_BYTES: u64 = 1024 * 1024 * 1024;
 /// L'anteprima del file, con il lato lungo al massimo `side` pixel.
 pub fn thumbnail(path: &Path, side: u32) -> Result<Thumb, String> {
     let side = side.clamp(16, 2560);
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    match ext.as_str() {
-        "svg" | "svgz" => {
-            let (pdf, _) = winfiles_cad::svg::open(path).map_err(|e| e.to_string())?;
-            pdf_thumb(pdf, side)
-        }
-        "dxf" | "dwg" | "plt" | "hpgl" | "hpg" => {
-            let drawing = winfiles_cad::open(path).map_err(|e| e.to_string())?;
-            // Il disegno in 200 mm sul lato lungo, fondo bianco, linee visibili anche in piccolo.
-            let options = winfiles_cad::PdfOptions {
-                mm_per_unit: drawing.fit_scale(200.0),
-                line_mm: Some(0.8),
-                margin_mm: 4.0,
-                ..winfiles_cad::PdfOptions::default()
-            };
-            pdf_thumb(drawing.to_pdf(&options)?, side)
-        }
-        _ => {
-            let kind = FileKind::from_path(path);
-            if kind == FileKind::Unsupported {
-                return Err("tipo di file non previsto".into());
-            }
-            winfiles_thumbs::render(path, kind, 0, side).map_err(|e| e.to_string())
-        }
+    // Lo stesso tipo e la stessa strada delle Miniature: anche i disegni (DXF, DWG, PLT, SVG)
+    // passano dalla loro pagina alla misura vera.
+    let kind = FileKind::from_path(path);
+    if kind == FileKind::Unsupported {
+        return Err("tipo di file non previsto".into());
     }
-}
-
-fn pdf_thumb(pdf: Vec<u8>, side: u32) -> Result<Thumb, String> {
-    winfiles_thumbs::PdfPages::open(pdf)
-        .and_then(|p| p.render(0, side))
-        .map_err(|e| e.to_string())
+    winfiles_thumbs::render(path, kind, 0, side).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

@@ -5,11 +5,12 @@
 use winfiles_model::{FileEntry, FileKind, Project};
 
 /// I tipi che si possono scegliere, con il nome del loro pulsante.
-pub const KINDS: [(FileKind, &str); 5] = [
+pub const KINDS: [(FileKind, &str); 6] = [
     (FileKind::Image, "Immagini"),
     (FileKind::Pdf, "PDF"),
     (FileKind::Ai, "AI"),
     (FileKind::Eps, "EPS"),
+    (FileKind::Drawing, "Disegni"),
     (FileKind::Unsupported, "Altri"),
 ];
 

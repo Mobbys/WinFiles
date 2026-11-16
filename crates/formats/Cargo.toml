@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 winfiles-geom.workspace = true
 winfiles-model.workspace = true
+winfiles-cad.workspace = true
 thiserror.workspace = true
 photocraft-heif.workspace = true
 photocraft-raw.workspace = true
