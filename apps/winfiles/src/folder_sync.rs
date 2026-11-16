@@ -375,9 +375,9 @@ pub struct ProjectHolder<'a> {
     pub busy: bool,
 }
 
-/// Cosa salva Miniature: note per pagina, nota di cartella e annotazioni.
+/// Cosa salva Miniature: note per pagina, nota di cartella, annotazioni e scala delle pagine.
 pub const MINIATURE: Owned = Owned {
-    fields: &[folder_notes::NOTE, folder_notes::ANNOTATIONS],
+    fields: &[folder_notes::NOTE, folder_notes::ANNOTATIONS, folder_notes::SCALE],
     folder_note: true,
 };
 /// Cosa salva Visualizza: le sue annotazioni.
@@ -403,6 +403,7 @@ fn apply_to(
         }
         if notes {
             f.notes.clear();
+            f.scales.clear();
         }
         f.annotations.clear();
         for (k, v) in cells {
@@ -419,6 +420,12 @@ fn apply_to(
             }
             if notes && fd == folder_notes::NOTE {
                 f.set_note(*page, folder_notes::note_from(v));
+            } else if notes && fd == folder_notes::SCALE {
+                // Diretto, senza `set_scale`: le pagine del file possono non essere ancora misurate.
+                let n = folder_notes::scale_from(v);
+                if n > 1 {
+                    f.scales.insert(*page, n);
+                }
             } else if fd == field {
                 f.set_annotations(*page, folder_notes::annotations_from(v, dir));
             }
@@ -458,6 +465,11 @@ impl Holder for ProjectHolder<'_> {
                 for (p, t) in &f.notes {
                     if let Some(v) = folder_notes::note_value(t) {
                         e.1.insert(Key::cell(&name, *p, folder_notes::NOTE), v);
+                    }
+                }
+                for (p, n) in &f.scales {
+                    if let Some(v) = folder_notes::scale_value(*n) {
+                        e.1.insert(Key::cell(&name, *p, folder_notes::SCALE), v);
                     }
                 }
             }
@@ -713,6 +725,55 @@ mod tests {
             }
         }
         panic!("non si è fermato");
+    }
+
+    #[test]
+    fn la_scala_di_miniature_va_e_torna_dal_file_della_cartella() {
+        use winfiles_model::{FileEntry, FileKind};
+        let mut p = Project::new("prova");
+        let mut f = FileEntry::new(PathBuf::from("/lavori/tavole.pdf"), FileKind::Pdf);
+        f.scales.insert(0, 20);
+        f.scales.insert(3, 50);
+        p.files.push(f);
+        let holder = ProjectHolder {
+            project: &mut p,
+            also: None,
+            notes: true,
+            annotations: folder_notes::ANNOTATIONS,
+            busy: false,
+        };
+        let snap = holder.snapshot();
+        let (names, cells) = snap.get(Path::new("/lavori")).unwrap();
+        assert_eq!(
+            cells.get(&Key::cell("tavole.pdf", 3, folder_notes::SCALE)),
+            Some(&Value::from(50))
+        );
+        // Un altro PC: il file non ancora misurato prende comunque le scale di tutte le pagine.
+        let mut q = Project::new("collega");
+        q.files
+            .push(FileEntry::new(PathBuf::from("/lavori/tavole.pdf"), FileKind::Pdf));
+        apply_to(
+            &mut q,
+            Path::new("/lavori"),
+            names,
+            cells,
+            true,
+            folder_notes::ANNOTATIONS,
+        );
+        assert_eq!(q.files[0].scales, BTreeMap::from([(0, 20), (3, 50)]));
+        // La scala tolta da un collega sparisce anche qui.
+        apply_to(
+            &mut q,
+            Path::new("/lavori"),
+            names,
+            &Cells::new(),
+            true,
+            folder_notes::ANNOTATIONS,
+        );
+        assert!(q.files[0].scales.is_empty());
+        // Visualizza non tocca la scala.
+        assert!(!VIEWER.fields.contains(&folder_notes::SCALE));
+        assert!(MINIATURE.fields.contains(&folder_notes::SCALE));
     }
 
     #[test]

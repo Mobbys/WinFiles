@@ -32,7 +32,12 @@ di vedere **la misura vera in grande e quella del file sotto**.
   clic sulle pillole per il timbro: il primo clic metterebbe già la scala ai file scelti. Annota e Scala non stanno aperte insieme.
 
 ## Dopo (fasi successive)
-Visualizza e Quote dei moduli di modifica; «Manda al nesting» con la scala; salvataggio nel
-file condiviso della cartella `note.winfiles`, insieme alle annotazioni.
+Visualizza e Quote dei moduli di modifica; «Manda al nesting» con la scala.
+
+## Nel file della cartella
+La scala si salva anche in `note.winfiles` (ADR 0038), campo `"scala"` della pagina con il solo
+numero N, scritto da Miniature (`folder_sync::MINIATURE`) con la stessa rilettura e unione delle
+note: un collega che apre la cartella trova le scale. Alla lettura la scala entra anche nelle
+pagine di un file non ancora misurato; tetto 1:`MAX_SCALE`.
 La scala si mette solo a mano: niente riconoscimento dal nome del file (Michel, 2026-11-16: in
 ditta la scala non dipende dal nome).

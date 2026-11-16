@@ -33,6 +33,8 @@ pub const NOTE: &str = "nota";
 pub const ANNOTATIONS: &str = "annotazioni";
 /// Campo delle annotazioni di Visualizza.
 pub const VIEWER_ANNOTATIONS: &str = "annotazioni_visualizza";
+/// Campo della scala di una pagina disegnata in scala: N di 1:N (ADR 0039).
+pub const SCALE: &str = "scala";
 
 /// Tetto alla dimensione del file letto.
 const MAX_BYTES: u64 = 32 << 20;
@@ -327,6 +329,20 @@ pub fn note_from(v: &Value) -> String {
     }
 }
 
+/// Il valore della scala di una pagina; `None` per 1:1 (la pagina non ne ha).
+pub fn scale_value(scale: u32) -> Option<Value> {
+    (scale > 1).then(|| Value::from(scale.min(crate::MAX_SCALE)))
+}
+
+/// La scala letta da una cella, entro 1:1…1:`MAX_SCALE`; 1 se la cella non è un numero.
+pub fn scale_from(v: &Value) -> u32 {
+    v.as_u64()
+        .map_or(1, |n| {
+            u32::try_from(n.min(u64::from(crate::MAX_SCALE))).unwrap_or(1)
+        })
+        .max(1)
+}
+
 /// Il valore delle annotazioni di una pagina: i capi attaccati a un file della stessa cartella
 /// si scrivono col solo nome, così valgono anche da un PC che vede la cartella con un altro
 /// percorso. `None` se non ce ne sono.
@@ -394,6 +410,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn la_scala_si_scrive_come_numero_e_si_legge_con_un_tetto() {
+        assert_eq!(scale_value(1), None);
+        assert_eq!(scale_value(20), Some(Value::from(20)));
+        assert_eq!(scale_from(&Value::from(20)), 20);
+        assert_eq!(scale_from(&Value::from(10_000_000u64)), crate::MAX_SCALE);
+        assert_eq!(scale_from(&Value::from(0)), 1);
+        assert_eq!(scale_from(&Value::String("1:20".into())), 1);
     }
 
     #[test]
