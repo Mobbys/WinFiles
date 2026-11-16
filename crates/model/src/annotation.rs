@@ -2,9 +2,15 @@
 //! dell'evidenziatore e quote. Ognuna è attaccata a una pagina di un file e ha i punti in frazioni
 //! della parte mostrata della pagina (0 = bordo sinistro o alto, 1 = bordo destro o basso): così
 //! segue la miniatura quando cambiano colonne, foglio o ordine dei file. Spessori e corpi sono in
-//! millimetri sulla carta, uguali a ogni grandezza della miniatura.
+//! proporzione alla pagina: in mm di una pagina il cui lato lungo misura [`PAGE_LONG_MM`]
+//! (ADR 0040). Così la stessa annotazione si vede uguale, in proporzione, sulla miniatura e
+//! nel Visualizza.
 
 use serde::{Deserialize, Serialize};
+
+/// Il lato lungo della pagina a cui si riferiscono spessori e corpi delle annotazioni (mm):
+/// quello di un A4. Su una miniatura con il lato lungo di 50 mm si disegnano 50/297 più piccoli.
+pub const PAGE_LONG_MM: f64 = 297.0;
 
 /// Punti al più di un tratto dell'evidenziatore: oltre, il file è sicuramente rovinato.
 pub const MAX_MARKER_POINTS: usize = 4000;
@@ -193,6 +199,40 @@ impl Annotation {
     }
 
     /// La stessa annotazione spostata di `(dx, dy)` in frazioni della miniatura.
+    /// La stessa annotazione con spessori, corpi e larghezze dei testi moltiplicati per `k`.
+    pub fn scaled(&self, k: f64) -> Self {
+        let k = if k.is_finite() && k > 0.0 { k } else { 1.0 };
+        let mut out = self.clone();
+        match &mut out {
+            Annotation::Linea { width, .. } | Annotation::Evidenziatore { width, .. } => *width *= k,
+            Annotation::Quota { width, size, .. } => {
+                *width *= k;
+                *size *= k;
+            }
+            Annotation::Rettangolo { style, .. } | Annotation::Ovale { style, .. } => {
+                if let Some((_, w)) = &mut style.stroke {
+                    *w *= k;
+                }
+            }
+            Annotation::Testo { size, width, .. } => {
+                *size *= k;
+                if let Some(w) = width {
+                    *w *= k;
+                }
+            }
+            Annotation::Richiamo {
+                size, line, width, ..
+            } => {
+                *size *= k;
+                *line *= k;
+                if let Some(w) = width {
+                    *w *= k;
+                }
+            }
+        }
+        out
+    }
+
     pub fn moved(&self, dx: f64, dy: f64) -> Self {
         let m = |p: &Point| (p.0 + dx, p.1 + dy);
         let mut out = self.clone();
@@ -225,7 +265,7 @@ impl Annotation {
             p.0 = clean(p.0, 0.5).clamp(-REACH, 1.0 + REACH);
             p.1 = clean(p.1, 0.5).clamp(-REACH, 1.0 + REACH);
         };
-        let width = |w: &mut f64| *w = clean(*w, 0.5).clamp(0.05, 20.0);
+        let width = |w: &mut f64| *w = clean(*w, 0.5).clamp(0.01, 400.0);
         match self {
             Annotation::Linea {
                 a, b, width: w, end, ..
@@ -248,7 +288,7 @@ impl Annotation {
                 point(a);
                 point(b);
                 width(w);
-                *size = clean(*size, QUOTE_SIZE).clamp(1.0, 40.0);
+                *size = clean(*size, QUOTE_SIZE).clamp(0.1, 1000.0);
                 *value = value.filter(|v| v.is_finite() && *v > 0.0 && *v <= 1_000_000.0);
             }
             Annotation::Rettangolo { a, b, style, .. } | Annotation::Ovale { a, b, style } => {
@@ -267,9 +307,9 @@ impl Annotation {
                 ..
             } => {
                 point(at);
-                *size = clean(*size, 4.0).clamp(0.5, 100.0);
+                *size = clean(*size, 4.0).clamp(0.1, 2000.0);
                 if let Some(w) = w {
-                    *w = clean(*w, 40.0).clamp(2.0, 2000.0);
+                    *w = clean(*w, 40.0).clamp(0.5, 40000.0);
                 }
                 if text.chars().count() > MAX_TEXT_CHARS {
                     *text = text.chars().take(MAX_TEXT_CHARS).collect();
@@ -287,10 +327,10 @@ impl Annotation {
             } => {
                 point(tip);
                 point(at);
-                *size = clean(*size, 4.0).clamp(0.5, 100.0);
+                *size = clean(*size, 4.0).clamp(0.1, 2000.0);
                 width(line);
                 if let Some(w) = w {
-                    *w = clean(*w, 40.0).clamp(2.0, 2000.0);
+                    *w = clean(*w, 40.0).clamp(0.5, 40000.0);
                 }
                 if text.chars().count() > MAX_TEXT_CHARS {
                     *text = text.chars().take(MAX_TEXT_CHARS).collect();
