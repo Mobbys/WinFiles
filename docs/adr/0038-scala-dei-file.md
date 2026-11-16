@@ -33,6 +33,6 @@ di vedere **la misura vera in grande e quella del file sotto**.
 
 ## Dopo (fasi successive)
 Visualizza e Quote dei moduli di modifica; «Manda al nesting» con la scala; salvataggio nel
-file condiviso della cartella `_Note WinFiles.winfiles-note`, insieme alle annotazioni.
+file condiviso della cartella `note.winfiles`, insieme alle annotazioni.
 La scala si mette solo a mano: niente riconoscimento dal nome del file (Michel, 2026-11-16: in
 ditta la scala non dipende dal nome).
