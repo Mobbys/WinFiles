@@ -166,6 +166,9 @@ pub struct WinFilesApp {
     pub(crate) fit_choice: Option<(u32, Orientation)>,
     /// Il modulo mostrato: miniature da stampare o modifica dei PDF.
     pub(crate) module: Module,
+    /// La scheda all'ultimo disegno: passando fra Miniature e Visualizza le annotazioni si
+    /// scrivono subito e l'altra scheda le rilegge (sono le stesse, ADR 0040).
+    last_module: Module,
     /// Il modulo PDF (Fase 9), con il suo documento aperto.
     pub(crate) pdf: crate::pdf::PdfModule,
     /// Il modulo immagini (Fase 8), con le immagini aperte.
@@ -306,6 +309,7 @@ impl WinFilesApp {
             notes_local_told: 0,
             annot_bar: true,
             module: Module::Thumbnails,
+            last_module: Module::Thumbnails,
             pdf: crate::pdf::PdfModule::new(ctx),
             images: crate::images::ImagesModule::new(ctx),
             nesting: crate::nesting::NestingModule::new(ctx),
@@ -1026,7 +1030,7 @@ impl WinFilesApp {
             project: &mut self.project,
             also: Some(&mut self.saved),
             notes: true,
-            annotations: winfiles_model::folder_notes::ANNOTATIONS,
+            legacy: true,
             busy,
         };
         self.folder_sync.tick(ctx, &mut holder);
@@ -1049,7 +1053,7 @@ impl WinFilesApp {
             project: &mut self.project,
             also: Some(&mut self.saved),
             notes: true,
-            annotations: winfiles_model::folder_notes::ANNOTATIONS,
+            legacy: true,
             busy,
         };
         self.folder_sync.flush(&mut holder);
@@ -3211,8 +3215,49 @@ impl WinFilesApp {
             Ok(Sheets { summary, grid })
         });
         let pages = std::rc::Rc::new(pages);
-        self.layout_cache = Some((self.project.clone(), self.filter.clone(), pages.clone()));
+        // Le annotazioni vecchie passano nel campo unico: il lavoro cambia, si reimpagina al
+        // prossimo disegno (il riepilogo conta le annotazioni).
+        if self.convert_annotations(&pages) {
+            self.layout_cache = None;
+        } else {
+            self.layout_cache = Some((self.project.clone(), self.filter.clone(), pages.clone()));
+        }
         pages
+    }
+
+    /// Porta le annotazioni di Miniature della 0.2.41–0.2.42 (spessori e corpi in mm della
+    /// carta) nel campo unico, in proporzione alla pagina, usando la grandezza della loro
+    /// miniatura nella griglia (ADR 0040). `true` se ne ha portata qualcuna.
+    fn convert_annotations(&mut self, pages: &Pages) -> bool {
+        if self.project.print.view != View::Grid
+            || self.project.files.iter().all(|f| f.legacy_annotations.is_empty())
+        {
+            return false;
+        }
+        let Ok(sheets) = pages else { return false };
+        let mut done = false;
+        for item in sheets.grid.iter().flat_map(|s| s.items.iter()) {
+            let Some(slot) = self.slots.get(item.id) else {
+                continue;
+            };
+            let Some(f) = self.project.files.get_mut(slot.file) else {
+                continue;
+            };
+            let Some(old) = f.legacy_annotations.remove(&slot.page) else {
+                continue;
+            };
+            let list = crate::annotate::from_paper(&old, item.image);
+            let path = f.path.clone();
+            crate::annotate::add_missing(f.annotations.entry(slot.page).or_default(), list.clone());
+            // Anche nella copia dell'ultimo salvataggio, così il lavoro non risulta modificato.
+            if let Some(s) = self.saved.files.iter_mut().find(|s| s.path == path)
+                && s.legacy_annotations.remove(&slot.page).is_some()
+            {
+                crate::annotate::add_missing(s.annotations.entry(slot.page).or_default(), list);
+            }
+            done = true;
+        }
+        done
     }
 }
 
@@ -3552,6 +3597,19 @@ impl eframe::App for WinFilesApp {
         }
         self.sync_theme(ui.ctx());
         self.receive_scans();
+        if self.module != self.last_module {
+            match self.last_module {
+                Module::Viewer => self.viewer.notes.flush(),
+                Module::Thumbnails => self.flush_folder_notes(),
+                _ => {}
+            }
+            match self.module {
+                Module::Viewer => self.viewer.notes.refresh(),
+                Module::Thumbnails => self.folder_sync.refresh(),
+                _ => {}
+            }
+            self.last_module = self.module;
+        }
         self.sync_folder_notes(&ctx);
         self.receive_measures();
         self.thumbs.receive(ui.ctx());

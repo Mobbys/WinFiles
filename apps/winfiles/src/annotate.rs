@@ -13,7 +13,9 @@ use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use winfiles_geom::{Rect as MmRect, Unit};
 use winfiles_layout::Sheet;
-use winfiles_model::{Anchor, Annotation, MAX_PER_PAGE, PageInfo, Point, Project, Rgba, ShapeStyle};
+use winfiles_model::{
+    Anchor, Annotation, MAX_PER_PAGE, PAGE_LONG_MM, PageInfo, Point, Project, Rgba, ShapeStyle,
+};
 use winfiles_scene::Weight;
 
 use crate::captions::Slot;
@@ -410,6 +412,38 @@ fn callout_box(
     text_box(at, w, h, size, background || border, width)
 }
 
+/// mm della carta per mm "di pagina" delle annotazioni sulla miniatura `image`: spessori e corpi
+/// salvati sono in proporzione alla pagina (ADR 0040). Nel Visualizza la pagina ha il lato lungo
+/// di [`PAGE_LONG_MM`] e vale 1.
+pub fn page_k(image: MmRect) -> f64 {
+    let long = image.w.max(image.h);
+    if long.is_finite() && long > 1e-6 {
+        long / PAGE_LONG_MM
+    } else {
+        1.0
+    }
+}
+
+/// Annotazioni con spessori e corpi in mm della carta sulla miniatura `image` (come le salvava
+/// Miniature fino alla 0.2.42) portate in proporzione alla pagina.
+pub fn from_paper(list: &[Annotation], image: MmRect) -> Vec<Annotation> {
+    let k = page_k(image);
+    list.iter().map(|a| a.scaled(1.0 / k)).collect()
+}
+
+/// Aggiunge a `list` le annotazioni di `more` che non ci sono già: due copie che passano
+/// insieme le stesse annotazioni vecchie nel campo unico non le raddoppiano.
+pub fn add_missing(list: &mut Vec<Annotation>, more: Vec<Annotation>) {
+    for a in more {
+        if list.len() >= MAX_PER_PAGE {
+            break;
+        }
+        if !list.contains(&a) {
+            list.push(a);
+        }
+    }
+}
+
 /// Dove sta sul foglio la miniatura di una pagina di un file (per percorso), se c'è.
 pub type Placed<'a> = dyn Fn(&std::path::Path, usize) -> Option<MmRect> + 'a;
 
@@ -424,8 +458,9 @@ pub fn draw(
     placed: &Placed<'_>,
 ) {
     let scale = quote_scale(list, page);
+    let k = page_k(image);
     for a in list {
-        draw_one(sk, image, &resolve(a, image, placed), page, unit, scale);
+        draw_one(sk, image, &resolve(a, image, placed).scaled(k), page, unit, scale);
     }
 }
 
@@ -902,7 +937,7 @@ fn screen_bounds(ctx: &egui::Context, a: &Annotation, image: MmRect, origin: Pos
 
 /// Il riquadro (mm) di un'annotazione sulla pagina `image`, senza spessori.
 pub fn bounds_mm(ctx: &egui::Context, a: &Annotation, image: MmRect) -> MmRect {
-    let r = screen_bounds(ctx, a, image, Pos2::ZERO, 1.0);
+    let r = screen_bounds(ctx, &a.scaled(page_k(image)), image, Pos2::ZERO, 1.0);
     if !r.is_finite() || r.is_negative() {
         let (x, y) = to_mm(image, (0.5, 0.5));
         return MmRect::new(x, y, 0.0, 0.0);
@@ -1442,11 +1477,20 @@ impl Annotator {
     pub fn restyle_selected(&mut self, project: &mut Project) {
         let Some(t) = self.selected else { return };
         let style = self.style.clone();
+        let k = self.k_of(t);
         self.edit(project, t.file, t.page, |list| {
             if let Some(a) = list.get_mut(t.index) {
-                *a = style.apply_to(a);
+                *a = style.apply_to(&a.scaled(k)).scaled(1.0 / k);
             }
         });
+    }
+
+    /// mm della carta per mm di pagina sulla miniatura della pagina di `t` (1 se non è sul foglio).
+    fn k_of(&self, t: Target) -> f64 {
+        self.placed
+            .iter()
+            .find(|(s, _)| s.file == t.file && s.page == t.page)
+            .map_or(1.0, |(s, _)| page_k(s.image))
     }
 
     /// Le punte della linea scelta.
@@ -1542,7 +1586,8 @@ impl Annotator {
                     continue;
                 };
                 for (index, a) in f.annotations(s.page).iter().enumerate().rev() {
-                    if let Some(d) = hit_distance(&ctx, a, s.image, origin, scale, q) {
+                    let a = a.scaled(page_k(s.image));
+                    if let Some(d) = hit_distance(&ctx, &a, s.image, origin, scale, q) {
                         let t = Target {
                             file: s.file,
                             page: s.page,
@@ -1565,7 +1610,7 @@ impl Annotator {
                 let t = sel?;
                 let a = annotation(shown, t)?;
                 let s = find_spot(t.file, t.page)?;
-                handles(&ctx, &a, s.image, origin, scale)
+                handles(&ctx, &a.scaled(page_k(s.image)), s.image, origin, scale)
                     .into_iter()
                     .find(|(_, p)| p.distance(q) <= GRIP)
                     .map(|(h, _)| (t, h, a.clone(), s))
@@ -1625,8 +1670,10 @@ impl Annotator {
                 }
             } else {
                 self.selected = found;
-                if let Some(a) = found.and_then(|t| annotation(shown, t)) {
-                    self.style.take_from(&a);
+                if let Some(t) = found
+                    && let (Some(a), Some(s)) = (annotation(shown, t), find_spot(t.file, t.page))
+                {
+                    self.style.take_from(&a.scaled(page_k(s.image)));
                 }
             }
         }
@@ -1648,7 +1695,7 @@ impl Annotator {
                     && let (Some(a), Some(s)) = (annotation(shown, t), find_spot(t.file, t.page))
                 {
                     self.selected = Some(t);
-                    self.style.take_from(&a);
+                    self.style.take_from(&a.scaled(page_k(s.image)));
                     self.drag = Some(Drag {
                         target: t,
                         image: s.image,
@@ -1660,7 +1707,7 @@ impl Annotator {
                     && f.annotations(s.page).len() < MAX_PER_PAGE
                 {
                     let p = to_frac(s.image, at);
-                    let first = self.new_shape(p, p);
+                    let first = self.new_shape(p, p).scaled(1.0 / page_k(s.image));
                     let mut list = f.annotations(s.page).to_vec();
                     list.push(first);
                     let index = list.len() - 1;
@@ -1688,7 +1735,13 @@ impl Annotator {
             let t = drag.target;
             let current = annotation(shown, t);
             let changed = match (&drag.gesture, current) {
-                (Gesture::New { from }, Some(cur)) => Some(self.grow_new(&cur, drag.image, *from, at, shift)),
+                (Gesture::New { from }, Some(cur)) => {
+                    let k = page_k(drag.image);
+                    Some(
+                        self.grow_new(&cur.scaled(k), drag.image, *from, at, shift)
+                            .scaled(1.0 / k),
+                    )
+                }
                 (Gesture::Move { from, start }, _) => {
                     let (dx, dy) = (at.0 - from.0, at.1 - from.1);
                     let (fx, fy) = (dx / drag.image.w.max(1e-9), dy / drag.image.h.max(1e-9));
@@ -1702,7 +1755,8 @@ impl Annotator {
                     Some(moved)
                 }
                 (Gesture::Handle { handle, start }, _) => {
-                    Some(pull(&ctx, start, *handle, drag.image, at, shift))
+                    let k = page_k(drag.image);
+                    Some(pull(&ctx, &start.scaled(k), *handle, drag.image, at, shift).scaled(1.0 / k))
                 }
                 _ => None,
             };
@@ -1724,7 +1778,7 @@ impl Annotator {
             if let Gesture::New { .. } = drag.gesture
                 && let Some(a) = annotation(shown, t)
             {
-                let r = screen_bounds(&ctx, &a, drag.image, origin, scale);
+                let r = screen_bounds(&ctx, &a.scaled(page_k(drag.image)), drag.image, origin, scale);
                 let small = match a {
                     Annotation::Testo { .. } | Annotation::Richiamo { .. } => false,
                     Annotation::Linea { .. }
@@ -1798,7 +1852,7 @@ impl Annotator {
             return;
         }
         let mut list = f.annotations(s.page).to_vec();
-        list.push(Annotation::Testo {
+        let text = Annotation::Testo {
             at: to_frac(s.image, at),
             text: String::new(),
             color: self.style.color,
@@ -1806,7 +1860,8 @@ impl Annotator {
             bold: self.style.bold,
             background: self.style.background,
             width,
-        });
+        };
+        list.push(text.scaled(1.0 / page_k(s.image)));
         let t = Target {
             file: s.file,
             page: s.page,
@@ -1836,7 +1891,7 @@ impl Annotator {
         if let Annotation::Richiamo { at: p, .. } = &mut a {
             *p = to_frac(s.image, at);
         }
-        list.push(a);
+        list.push(a.scaled(1.0 / page_k(s.image)));
         let t = Target {
             file: s.file,
             page: s.page,
@@ -2013,6 +2068,7 @@ impl Annotator {
         else {
             return;
         };
+        let a = &a.scaled(page_k(s.image));
         let tokens = Tokens::get(ui.ctx());
         let p = ui.painter();
         let r = screen_bounds(ui.ctx(), a, s.image, origin, scale).expand(4.0);
@@ -2064,7 +2120,7 @@ impl Annotator {
             self.editing = None;
             return;
         };
-        let r = screen_bounds(ui.ctx(), &a, s.image, origin, scale);
+        let r = screen_bounds(ui.ctx(), &a.scaled(page_k(s.image)), s.image, origin, scale);
         let at = pos2(r.left(), r.bottom() + 6.0);
         let mut done = false;
         let mut lost = false;
@@ -2144,7 +2200,7 @@ impl Annotator {
             return;
         };
         let unit = shown.unit;
-        let r = screen_bounds(ui.ctx(), &a, s.image, origin, scale);
+        let r = screen_bounds(ui.ctx(), &a.scaled(page_k(s.image)), s.image, origin, scale);
         let mut done = false;
         let mut cancel = false;
         egui::Area::new(egui::Id::new("misura-quota"))
@@ -2579,6 +2635,33 @@ mod tests {
         assert!(x < 150.0 || y > 100.0);
         // Punta dentro il riquadro: niente freccia.
         assert_eq!(callout_geometry(r, (120.0, 110.0), 4.0), None);
+    }
+
+    #[test]
+    fn spessori_e_corpi_seguono_la_grandezza_della_pagina() {
+        // Nel Visualizza il lato lungo della pagina è PAGE_LONG_MM: niente da cambiare.
+        let page = MmRect::new(0.0, 0.0, PAGE_LONG_MM, 200.0);
+        assert!((page_k(page) - 1.0).abs() < 1e-12);
+        // Su una miniatura di 49,5 mm tutto è sei volte più piccolo.
+        let thumb = MmRect::new(10.0, 10.0, 49.5, 33.0);
+        assert!((page_k(thumb) - 1.0 / 6.0).abs() < 1e-12);
+        // Un testo di 3 mm fatto sulla miniatura dalla 0.2.42 resta di 3 mm sulla miniatura.
+        let old = Annotation::Testo {
+            at: (0.1, 0.1),
+            text: "x".into(),
+            color: Rgba::rgb(0, 0, 0),
+            size: 3.0,
+            bold: false,
+            background: false,
+            width: Some(20.0),
+        };
+        let new = from_paper(std::slice::from_ref(&old), thumb);
+        let Some(Annotation::Testo { size, width, .. }) = new.first() else {
+            panic!("testo perso");
+        };
+        assert!((size - 18.0).abs() < 1e-9);
+        assert!((width.unwrap() - 120.0).abs() < 1e-9);
+        assert_eq!(new[0].scaled(page_k(thumb)), old);
     }
 
     #[test]

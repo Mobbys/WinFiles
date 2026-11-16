@@ -12,7 +12,7 @@ use winfiles_geom::{Margins, Orientation, Paper, Size, Unit, area_m2};
 
 mod annotation;
 pub mod folder_notes;
-pub use annotation::{Anchor, Annotation, MAX_PER_PAGE, Point, QUOTE_SIZE, Rgba, ShapeStyle};
+pub use annotation::{Anchor, Annotation, MAX_PER_PAGE, PAGE_LONG_MM, Point, QUOTE_SIZE, Rgba, ShapeStyle};
 
 /// Versione del formato del file di progetto. Si alza a ogni modifica incompatibile.
 pub const FORMAT_VERSION: u32 = 1;
@@ -166,9 +166,20 @@ pub struct FileEntry {
     /// spunta della 4.9. Un file senza misure ha comunque la sua pagina 0.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub skip: BTreeSet<usize>,
-    /// Annotazioni disegnate sopra la miniatura, per pagina (da 0) come le note.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    /// Annotazioni disegnate sopra la pagina, per pagina (da 0) come le note: le stesse in
+    /// Miniature e in Visualizza. Spessori e corpi sono in proporzione alla pagina
+    /// ([`PAGE_LONG_MM`], ADR 0040).
+    #[serde(
+        default,
+        rename = "annotazioni_pagina",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub annotations: BTreeMap<usize, Vec<Annotation>>,
+    /// Annotazioni di Miniature fino alla 0.2.42, con spessori e corpi in mm della carta alla
+    /// grandezza che aveva la miniatura: passano in `annotations` appena la miniatura è sul
+    /// foglio e se ne conosce la grandezza.
+    #[serde(default, rename = "annotations", skip_serializing_if = "BTreeMap::is_empty")]
+    pub legacy_annotations: BTreeMap<usize, Vec<Annotation>>,
     /// Le pagine (da 0) disegnate in scala, con N di 1:N: la misura vera è N volte quella del file.
     /// Le pagine che non ci sono sono 1:1.
     #[serde(default, rename = "scala", skip_serializing_if = "BTreeMap::is_empty")]
@@ -189,6 +200,7 @@ impl FileEntry {
             notes: BTreeMap::new(),
             skip: BTreeSet::new(),
             annotations: BTreeMap::new(),
+            legacy_annotations: BTreeMap::new(),
             scales: BTreeMap::new(),
             legacy_note: String::new(),
         }
@@ -633,11 +645,13 @@ impl Project {
                 f.notes.entry(0).or_insert(legacy);
             }
             // Le annotazioni arrivano da un file che può essere rovinato.
-            f.annotations.retain(|_, list| {
-                list.truncate(MAX_PER_PAGE);
-                list.retain_mut(Annotation::sanitize);
-                !list.is_empty()
-            });
+            for map in [&mut f.annotations, &mut f.legacy_annotations] {
+                map.retain(|_, list| {
+                    list.truncate(MAX_PER_PAGE);
+                    list.retain_mut(Annotation::sanitize);
+                    !list.is_empty()
+                });
+            }
         }
         if project.version > FORMAT_VERSION {
             return Err(ModelError::TooNew {
@@ -806,6 +820,7 @@ mod tests {
             notes: BTreeMap::from([(0, "Verificare il colore Pantone, è più scuro".into())]),
             skip: BTreeSet::new(),
             annotations: BTreeMap::new(),
+            legacy_annotations: BTreeMap::new(),
             scales: BTreeMap::new(),
             legacy_note: String::new(),
         });

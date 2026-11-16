@@ -15,7 +15,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant, SystemTime};
 
 use winfiles_model::folder_notes::{self, Cells, FolderNotes, Key};
-use winfiles_model::{ModelError, Project};
+use winfiles_model::{Annotation, ModelError, Project};
 
 /// Ogni quanto si guarda se le note sono cambiate.
 const TICK: Duration = Duration::from_millis(300);
@@ -186,6 +186,15 @@ impl FolderSync {
     /// Vero se le note di tutte le cartelle sono state lette almeno una volta.
     pub fn settled(&self) -> bool {
         self.states.values().all(|s| s.base.is_some() && !s.busy)
+    }
+
+    /// Rilegge tutte le cartelle al prossimo giro, senza aspettare il solito intervallo: quando
+    /// un'altra scheda può aver appena scritto le stesse annotazioni.
+    pub fn refresh(&mut self) {
+        self.last_tick = None;
+        for st in self.states.values_mut() {
+            st.last_sync = None;
+        }
     }
 
     /// Da chiamare a ogni giro della finestra: porta le note dei colleghi e salva le proprie.
@@ -370,19 +379,27 @@ pub struct ProjectHolder<'a> {
     pub also: Option<&'a mut Project>,
     /// Note per pagina e nota di cartella (solo Miniature).
     pub notes: bool,
-    /// Il campo in cui vanno le annotazioni dei file.
-    pub annotations: &'static str,
+    /// Tiene anche le annotazioni di Miniature della 0.2.41–0.2.42 (in mm della carta) finché
+    /// non passano nel campo unico: solo Miniature, che conosce la grandezza delle miniature.
+    pub legacy: bool,
     pub busy: bool,
 }
 
-/// Cosa salva Miniature: note per pagina, nota di cartella, annotazioni e scala dei file.
+/// Cosa salva Miniature: note per pagina, nota di cartella, annotazioni e scala dei file; in
+/// più svuota i campi delle annotazioni della 0.2.41–0.2.42 dopo averle portate nel campo unico.
 pub const MINIATURE: Owned = Owned {
-    fields: &[folder_notes::NOTE, folder_notes::ANNOTATIONS, folder_notes::SCALE],
+    fields: &[
+        folder_notes::NOTE,
+        folder_notes::PAGE_ANNOTATIONS,
+        folder_notes::ANNOTATIONS,
+        folder_notes::VIEWER_ANNOTATIONS,
+        folder_notes::SCALE,
+    ],
     folder_note: true,
 };
-/// Cosa salva Visualizza: le sue annotazioni.
+/// Cosa salva Visualizza: le annotazioni (le stesse di Miniature, ADR 0040).
 pub const VIEWER: Owned = Owned {
-    fields: &[folder_notes::VIEWER_ANNOTATIONS],
+    fields: &[folder_notes::PAGE_ANNOTATIONS, folder_notes::VIEWER_ANNOTATIONS],
     folder_note: false,
 };
 
@@ -392,7 +409,7 @@ fn apply_to(
     names: &BTreeSet<String>,
     cells: &Cells,
     notes: bool,
-    field: &str,
+    legacy: bool,
 ) {
     for f in project.files.iter_mut().filter(|f| f.folder() == dir) {
         let Some(name) = folder_notes::file_key(&f.path) else {
@@ -405,7 +422,11 @@ fn apply_to(
             f.notes.clear();
             f.scales.clear();
         }
-        f.annotations.clear();
+        if legacy {
+            f.legacy_annotations.clear();
+        }
+        let mut pages: BTreeMap<usize, Vec<Annotation>> = BTreeMap::new();
+        let mut viewer: BTreeMap<usize, Vec<Annotation>> = BTreeMap::new();
         for (k, v) in cells {
             let Key::Cell {
                 file,
@@ -428,10 +449,25 @@ fn apply_to(
                 if n > 1 {
                     f.scales.insert(*page, n);
                 }
-            } else if fd == field {
-                f.set_annotations(*page, folder_notes::annotations_from(v, dir));
+            } else if fd == folder_notes::PAGE_ANNOTATIONS {
+                pages.insert(*page, folder_notes::annotations_from(v, dir));
+            } else if fd == folder_notes::VIEWER_ANNOTATIONS {
+                // Le annotazioni di Visualizza della 0.2.41: già in proporzione alla pagina.
+                viewer.insert(*page, folder_notes::annotations_from(v, dir));
+            } else if legacy && fd == folder_notes::ANNOTATIONS {
+                // Quelle di Miniature della 0.2.41: si portano nel campo unico quando si conosce
+                // la grandezza della miniatura (`WinFilesApp::convert_annotations`).
+                let list = folder_notes::annotations_from(v, dir);
+                if !list.is_empty() {
+                    f.legacy_annotations.insert(*page, list);
+                }
             }
         }
+        for (page, more) in viewer {
+            crate::annotate::add_missing(pages.entry(page).or_default(), more);
+        }
+        pages.retain(|_, list| !list.is_empty());
+        f.annotations = pages;
     }
     if notes && !names.is_empty() {
         match cells.get(&Key::Folder) {
@@ -479,7 +515,15 @@ impl Holder for ProjectHolder<'_> {
             }
             for (p, list) in &f.annotations {
                 if let Some(v) = folder_notes::annotations_value(list, dir) {
-                    e.1.insert(Key::cell(&name, *p, self.annotations), v);
+                    e.1.insert(Key::cell(&name, *p, folder_notes::PAGE_ANNOTATIONS), v);
+                }
+            }
+            // Le annotazioni vecchie non ancora passate restano nel loro campo fino ad allora.
+            if self.legacy {
+                for (p, list) in &f.legacy_annotations {
+                    if let Some(v) = folder_notes::annotations_value(list, dir) {
+                        e.1.insert(Key::cell(&name, *p, folder_notes::ANNOTATIONS), v);
+                    }
                 }
             }
         }
@@ -499,9 +543,9 @@ impl Holder for ProjectHolder<'_> {
     }
 
     fn apply(&mut self, dir: &Path, names: &BTreeSet<String>, cells: &Cells) {
-        apply_to(self.project, dir, names, cells, self.notes, self.annotations);
+        apply_to(self.project, dir, names, cells, self.notes, self.legacy);
         if let Some(also) = self.also.as_deref_mut() {
-            apply_to(also, dir, names, cells, self.notes, self.annotations);
+            apply_to(also, dir, names, cells, self.notes, self.legacy);
         }
     }
 
@@ -874,7 +918,7 @@ mod tests {
                 project: p,
                 also: None,
                 notes: true,
-                annotations: folder_notes::ANNOTATIONS,
+                legacy: true,
                 busy: false,
             }
         }
@@ -916,6 +960,93 @@ mod tests {
         run(&mut sync2, &mut collega);
         let text = std::fs::read_to_string(folder_notes::path_in(&dir)).unwrap();
         assert!(text.contains("\"scala\":20"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&local);
+    }
+
+    #[test]
+    fn le_annotazioni_vecchie_passano_nel_campo_unico() {
+        use winfiles_model::{FileEntry, FileKind, Rgba};
+        let dir = temp("unico");
+        let local = temp("unico-locale");
+        let path = dir.join("tavola.png");
+        std::fs::write(&path, b"x").unwrap();
+        let line = |w: f64| Annotation::Linea {
+            a: (0.1, 0.1),
+            b: (0.9, 0.9),
+            color: Rgba::rgb(255, 0, 0),
+            width: w,
+            start_arrow: false,
+            end_arrow: true,
+            end: None,
+        };
+        // Come le scriveva la 0.2.41: Miniature in mm della carta, Visualizza già in proporzione.
+        let old = serde_json::json!({
+            "versione": 1,
+            "file": { "tavola.png": { "pagine": { "0": {
+                "annotazioni": [line(0.5)],
+                "annotazioni_visualizza": [line(2.0)],
+            } } } }
+        });
+        std::fs::write(folder_notes::path_in(&dir), old.to_string()).unwrap();
+        fn holder(p: &mut Project, notes: bool) -> ProjectHolder<'_> {
+            ProjectHolder {
+                project: p,
+                also: None,
+                notes,
+                legacy: notes,
+                busy: false,
+            }
+        }
+        let run = |sync: &mut FolderSync, p: &mut Project, notes: bool| {
+            let ctx = egui::Context::default();
+            for _ in 0..200 {
+                sync.last_tick = None;
+                for s in sync.states.values_mut() {
+                    s.changed_at = None;
+                }
+                sync.tick(&ctx, &mut holder(p, notes));
+                std::thread::sleep(Duration::from_millis(5));
+                if sync.settled() {
+                    sync.flush(&mut holder(p, notes));
+                    return;
+                }
+            }
+            panic!("non si è fermato");
+        };
+        let mut lavoro = Project::new("a");
+        lavoro.files.push(FileEntry::new(path.clone(), FileKind::Image));
+        let mut sync = FolderSync::with_local(MINIATURE, Some(local.clone()));
+        run(&mut sync, &mut lavoro, true);
+        // Quella di Visualizza è già nel campo unico, quella di Miniature aspetta la miniatura.
+        assert_eq!(lavoro.files[0].annotations(0), &[line(2.0)]);
+        assert_eq!(lavoro.files[0].legacy_annotations[&0], vec![line(0.5)]);
+        for s in sync.states.values_mut() {
+            s.last_sync = None;
+        }
+        run(&mut sync, &mut lavoro, true);
+        let text = std::fs::read_to_string(folder_notes::path_in(&dir)).unwrap();
+        assert!(text.contains("annotazioni_pagina"), "{text}");
+        assert!(!text.contains("annotazioni_visualizza"), "{text}");
+        assert!(text.contains("\"annotazioni\":"), "{text}");
+
+        // La miniatura è sul foglio: Miniature la porta nel campo unico e il campo vecchio sparisce.
+        let f = &mut lavoro.files[0];
+        let old = f.legacy_annotations.remove(&0).unwrap();
+        crate::annotate::add_missing(f.annotations.entry(0).or_default(), old);
+        for s in sync.states.values_mut() {
+            s.last_sync = None;
+        }
+        run(&mut sync, &mut lavoro, true);
+        let text = std::fs::read_to_string(folder_notes::path_in(&dir)).unwrap();
+        assert!(!text.contains("\"annotazioni\":"), "{text}");
+
+        // Visualizza vede le stesse annotazioni.
+        let mut vista = Project::new("v");
+        vista.files.push(FileEntry::new(path.clone(), FileKind::Image));
+        let mut sync2 = FolderSync::with_local(VIEWER, Some(local.clone()));
+        run(&mut sync2, &mut vista, false);
+        assert_eq!(vista.files[0].annotations(0), &[line(2.0), line(0.5)]);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&local);
     }
