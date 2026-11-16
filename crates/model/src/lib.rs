@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use winfiles_geom::{Margins, Orientation, Paper, Size, Unit, area_m2};
 
 mod annotation;
+pub mod folder_notes;
 pub use annotation::{Anchor, Annotation, MAX_PER_PAGE, Point, QUOTE_SIZE, Rgba, ShapeStyle};
 
 /// Versione del formato del file di progetto. Si alza a ogni modifica incompatibile.
@@ -94,7 +95,20 @@ impl PageInfo {
     pub fn finished(&self) -> Size {
         self.trim.unwrap_or(self.size)
     }
+
+    /// La pagina di un disegno in scala 1:`scale` alla sua misura vera: `scale` volte più grande.
+    pub fn scaled(&self, scale: u32) -> PageInfo {
+        let k = f64::from(scale.clamp(1, MAX_SCALE));
+        let grow = |s: Size| Size::new(s.w * k, s.h * k);
+        PageInfo {
+            size: grow(self.size),
+            trim: self.trim.map(grow),
+        }
+    }
 }
+
+/// La scala più piccola accettata, 1:`MAX_SCALE`: oltre è sicuramente un errore di battitura.
+pub const MAX_SCALE: u32 = 1000;
 
 /// Risoluzione dichiarata da un'immagine (o presunta quando il file non la dice).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -155,6 +169,10 @@ pub struct FileEntry {
     /// Annotazioni disegnate sopra la miniatura, per pagina (da 0) come le note.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub annotations: BTreeMap<usize, Vec<Annotation>>,
+    /// Le pagine (da 0) disegnate in scala, con N di 1:N: la misura vera è N volte quella del file.
+    /// Le pagine che non ci sono sono 1:1.
+    #[serde(default, rename = "scala", skip_serializing_if = "BTreeMap::is_empty")]
+    pub scales: BTreeMap<usize, u32>,
     /// Nota unica per file dei primi lavori salvati: all'apertura passa alla prima pagina.
     #[serde(default, rename = "note", skip_serializing)]
     legacy_note: String,
@@ -171,6 +189,7 @@ impl FileEntry {
             notes: BTreeMap::new(),
             skip: BTreeSet::new(),
             annotations: BTreeMap::new(),
+            scales: BTreeMap::new(),
             legacy_note: String::new(),
         }
     }
@@ -257,20 +276,63 @@ impl FileEntry {
         }
     }
 
-    /// Metri quadrati di tutte le pagine, al formato finito.
-    pub fn area_m2(&self) -> f64 {
-        self.pages.iter().map(|p| area_m2(p.finished())).sum()
+    /// La scala della pagina `page` come N di 1:N (1 = misura vera).
+    pub fn scale(&self, page: usize) -> u32 {
+        self.scales.get(&page).copied().unwrap_or(1).clamp(1, MAX_SCALE)
     }
 
-    /// Metri quadrati di tutte le pagine al formato pagina, cioè con abbondanza e crocini.
-    pub fn area_full_m2(&self) -> f64 {
-        self.pages.iter().map(|p| area_m2(p.size)).sum()
+    /// Mette la scala 1:`scale` a una pagina; 1:1 la toglie, così il lavoro resta pulito.
+    pub fn set_scale(&mut self, page: usize, scale: u32) {
+        if scale <= 1 || page >= self.sheet_pages() {
+            self.scales.remove(&page);
+        } else {
+            self.scales.insert(page, scale.min(MAX_SCALE));
+        }
     }
 
-    /// Le misure delle pagine in stampa.
-    fn printed_info(&self) -> impl Iterator<Item = &PageInfo> + '_ {
+    /// Mette la stessa scala a tutte le pagine del file.
+    pub fn set_all_scales(&mut self, scale: u32) {
+        self.scales.clear();
+        for page in 0..self.sheet_pages() {
+            self.set_scale(page, scale);
+        }
+    }
+
+    /// La scala comune a tutte le pagine, `None` se le pagine ne hanno di diverse.
+    pub fn common_scale(&self) -> Option<u32> {
+        let first = self.scale(0);
+        (1..self.sheet_pages())
+            .all(|p| self.scale(p) == first)
+            .then_some(first)
+    }
+
+    /// Le misure vere di una pagina: quelle del file moltiplicate per la sua scala.
+    pub fn real_page(&self, page: usize) -> Option<PageInfo> {
+        self.pages.get(page).map(|p| p.scaled(self.scale(page)))
+    }
+
+    /// Le misure vere di tutte le pagine, in ordine.
+    pub fn real_pages(&self) -> impl Iterator<Item = PageInfo> + '_ {
         self.pages
             .iter()
+            .enumerate()
+            .map(|(i, p)| p.scaled(self.scale(i)))
+    }
+
+    /// Metri quadrati di tutte le pagine, al formato finito e alla misura vera.
+    pub fn area_m2(&self) -> f64 {
+        self.real_pages().map(|p| area_m2(p.finished())).sum()
+    }
+
+    /// Metri quadrati di tutte le pagine al formato pagina, cioè con abbondanza e crocini, alla
+    /// misura vera.
+    pub fn area_full_m2(&self) -> f64 {
+        self.real_pages().map(|p| area_m2(p.size)).sum()
+    }
+
+    /// Le misure vere delle pagine in stampa.
+    fn printed_info(&self) -> impl Iterator<Item = PageInfo> + '_ {
+        self.real_pages()
             .enumerate()
             .filter(|(i, _)| self.printed(*i))
             .map(|(_, p)| p)
@@ -399,6 +461,8 @@ pub struct PrintSettings {
     pub show_path: bool,
     /// Disegna le annotazioni sopra le miniature (spento: restano nel lavoro ma non sul foglio).
     pub show_annotations: bool,
+    /// Il bollino della scala ("1:20") sulle miniature dei file disegnati in scala.
+    pub show_scale: bool,
     /// Nella griglia, "Su N fogli": colonne e verso li sceglie WinFiles, perché tutte le miniature
     /// in stampa stiano in `fit_sheets` fogli, più grandi possibile.
     pub fit: bool,
@@ -433,6 +497,7 @@ impl Default for PrintSettings {
             one_per_sheet: false,
             show_path: true,
             show_annotations: true,
+            show_scale: true,
             fit: false,
             fit_sheets: 1,
         }
@@ -680,6 +745,54 @@ mod tests {
         assert!(back.files[0].annotations.is_empty());
     }
 
+    #[test]
+    fn la_scala_moltiplica_misure_e_metri_quadri() {
+        let mut f = FileEntry::new(PathBuf::from("/l/tavole.pdf"), FileKind::Pdf);
+        f.pages = vec![
+            PageInfo {
+                size: Size::new(600.0, 400.0),
+                trim: Some(Size::new(594.0, 420.0)),
+            },
+            PageInfo {
+                size: Size::new(210.0, 297.0),
+                trim: None,
+            },
+        ];
+        assert_eq!(f.scale(0), 1);
+        assert_eq!(f.common_scale(), Some(1));
+        f.set_scale(0, 20);
+        assert_eq!(f.scale(0), 20);
+        assert_eq!(f.common_scale(), None);
+        let real = f.real_page(0).unwrap();
+        assert_eq!(real.size, Size::new(12000.0, 8000.0));
+        assert_eq!(real.trim, Some(Size::new(11880.0, 8400.0)));
+        // 11,88 × 8,40 m = 99,792 m², più la seconda pagina 1:1.
+        assert!((f.area_m2() - (99.792 + 0.06237)).abs() < 1e-9);
+        let t = Totals::of([&f]);
+        assert!((t.area_m2 - f.area_m2()).abs() < 1e-9);
+        // Una pagina fuori stampa non conta, anche se in scala.
+        f.set_printed(0, false);
+        assert!((Totals::of([&f]).area_m2 - 0.06237).abs() < 1e-9);
+        // 1:1 toglie la scala; tutte le pagine insieme; un numero assurdo ha un tetto.
+        f.set_all_scales(30);
+        assert_eq!(f.common_scale(), Some(30));
+        f.set_scale(1, 1);
+        assert!(!f.scales.contains_key(&1));
+        f.set_scale(0, 1_000_000);
+        assert_eq!(f.scale(0), MAX_SCALE);
+        // Pagine che il file non ha non prendono la scala.
+        f.set_scale(5, 10);
+        assert!(!f.scales.contains_key(&5));
+        // Si salva nel lavoro e torna uguale; senza scala il campo non c'è.
+        let mut p = Project::new("Tavole");
+        p.files.push(f);
+        let json = p.to_json().unwrap();
+        assert!(json.contains("\"scala\""));
+        let back = Project::from_json(&json).unwrap();
+        assert_eq!(back.files[0].scales, p.files[0].scales);
+        assert!(!sample().to_json().unwrap().contains("\"scala\""));
+    }
+
     fn sample() -> Project {
         let mut p = Project::new("Catalogo");
         p.files.push(FileEntry {
@@ -693,6 +806,7 @@ mod tests {
             notes: BTreeMap::from([(0, "Verificare il colore Pantone, è più scuro".into())]),
             skip: BTreeSet::new(),
             annotations: BTreeMap::new(),
+            scales: BTreeMap::new(),
             legacy_note: String::new(),
         });
         p.folder_notes

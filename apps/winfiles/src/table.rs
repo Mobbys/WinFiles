@@ -17,6 +17,8 @@ pub struct Line<'a> {
     pub folder: String,
     pub file: &'a FileEntry,
     pub page: usize,
+    /// La scala del disegno come N di 1:N; le misure sono già quelle vere.
+    pub scale: u32,
     pub size: Option<Size>,
     /// Il formato al vivo, solo se diverso dal formato pagina.
     pub trim: Option<Size>,
@@ -37,11 +39,13 @@ pub fn lines<'a>(project: &'a Project, only: Option<&BTreeSet<usize>>) -> Vec<Li
             .cloned()
             .unwrap_or_else(|| f.folder().display().to_string());
         for page in f.printed_pages() {
-            let info = f.pages.get(page);
+            let info = f.real_page(page);
+            let info = info.as_ref();
             out.push(Line {
                 folder: folder.clone(),
                 file: f,
                 page,
+                scale: f.scale(page),
                 size: info.map(|p| p.size),
                 trim: info.and_then(|p| p.trim.filter(|t| *t != p.size)),
                 note: f.note(page),
@@ -84,6 +88,8 @@ fn header(unit: Unit) -> Vec<String> {
         "File".into(),
         "Tipo".into(),
         "Pagina".into(),
+        // Solo il numero: "1:20" Excel lo leggerebbe come un'ora.
+        "Scala (1:N)".into(),
         format!("Base ({u})"),
         format!("Altezza ({u})"),
         "m²".into(),
@@ -118,6 +124,7 @@ fn cells(line: &Line<'_>, unit: Unit) -> Vec<String> {
         name(&line.file.path),
         kind(line.file.kind).into(),
         format!("{} di {pages}", line.page + 1),
+        line.scale.to_string(),
         w,
         h,
         a,
@@ -298,11 +305,11 @@ mod tests {
         let rows: Vec<&str> = text.trim_start_matches('\u{feff}').split("\r\n").collect();
         assert_eq!(
             rows[0],
-            "Cartella;File;Tipo;Pagina;Base (cm);Altezza (cm);m²;Base al vivo (cm);Altezza al vivo (cm);m² al vivo;Nota;Percorso"
+            "Cartella;File;Tipo;Pagina;Scala (1:N);Base (cm);Altezza (cm);m²;Base al vivo (cm);Altezza al vivo (cm);m² al vivo;Nota;Percorso"
         );
         assert_eq!(
             rows[1],
-            "Rossi;libro.pdf;PDF;1 di 3;21,6;30,3;0,0654;21;29,7;0,0624;;/lavori/Rossi/libro.pdf"
+            "Rossi;libro.pdf;PDF;1 di 3;1;21,6;30,3;0,0654;21;29,7;0,0624;;/lavori/Rossi/libro.pdf"
         );
         // La nota con punto e virgola e virgolette resta in una cella sola, su una riga.
         assert!(
@@ -313,7 +320,7 @@ mod tests {
         // Senza TrimBox le colonne al vivo restano vuote ma il m² al vivo c'è; niente migliaia col punto.
         assert_eq!(
             rows[3],
-            "Rossi › Foto;vetrina.jpg;Immagine;1 di 1;100;50;0,5000;;;0,5000;;/lavori/Rossi/Foto/vetrina.jpg"
+            "Rossi › Foto;vetrina.jpg;Immagine;1 di 1;1;100;50;0,5000;;;0,5000;;/lavori/Rossi/Foto/vetrina.jpg"
         );
         assert_eq!(rows.len(), 5);
     }
@@ -328,7 +335,7 @@ mod tests {
             text.lines()
                 .nth(1)
                 .unwrap()
-                .starts_with("Rossi\tlibro.pdf\tPDF\t1 di 3\t216\t303")
+                .starts_with("Rossi\tlibro.pdf\tPDF\t1 di 3\t1\t216\t303")
         );
         let table = html(&ls, Unit::Mm);
         assert!(table.contains("<b>Rossi</b> &nbsp; 1 file · 2 pagine · 0,131 m² (al vivo 0,125 m²)"));

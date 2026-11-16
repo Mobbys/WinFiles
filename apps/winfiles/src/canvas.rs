@@ -13,7 +13,7 @@ use winfiles_model::{FileKind, PageInfo, PrintSettings, Project, Totals};
 use winfiles_scene::{Page, Picture, Source, Weight};
 
 use crate::captions::{
-    CAPTION_PAD, FOLDER_NOTE_INSET, INFO_RATIO, MM_PER_PT, NOTE_GAP, NOTE_INK, Slot, TITLE_PAD_X,
+    CAPTION_PAD, FOLDER_NOTE_INSET, INFO_RATIO, LineKind, MM_PER_PT, NOTE_GAP, NOTE_INK, Slot, TITLE_PAD_X,
     TITLE_PAD_Y, area_text, info_lines, line_mm, name_job, note_job, title_job,
 };
 use crate::sketch::{self, PX_PER_MM, Sketch, grow};
@@ -41,6 +41,9 @@ const TITLE_FILL: Color32 = Color32::from_rgb(246, 247, 249);
 /// Il tratteggio del formato al vivo sulle miniature (lo stesso verde di Visualizza).
 const TRIM_INK: Color32 = Color32::from_rgb(22, 163, 74);
 pub(crate) const FRAME: Color32 = Color32::from_rgb(190, 190, 190);
+/// Il fondo del bollino della scala ("1:20"): ardesia scura, diversa dai colori delle pagine,
+/// con il testo bianco leggibile anche stampato in bianco e nero.
+pub(crate) const SCALE_FILL: Color32 = Color32::from_rgb(0x1e, 0x29, 0x3b);
 
 /// Ingrandimento che fa stare il foglio intero nello spazio `avail` (punti per millimetro).
 pub fn fit_zoom(size: winfiles_geom::Size, avail: Vec2) -> f32 {
@@ -92,6 +95,37 @@ pub(crate) fn one_line(text: String, size: f64, weight: Weight, width: f64) -> L
     };
     job.halign = egui::Align::Center;
     job
+}
+
+/// Il grigio della riga con la misura del file in scala: più chiaro della misura vera.
+const FILE_INK: Color32 = Color32::from_rgb(110, 110, 110);
+
+/// Il bollino "1:20" nell'angolo in basso a destra della miniatura `image`, con il testo di corpo
+/// `size` mm (lo stesso dell'etichetta delle pagine).
+pub(crate) fn scale_badge(sk: &mut Sketch<'_>, image: MmRect, scale: u32, size: f64) {
+    let galley = sk.layout_line(&format!("1:{scale}"), size, Weight::SemiBold);
+    let (w, h) = Sketch::size_mm(&galley);
+    let (px, py) = (size * 0.45, size * 0.2);
+    let (bw, bh) = (w + 2.0 * px, h + 2.0 * py);
+    // In basso a destra: in alto a sinistra c'è "Pag. 2/4". In una miniatura minuscola il bollino
+    // resta dentro i bordi sinistro e superiore.
+    let x = (image.right() - 1.0 - bw).max(image.x);
+    let y = (image.bottom() - 1.0 - bh).max(image.y);
+    let badge = MmRect::new(x, y, bw, bh);
+    sk.rect(
+        badge,
+        size * 0.3,
+        Some(SCALE_FILL),
+        Some((Color32::WHITE, size * 0.06)),
+    );
+    sk.text(
+        (badge.x + px, badge.y + py),
+        &galley,
+        size,
+        Weight::SemiBold,
+        Color32::WHITE,
+        None,
+    );
 }
 
 /// Il formato al vivo (TrimBox) dentro la miniatura `image` della pagina intera, se il file ha
@@ -252,6 +286,12 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
             sk.rect(grow(image, 0.12), 0.0, None, Some((FRAME, 0.12)));
         }
 
+        // Il bollino della scala, in basso a destra (in alto c'è "Pag. 2/4").
+        let scale = file.scale(slot.page);
+        if print.show_scale && scale > 1 && !unsupported {
+            scale_badge(&mut sk, image, scale, em(name_pt));
+        }
+
         // Le pagine di uno stesso file: cornice ed etichetta "Pag. 2/4" nel colore del file.
         if let Some(color) = slot.color {
             sk.rect(grow(image, 0.5), 0.0, None, Some((color, 0.5)));
@@ -290,8 +330,12 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
         y += galley.rows.len().max(1) as f64 * line_mm(name_pt);
         match page_info {
             Some(page) => {
-                for line in info_lines(page, project.unit, print) {
-                    let ink = if line.trim { NOTE_INK } else { INK_SOFT };
+                for line in info_lines(page, scale, project.unit, print) {
+                    let ink = match line.kind {
+                        LineKind::Trim => NOTE_INK,
+                        LineKind::Size => INK_SOFT,
+                        LineKind::File => FILE_INK,
+                    };
                     let mut job = one_line(line.text, em(info_pt), Weight::Regular, caption.w);
                     job.halign = align;
                     let galley = sk.layout(job);
@@ -347,7 +391,7 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
                 &mut sk,
                 item.image,
                 file.annotations(slot.page),
-                file.pages.get(slot.page),
+                file.real_page(slot.page).as_ref(),
                 project.unit,
                 &lookup,
             );

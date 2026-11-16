@@ -1,7 +1,9 @@
 //! Le annotazioni del Visualizza: la stessa riga Annota di Miniature (testi, frecce, forme,
 //! evidenziatore) sopra la pagina che si guarda. Il file non si tocca mai: le annotazioni si
-//! salvano in WinFiles, per file e per pagina, in `annotazioni-visualizza.json` nella cartella
-//! delle impostazioni, e si ritrovano riaprendo il file.
+//! salvano da sé, per file e per pagina, nel file delle note della cartella del file
+//! (`note.winfiles`, ADR 0038), dove le ritrova anche un collega. Fino alla 0.2.40
+//! stavano in `annotazioni-visualizza.json` nella cartella delle impostazioni: al primo avvio
+//! passano nelle cartelle dei loro file.
 //!
 //! Spessori e corpi sono in mm su un foglio "virtuale" con il lato lungo di un A4: la pagina vi
 //! si adatta. Così un testo di 4 mm si legge uguale su un biglietto da visita e su un cartellone,
@@ -19,7 +21,9 @@ use winfiles_scene::Page;
 
 use crate::annotate::{Annotator, Style};
 use crate::captions::Slot;
+use crate::folder_sync::FolderSync;
 use crate::sketch::Sketch;
+use winfiles_model::folder_notes;
 
 /// Il lato lungo del foglio virtuale, in mm: quello di un A4.
 pub const SHEET_LONG_MM: f64 = 297.0;
@@ -104,9 +108,13 @@ pub struct Notes {
     shown: Project,
     /// Le annotazioni si vedono (e vanno in stampa).
     pub show: bool,
-    /// Com'erano all'ultimo salvataggio.
-    saved: Vec<Stored>,
-    store: Option<PathBuf>,
+    /// Il salvataggio nelle cartelle dei file.
+    sync: FolderSync,
+    /// Il vecchio `annotazioni-visualizza.json`, finché le sue annotazioni non sono passate nelle
+    /// cartelle.
+    migrating: Option<PathBuf>,
+    /// Il file che si guarda.
+    current: Option<PathBuf>,
     /// mm del foglio virtuale per mm di carta, mentre si annota nell'anteprima di stampa: lì
     /// spessori e corpi si scrivono in mm della carta.
     pub paper: Option<f64>,
@@ -116,12 +124,14 @@ pub struct Notes {
 
 impl Notes {
     pub fn new() -> Self {
-        let store = crate::prefs::config_dir().map(|d| d.join("annotazioni-visualizza.json"));
-        let saved = store.as_deref().map(load_from).unwrap_or_default();
-        Self::with(saved, store)
+        let old = crate::prefs::config_dir()
+            .map(|d| d.join("annotazioni-visualizza.json"))
+            .filter(|f| f.is_file());
+        let saved = old.as_deref().map(load_from).unwrap_or_default();
+        Self::with(saved, old, FolderSync::new(crate::folder_sync::VIEWER))
     }
 
-    fn with(saved: Vec<Stored>, store: Option<PathBuf>) -> Self {
+    fn with(saved: Vec<Stored>, migrating: Option<PathBuf>, sync: FolderSync) -> Self {
         let mut project = Project::new("Visualizza");
         for s in &saved {
             let mut f = FileEntry::new(s.path.clone(), FileKind::from_path(&s.path));
@@ -137,8 +147,9 @@ impl Notes {
             shown: project.clone(),
             project,
             show: true,
-            saved,
-            store,
+            sync,
+            migrating,
+            current: None,
             paper: None,
             paper_style: Style::default(),
         }
@@ -217,6 +228,12 @@ impl Notes {
         pages: usize,
         unit: Unit,
     ) {
+        if self.current.as_deref() != Some(path) {
+            self.current = Some(path.to_path_buf());
+            self.sync.focus = path.parent().map(Path::to_path_buf);
+        }
+        self.index(path);
+        self.tick(ui.ctx());
         if !self.annot.on && !(self.show && self.any(path)) {
             return;
         }
@@ -267,9 +284,11 @@ impl Notes {
             for (f, p) in self.annot.take_pending() {
                 self.annot.commit(&mut self.project, &self.shown, f, p);
             }
-            ui.ctx().request_repaint();
+            if self.annot.lively() {
+                ui.ctx().request_repaint();
+            }
         }
-        self.save_if_changed();
+        self.tick(ui.ctx());
     }
 
     /// La riga Annota.
@@ -279,7 +298,7 @@ impl Notes {
         let out = self.styled(false, |n| n.annot.bar(ui, selected.as_ref(), &mut show));
         self.show = show;
         self.styled(true, |n| n.annot.apply(&out, &mut n.project));
-        self.save_if_changed();
+        self.tick(ui.ctx());
     }
 
     /// I tasti delle annotazioni, prima di quelli della scheda.
@@ -288,34 +307,40 @@ impl Notes {
             return;
         }
         self.styled(true, |n| n.annot.keys(ctx, &mut n.project, &mut n.shown));
-        self.save_if_changed();
+        self.tick(ctx);
     }
 
-    fn stored(&self) -> Vec<Stored> {
-        self.project
-            .files
-            .iter()
-            .filter(|f| !f.annotations.is_empty())
-            .map(|f| Stored {
-                path: f.path.clone(),
-                pages: f.annotations.clone(),
-            })
-            .collect()
+    /// Salva le annotazioni cambiate nelle cartelle dei file e porta quelle dei colleghi.
+    fn tick(&mut self, ctx: &egui::Context) {
+        let mut holder = holder(&mut self.project, self.annot.busy());
+        self.sync.tick(ctx, &mut holder);
+        if !self.annot.busy() {
+            self.shown = self.project.clone();
+        }
+        // Le annotazioni del vecchio file sono tutte nelle cartelle (o nella copia del PC): il
+        // file si mette da parte, così non si ripassa più.
+        if self.sync.settled()
+            && self.sync.errors().is_empty()
+            && let Some(old) = self.migrating.take()
+        {
+            let _ = std::fs::rename(&old, old.with_extension("json.passato-nelle-cartelle"));
+        }
     }
 
-    /// Salva le annotazioni se sono cambiate dall'ultima volta.
-    fn save_if_changed(&mut self) {
-        let now = self.stored();
-        if now == self.saved {
-            return;
-        }
-        if let Some(file) = &self.store {
-            // Non riuscire a salvare non deve fermare chi lavora: si riprova alla prossima modifica.
-            if save_to(file, &now).is_err() {
-                return;
-            }
-        }
-        self.saved = now;
+    /// Scrive subito le annotazioni non ancora salvate: prima di chiudere.
+    pub fn flush(&mut self) {
+        let mut holder = holder(&mut self.project, self.annot.busy());
+        self.sync.flush(&mut holder);
+    }
+}
+
+fn holder(project: &mut Project, busy: bool) -> crate::folder_sync::ProjectHolder<'_> {
+    crate::folder_sync::ProjectHolder {
+        project,
+        also: None,
+        notes: false,
+        annotations: folder_notes::VIEWER_ANNOTATIONS,
+        busy,
     }
 }
 
@@ -342,17 +367,6 @@ fn load_from(file: &Path) -> Vec<Stored> {
     list
 }
 
-fn save_to(file: &Path, list: &[Stored]) -> std::io::Result<()> {
-    if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let json = serde_json::to_string(list).map_err(std::io::Error::other)?;
-    // Prima in un file a parte, poi al suo posto: un'interruzione non lascia il file a metà.
-    let tmp = file.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(&tmp, file)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,20 +384,50 @@ mod tests {
         }
     }
 
+    fn settle(notes: &mut Notes) {
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            notes.tick(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            if notes.sync.settled() && notes.migrating.is_none() {
+                notes.flush();
+                return;
+            }
+        }
+        panic!("non si è fermato");
+    }
+
     #[test]
-    fn le_annotazioni_si_ritrovano_riaprendo() {
+    fn le_vecchie_annotazioni_passano_nella_cartella_del_file() {
         let dir = std::env::temp_dir().join(format!("winfiles-annot-visualizza-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let file = dir.join("annotazioni-visualizza.json");
-        let path = PathBuf::from("C:/lavori/manifesto.pdf");
-        let mut notes = Notes::with(Vec::new(), Some(file.clone()));
-        let i = notes.index(&path);
-        notes.project.files[i].set_annotations(2, vec![arrow()]);
-        notes.save_if_changed();
-        let again = Notes::with(load_from(&file), Some(file));
+        let lavori = dir.join("lavori");
+        std::fs::create_dir_all(&lavori).unwrap();
+        let old = dir.join("annotazioni-visualizza.json");
+        let path = lavori.join("manifesto.pdf");
+        let stored = vec![Stored {
+            path: path.clone(),
+            pages: BTreeMap::from([(2, vec![arrow()])]),
+        }];
+        std::fs::write(&old, serde_json::to_string(&stored).unwrap()).unwrap();
+        let local = Some(dir.join("locale"));
+        let sync = || FolderSync::with_local(crate::folder_sync::VIEWER, local.clone());
+        let mut notes = Notes::with(load_from(&old), Some(old.clone()), sync());
+        settle(&mut notes);
+        assert!(!old.exists(), "il vecchio file resta da parte");
+        let file = winfiles_model::folder_notes::path_in(&lavori);
+        assert!(
+            std::fs::read_to_string(&file)
+                .unwrap()
+                .contains("annotazioni_visualizza")
+        );
+
+        // Riaprendo (anche da un altro PC) le annotazioni vengono dalla cartella.
+        let mut again = Notes::with(Vec::new(), None, sync());
+        again.index(&path);
+        settle(&mut again);
         assert_eq!(again.list(&path, 2), &[arrow()]);
         assert!(again.list(&path, 0).is_empty());
-        assert!(again.any(&path));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -154,6 +154,12 @@ pub struct WinFilesApp {
     /// Il lavoro come lo vedono anteprima, stampa e PDF: senza quello che la ricerca nell'elenco
     /// nasconde (`FileFilter::apply`). Gli indici dei file sono quelli di `project`.
     pub(crate) shown: Project,
+    /// Il salvataggio automatico delle note nel file di ogni cartella.
+    pub(crate) folder_sync: crate::folder_sync::FolderSync,
+    /// Le cartelle con le note solo su questo PC, l'ultima volta che lo si è detto.
+    notes_local_told: usize,
+    /// La riga Annota di Miniature resta aperta.
+    pub(crate) annot_bar: bool,
     /// Nel nesting: la scala 1:N in uso (scelta o automatica).
     pub(crate) nesting_scale: Option<u32>,
     /// Con "Su N fogli", le colonne e il verso scelti all'ultima impaginazione.
@@ -173,6 +179,8 @@ pub struct WinFilesApp {
     inbox: Option<crate::instance::Inbox>,
     /// Le annotazioni delle miniature: strumenti, stile e passi da annullare.
     pub(crate) annot: crate::annotate::Annotator,
+    /// La riga Scala dell'anteprima e il suo timbro.
+    pub(crate) scale_bar: crate::scale::ScaleBar,
 }
 
 /// I moduli di WinFiles, come le schede della 4.9.
@@ -294,6 +302,9 @@ impl WinFilesApp {
             fit_choice: None,
             layout_cache: None,
             shown: Project::default(),
+            folder_sync: crate::folder_sync::FolderSync::new(crate::folder_sync::MINIATURE),
+            notes_local_told: 0,
+            annot_bar: true,
             module: Module::Thumbnails,
             pdf: crate::pdf::PdfModule::new(ctx),
             images: crate::images::ImagesModule::new(ctx),
@@ -302,8 +313,11 @@ impl WinFilesApp {
             defaults: None,
             inbox: None,
             annot: crate::annotate::Annotator::default(),
+            scale_bar: crate::scale::ScaleBar::default(),
         };
         app.annot = crate::annotate::Annotator::with_style(app.prefs.annotate.clone());
+        app.annot_bar = !app.prefs.annotate_hidden;
+        app.viewer.annot_bar = !app.prefs.viewer.annotate_hidden;
         // Le stampanti si cercano subito, così Stampa le trova già pronte.
         if !app.prefs.inks.is_empty() {
             app.pdf.inks = app.prefs.inks.clone();
@@ -342,8 +356,9 @@ impl WinFilesApp {
         }
         // Un file .winfiles sulla riga di comando (doppio clic in Esplora file) apre il lavoro;
         // gli altri file e cartelle si aggiungono all'elenco.
-        let (projects, files): (Vec<PathBuf>, Vec<PathBuf>) =
-            paths.into_iter().partition(|p| document::is_project(p));
+        let (projects, files): (Vec<PathBuf>, Vec<PathBuf>) = document::notes_to_folders(paths)
+            .into_iter()
+            .partition(|p| document::is_project(p));
         if let Some(p) = projects.first() {
             app.open_path(p);
         }
@@ -1005,6 +1020,42 @@ impl WinFilesApp {
         self.export = None;
     }
 
+    /// Il salvataggio automatico delle note di Miniature nelle cartelle dei file (ADR 0038).
+    fn sync_folder_notes(&mut self, ctx: &egui::Context) {
+        let busy = self.annot.busy();
+        let mut holder = crate::folder_sync::ProjectHolder {
+            project: &mut self.project,
+            also: Some(&mut self.saved),
+            notes: true,
+            annotations: winfiles_model::folder_notes::ANNOTATIONS,
+            busy,
+        };
+        self.folder_sync.tick(ctx, &mut holder);
+        let local = self.folder_sync.local_folders();
+        if local.len() != self.notes_local_told {
+            if let Some(dir) = local.first() {
+                self.status = format!(
+                    "Note salvate solo su questo PC: non riesco a scrivere in {}",
+                    dir.display()
+                );
+            }
+            self.notes_local_told = local.len();
+        }
+    }
+
+    /// Scrive subito le note cambiate e non ancora salvate nelle cartelle.
+    pub(crate) fn flush_folder_notes(&mut self) {
+        let busy = self.annot.busy();
+        let mut holder = crate::folder_sync::ProjectHolder {
+            project: &mut self.project,
+            also: Some(&mut self.saved),
+            notes: true,
+            annotations: winfiles_model::folder_notes::ANNOTATIONS,
+            busy,
+        };
+        self.folder_sync.flush(&mut holder);
+    }
+
     /// Cerca i file nei percorsi dati in un thread a parte; arrivano con [`Self::receive_scans`].
     fn add_paths(&mut self, paths: Vec<PathBuf>) {
         let wake = self.ctx.clone();
@@ -1089,6 +1140,8 @@ impl WinFilesApp {
     }
 
     fn clear(&mut self) {
+        self.flush_folder_notes();
+        self.folder_sync.forget();
         self.cancel_scans();
         self.project.files.clear();
         self.parked.clear();
@@ -1272,6 +1325,26 @@ impl WinFilesApp {
         }
     }
 
+    /// Mette la scala 1:`n` a tutte le pagine dei file scelti (o di quello in primo piano).
+    pub(crate) fn set_scale_marked(&mut self, n: u32) {
+        let files: BTreeSet<usize> = if self.marked.is_empty() {
+            self.selected.into_iter().collect()
+        } else {
+            self.marked.clone()
+        };
+        if files.is_empty() {
+            self.status = "Scegli prima le miniature o i file a cui mettere la scala".into();
+            return;
+        }
+        crate::scale::apply(&mut self.project, files.iter().copied(), n);
+        self.status = match (files.len(), n) {
+            (1, 1) => "Scala tolta: misure del file".into(),
+            (k, 1) => format!("Scala tolta da {k} file"),
+            (1, n) => format!("Scala 1:{n}: le misure sono quelle vere"),
+            (k, n) => format!("Scala 1:{n} a {k} file: le misure sono quelle vere"),
+        };
+    }
+
     /// Mette in stampa (o ne toglie) tutte le pagine dei file indicati: restano nell'elenco con
     /// le loro note.
     pub(crate) fn set_printed(&mut self, files: &BTreeSet<usize>, on: bool) {
@@ -1315,6 +1388,7 @@ impl WinFilesApp {
 
     /// Toglie dall'elenco i file indicati (solo dal lavoro, mai dal disco).
     pub(crate) fn remove_files(&mut self, remove: &BTreeSet<usize>) {
+        self.flush_folder_notes();
         if remove.is_empty() {
             return;
         }
@@ -2177,8 +2251,40 @@ impl WinFilesApp {
                 .layout(egui::Layout::right_to_left(Align::Center)),
         );
         self.sheet_controls(&mut controls, count, &t);
-        // Annota apre la riga degli strumenti di disegno: solo nella griglia.
+        // Scala apre la riga delle scale dei disegni (1:10, 1:20…), in tutte le viste.
+        controls.add_space(10.0);
+        {
+            let on = self.scale_bar.on;
+            let tint = if on { t.on_primary } else { t.text_strong };
+            let mut button = egui::Button::image_and_text(
+                icons::image("scaling", 16.0, tint),
+                egui::RichText::new("Scala").color(tint),
+            )
+            .min_size(vec2(0.0, 30.0));
+            if on {
+                button = button.fill(t.primary);
+            }
+            if controls
+                .add(button)
+                .on_hover_text(
+                    "Segna i file disegnati in scala (1:10, 1:20…): le misure diventano quelle vere",
+                )
+                .clicked()
+            {
+                if on {
+                    self.scale_bar.close();
+                } else {
+                    self.scale_bar.on = true;
+                    self.annot.close();
+                }
+            }
+        }
+        // Annota apre e chiude la riga degli strumenti di disegno: solo nella griglia. La riga
+        // resta aperta (WinFiles lo ricorda) finché non la si chiude.
         if self.project.print.view == View::Grid {
+            if self.annot_bar && !self.annot.on {
+                self.annot.on = true;
+            }
             controls.add_space(10.0);
             let on = self.annot.on;
             let tint = if on { t.on_primary } else { t.text_strong };
@@ -2193,15 +2299,18 @@ impl WinFilesApp {
             if controls
                 .add(button)
                 .on_hover_text(
-                    "Testo, frecce, forme ed evidenziatore sopra le miniature; si salvano nel lavoro",
+                    "Mostra o nasconde la riga di testo, frecce, forme ed evidenziatore sopra le \
+                     miniature; le annotazioni si salvano da sé nella cartella dei file",
                 )
                 .clicked()
             {
+                self.annot_bar = !on;
                 if on {
                     self.annot.close();
                 } else {
                     self.annot.on = true;
                     self.project.print.show_annotations = true;
+                    self.scale_bar.close();
                 }
             }
         } else if self.annot.on {
@@ -2284,6 +2393,34 @@ impl WinFilesApp {
             self.project.print.show_annotations = show;
             self.annot_bar(out);
             top = row.min_rect().bottom() + 6.0;
+        }
+        // La riga Scala: va a capo quando la finestra è stretta.
+        if self.scale_bar.on {
+            let area = Rect::from_min_max(
+                egui::pos2(full.left() + 12.0, top),
+                egui::pos2(full.right() - 12.0, full.bottom()),
+            );
+            let mut row = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(area)
+                    .layout(egui::Layout::top_down(Align::Min)),
+            );
+            let current = crate::scale::common(&self.project, self.marked.iter().copied());
+            let marked = self.marked.len();
+            let action = row
+                .horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    ui.spacing_mut().interact_size.y = 32.0;
+                    self.scale_bar.bar(ui, current, marked)
+                })
+                .inner;
+            if let Some(crate::scale::BarAction::Apply(n)) = action {
+                self.set_scale_marked(n);
+            }
+            top = row.min_rect().bottom() + 6.0;
+            if self.scale_bar.stamp.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.scale_bar.stamp = None;
+            }
         }
         // Con la ricerca attiva nell'elenco, una striscia lo ricorda: si stampa solo quello.
         if self.filter.is_active() && !self.project.files.is_empty() {
@@ -2373,7 +2510,11 @@ impl WinFilesApp {
                 &self.slots,
                 &mut self.thumbs,
                 canvas::Selection {
-                    marked: if annotating { &NONE } else { &self.marked },
+                    marked: if annotating && self.annot.armed() {
+                        &NONE
+                    } else {
+                        &self.marked
+                    },
                     focus: self.selected.map(|f| (f, self.selected_page)),
                     annotating,
                 },
@@ -2409,19 +2550,34 @@ impl WinFilesApp {
         for (file, page) in self.annot.take_pending() {
             self.annot.commit(&mut self.project, &self.shown, file, page);
         }
-        if self.annot.on {
+        if self.annot.on && self.annot.lively() {
             ui.ctx().request_repaint();
         }
         let out = scrolled.inner;
-        // Con Annota aperta un clic sceglie le annotazioni, non i file.
-        if let Some((file, page)) = out.clicked.filter(|_| !annotating) {
+        // Un clic servito alle annotazioni (una presa, una creata) non sceglie i file; con lo
+        // strumento Scegli, fuori dalle annotazioni, la miniatura si sceglie come sempre.
+        let took = annotating && self.annot.took_click();
+        // Con il timbro acceso un clic mette la scala alla pagina della miniatura.
+        let stamp = self.scale_bar.stamp.filter(|_| self.scale_bar.on && !annotating);
+        if let Some(n) = stamp {
+            if out.response.as_ref().is_some_and(egui::Response::hovered) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Cell);
+            }
+            // Gli indici dell'anteprima sono quelli del lavoro (la ricerca toglie solo dalla stampa).
+            if let Some((file, page)) = out.clicked
+                && let Some(entry) = self.project.files.get_mut(file)
+            {
+                entry.set_scale(page, n);
+            }
+        }
+        if let Some((file, page)) = out.clicked.filter(|_| !took && stamp.is_none()) {
             let mods = ui.input(|i| i.modifiers);
             self.pick(file, mods);
             self.selected_page = page;
         }
         // Il doppio clic su una miniatura la apre in Visualizza, su quella pagina; le frecce
         // scorrono i file del lavoro.
-        if let Some((file, page)) = out.double.filter(|_| !annotating) {
+        if let Some((file, page)) = out.double.filter(|_| !took) {
             self.view_file(file, page);
         }
         // Il tasto destro su una miniatura apre lo stesso menu dell'elenco dei file.
@@ -2441,11 +2597,20 @@ impl WinFilesApp {
             let mut action = None;
             let page = self.selected_page;
             let mut clear = false;
+            let mut page_scale = None;
             if let Some(f) = self.project.files.get(i) {
                 let state = f.print_state();
                 let annotated = !f.annotations(page).is_empty();
                 resp.context_menu(|ui| {
                     action = crate::panels::file_menu(ui, f, count, state);
+                    // Un file con più pagine: la scala anche solo di questa.
+                    if f.sheet_pages() > 1 {
+                        ui.menu_button(format!("Scala solo della pagina {}", page + 1), |ui| {
+                            if let Some(n) = crate::panels::scale_items(ui, Some(f.scale(page))) {
+                                page_scale = Some(n);
+                            }
+                        });
+                    }
                     if annotated {
                         ui.separator();
                         if ui.button("Togli le annotazioni di questa pagina").clicked() {
@@ -2457,6 +2622,11 @@ impl WinFilesApp {
             }
             if clear {
                 self.annot.clear_page(&mut self.project, i, page);
+            }
+            if let Some(n) = page_scale
+                && let Some(f) = self.project.files.get_mut(i)
+            {
+                f.set_scale(page, n);
             }
             if let Some(a) = action {
                 self.file_action(ui.ctx(), a);
@@ -3215,9 +3385,11 @@ impl WinFilesApp {
             image_die: self.images.die.settings.clone(),
             reporter: self.reporter.clone(),
             annotate: self.annot.style.clone(),
+            annotate_hidden: !self.annot_bar,
             viewer: crate::prefs::ViewerPrefs {
                 print: self.viewer.print_choice.clone(),
                 cad_light: !self.viewer.cad_dark,
+                annotate_hidden: !self.viewer.annot_bar,
             },
             external: crate::external::config(),
         }
@@ -3323,8 +3495,9 @@ impl eframe::App for WinFilesApp {
             }
             self.images.shortcuts(&ctx);
         } else {
-            let (projects, dropped): (Vec<PathBuf>, Vec<PathBuf>) =
-                dropped.into_iter().partition(|p| document::is_project(p));
+            let (projects, dropped): (Vec<PathBuf>, Vec<PathBuf>) = document::notes_to_folders(dropped)
+                .into_iter()
+                .partition(|p| document::is_project(p));
             if !dropped.is_empty() {
                 self.add_paths(dropped);
             }
@@ -3391,6 +3564,7 @@ impl eframe::App for WinFilesApp {
         }
         self.sync_theme(ui.ctx());
         self.receive_scans();
+        self.sync_folder_notes(&ctx);
         self.receive_measures();
         self.thumbs.receive(ui.ctx());
 
@@ -3399,7 +3573,12 @@ impl eframe::App for WinFilesApp {
         if std::mem::take(&mut self.want_export) {
             self.export_pdf(&ctx, sheets, None);
         }
-        if self.batch_pdf.is_some() && self.scans.is_empty() && self.measurer.pending() == 0 {
+        // Anche le note delle cartelle devono essere arrivate.
+        if self.batch_pdf.is_some()
+            && self.scans.is_empty()
+            && self.measurer.pending() == 0
+            && self.folder_sync.settled()
+        {
             let path = self.batch_pdf.take();
             self.batch_running = path.is_some();
             self.export_pdf(&ctx, sheets, path);
@@ -3571,11 +3750,15 @@ impl eframe::App for WinFilesApp {
     // L'installer scaricato si avvia quando WinFiles si è chiuso (ADR 0014).
     #[cfg(feature = "opengl")]
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.flush_folder_notes();
+        self.viewer.notes.flush();
         self.install_update();
     }
 
     #[cfg(not(feature = "opengl"))]
     fn on_exit(&mut self) {
+        self.flush_folder_notes();
+        self.viewer.notes.flush();
         self.install_update();
     }
 }
