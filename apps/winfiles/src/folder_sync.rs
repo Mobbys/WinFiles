@@ -375,9 +375,9 @@ pub struct ProjectHolder<'a> {
     pub busy: bool,
 }
 
-/// Cosa salva Miniature: note per pagina, nota di cartella e annotazioni.
+/// Cosa salva Miniature: note per pagina, nota di cartella, annotazioni e scala dei file.
 pub const MINIATURE: Owned = Owned {
-    fields: &[folder_notes::NOTE, folder_notes::ANNOTATIONS],
+    fields: &[folder_notes::NOTE, folder_notes::ANNOTATIONS, folder_notes::SCALE],
     folder_note: true,
 };
 /// Cosa salva Visualizza: le sue annotazioni.
@@ -403,6 +403,7 @@ fn apply_to(
         }
         if notes {
             f.notes.clear();
+            f.scales.clear();
         }
         f.annotations.clear();
         for (k, v) in cells {
@@ -419,6 +420,14 @@ fn apply_to(
             }
             if notes && fd == folder_notes::NOTE {
                 f.set_note(*page, folder_notes::note_from(v));
+            } else if notes && fd == folder_notes::SCALE {
+                // Non `set_scale`: rifiuta le pagine oltre quelle misurate, e un file non ancora
+                // misurato perderebbe la scala (e la toglierebbe dalla cartella). Il numero
+                // viene da un file: si tiene nei limiti.
+                let n = folder_notes::scale_from(v).min(winfiles_model::MAX_SCALE);
+                if n > 1 {
+                    f.scales.insert(*page, n);
+                }
             } else if fd == field {
                 f.set_annotations(*page, folder_notes::annotations_from(v, dir));
             }
@@ -458,6 +467,13 @@ impl Holder for ProjectHolder<'_> {
                 for (p, t) in &f.notes {
                     if let Some(v) = folder_notes::note_value(t) {
                         e.1.insert(Key::cell(&name, *p, folder_notes::NOTE), v);
+                    }
+                }
+            }
+            if self.notes {
+                for (p, n) in &f.scales {
+                    if let Some(v) = folder_notes::scale_value(*n) {
+                        e.1.insert(Key::cell(&name, *p, folder_notes::SCALE), v);
                     }
                 }
             }
@@ -843,6 +859,63 @@ mod tests {
         assert!(folder_notes::path_in(&dir).is_file());
         assert!(sync2.local_folders().is_empty());
         assert!(!local_file(&local, &dir).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&local);
+    }
+
+    #[test]
+    fn la_scala_passa_dalla_cartella_anche_a_un_file_non_misurato() {
+        use winfiles_model::{FileEntry, FileKind};
+        let dir = temp("scala");
+        let local = temp("scala-locale");
+        let path = dir.join("tavole.pdf");
+        fn holder(p: &mut Project) -> ProjectHolder<'_> {
+            ProjectHolder {
+                project: p,
+                also: None,
+                notes: true,
+                annotations: folder_notes::ANNOTATIONS,
+                busy: false,
+            }
+        }
+        let run = |sync: &mut FolderSync, p: &mut Project| {
+            let ctx = egui::Context::default();
+            for _ in 0..200 {
+                sync.last_tick = None;
+                for s in sync.states.values_mut() {
+                    s.changed_at = None;
+                }
+                sync.tick(&ctx, &mut holder(p));
+                std::thread::sleep(Duration::from_millis(5));
+                if sync.settled() {
+                    sync.flush(&mut holder(p));
+                    return;
+                }
+            }
+            panic!("non si è fermato");
+        };
+        let mut michel = Project::new("a");
+        let mut f = FileEntry::new(path.clone(), FileKind::Pdf);
+        f.scales.insert(3, 20);
+        michel.files.push(f);
+        let mut sync = FolderSync::with_local(MINIATURE, Some(local.clone()));
+        run(&mut sync, &mut michel);
+        let text = std::fs::read_to_string(folder_notes::path_in(&dir)).unwrap();
+        assert!(text.contains("\"scala\":20"), "{text}");
+
+        // Il collega apre il file: non è ancora misurato, ma la scala della pagina 4 arriva e
+        // resta nella cartella.
+        let mut collega = Project::new("b");
+        collega.files.push(FileEntry::new(path.clone(), FileKind::Pdf));
+        let mut sync2 = FolderSync::with_local(MINIATURE, Some(local.clone()));
+        run(&mut sync2, &mut collega);
+        assert_eq!(collega.files[0].scales.get(&3), Some(&20));
+        for s in sync2.states.values_mut() {
+            s.last_sync = None;
+        }
+        run(&mut sync2, &mut collega);
+        let text = std::fs::read_to_string(folder_notes::path_in(&dir)).unwrap();
+        assert!(text.contains("\"scala\":20"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&local);
     }

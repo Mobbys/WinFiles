@@ -25,8 +25,8 @@ salvataggio automatico unico, condiviso fra colleghi sui file in rete; il Salva 
 ## Decisione
 - Formato (crate model, `folder_notes`): JSON compatto
   `{ versione, nota_cartella, file: { "<nome>": { pagine: { "<n>": { campo: valore } } } } }`.
-  Campi delle pagine: `nota`, `annotazioni` (Miniature), `annotazioni_visualizza`, e quelli futuri
-  (per esempio `scala`). I campi sconosciuti si rimettono come sono.
+  Campi delle pagine: `nota`, `annotazioni` (Miniature), `annotazioni_visualizza`, `scala` (il
+  numero N di 1:N, ADR 0039, posseduta da Miniature) e quelli futuri. I campi sconosciuti si rimettono come sono.
 - I capi delle frecce attaccati a un file della stessa cartella si scrivono col solo nome: valgono
   anche da un PC che vede la cartella con un altro percorso.
 - Unione fra colleghi: prima di scrivere si rilegge il file e si unisce cella per cella
