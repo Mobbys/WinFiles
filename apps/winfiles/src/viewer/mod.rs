@@ -925,33 +925,6 @@ impl ViewerModule {
                     {
                         self.toggle_side(SideTab::Quotes);
                     }
-                    separator(ui);
-                    let on = self.notes.annot.on;
-                    let tint = if on { t.on_primary } else { t.text_strong };
-                    let mut b = egui::Button::image_and_text(
-                        icons::image("pencil", 17.0, tint),
-                        egui::RichText::new("Annota").color(tint),
-                    )
-                    .min_size(vec2(0.0, 32.0));
-                    if on {
-                        b = b.fill(t.primary);
-                    }
-                    if ui
-                        .add_enabled(has, b)
-                        .on_hover_text(
-                            "Testo, frecce, forme ed evidenziatore sopra la pagina: il file non cambia, \
-                             le annotazioni restano in WinFiles e vanno in stampa",
-                        )
-                        .clicked()
-                    {
-                        self.annot_bar = !on;
-                        if on {
-                            self.notes.annot.close();
-                        } else {
-                            self.notes.annot.on = true;
-                            self.notes.show = true;
-                        }
-                    }
                 }
                 let height = left.min_rect().height().max(38.0) + 8.0;
                 if (height - self.bar_height).abs() > 0.5 {
