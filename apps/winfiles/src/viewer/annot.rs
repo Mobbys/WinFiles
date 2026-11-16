@@ -23,7 +23,6 @@ use crate::annotate::{Annotator, Style};
 use crate::captions::Slot;
 use crate::folder_sync::FolderSync;
 use crate::sketch::Sketch;
-use winfiles_model::folder_notes;
 
 /// Il lato lungo del foglio virtuale, in mm: quello di un A4.
 pub const SHEET_LONG_MM: f64 = 297.0;
@@ -327,6 +326,11 @@ impl Notes {
         }
     }
 
+    /// Rilegge subito le cartelle: Miniature può aver appena cambiato le stesse annotazioni.
+    pub fn refresh(&mut self) {
+        self.sync.refresh();
+    }
+
     /// Scrive subito le annotazioni non ancora salvate: prima di chiudere.
     pub fn flush(&mut self) {
         let mut holder = holder(&mut self.project, self.annot.busy());
@@ -339,7 +343,7 @@ fn holder(project: &mut Project, busy: bool) -> crate::folder_sync::ProjectHolde
         project,
         also: None,
         notes: false,
-        annotations: folder_notes::VIEWER_ANNOTATIONS,
+        legacy: false,
         busy,
     }
 }
@@ -419,7 +423,7 @@ mod tests {
         assert!(
             std::fs::read_to_string(&file)
                 .unwrap()
-                .contains("annotazioni_visualizza")
+                .contains("annotazioni_pagina")
         );
 
         // Riaprendo (anche da un altro PC) le annotazioni vengono dalla cartella.

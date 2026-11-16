@@ -38,4 +38,5 @@ Una decisione si cambia con un nuovo ADR che sostituisce il precedente, mai risc
 | [0037](0037-programmi-esterni.md) | Programmi esterni: «Apri in …» con i programmi scelti per ogni tipo di file | Accettata |
 | [0038](0038-note-nella-cartella.md) | Note e annotazioni salvate da sé nel file della cartella | Accettata |
 | [0039](0039-scala-dei-file.md) | Scala dei file: disegni 1:10, 1:20… segnati con un clic, misure vere ovunque | Accettata |
-| [0040](0040-disegni-nelle-miniature.md) | Disegni DXF, DWG, PLT e SVG nelle Miniature con il lettore di Visualizza | Accettata |
+| [0040](0040-annotazioni-uniche.md) | Le stesse annotazioni in Miniature e in Visualizza, in proporzione alla pagina | Accettata |
+| [0041](0041-disegni-nelle-miniature.md) | Disegni DXF, DWG, PLT e SVG nelle Miniature con il lettore di Visualizza | Accettata |

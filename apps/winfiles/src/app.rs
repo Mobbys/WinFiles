@@ -166,6 +166,9 @@ pub struct WinFilesApp {
     pub(crate) fit_choice: Option<(u32, Orientation)>,
     /// Il modulo mostrato: miniature da stampare o modifica dei PDF.
     pub(crate) module: Module,
+    /// La scheda all'ultimo disegno: passando fra Miniature e Visualizza le annotazioni si
+    /// scrivono subito e l'altra scheda le rilegge (sono le stesse, ADR 0040).
+    last_module: Module,
     /// Il modulo PDF (Fase 9), con il suo documento aperto.
     pub(crate) pdf: crate::pdf::PdfModule,
     /// Il modulo immagini (Fase 8), con le immagini aperte.
@@ -306,6 +309,7 @@ impl WinFilesApp {
             notes_local_told: 0,
             annot_bar: true,
             module: Module::Thumbnails,
+            last_module: Module::Thumbnails,
             pdf: crate::pdf::PdfModule::new(ctx),
             images: crate::images::ImagesModule::new(ctx),
             nesting: crate::nesting::NestingModule::new(ctx),
@@ -316,8 +320,7 @@ impl WinFilesApp {
             scale_bar: crate::scale::ScaleBar::default(),
         };
         app.annot = crate::annotate::Annotator::with_style(app.prefs.annotate.clone());
-        app.annot_bar = !app.prefs.annotate_hidden;
-        app.viewer.annot_bar = !app.prefs.viewer.annotate_hidden;
+        // Gli strumenti delle note sono sempre visibili (0.2.42): niente più pulsante Annota.
         // Le stampanti si cercano subito, così Stampa le trova già pronte.
         if !app.prefs.inks.is_empty() {
             app.pdf.inks = app.prefs.inks.clone();
@@ -1027,7 +1030,7 @@ impl WinFilesApp {
             project: &mut self.project,
             also: Some(&mut self.saved),
             notes: true,
-            annotations: winfiles_model::folder_notes::ANNOTATIONS,
+            legacy: true,
             busy,
         };
         self.folder_sync.tick(ctx, &mut holder);
@@ -1050,7 +1053,7 @@ impl WinFilesApp {
             project: &mut self.project,
             also: Some(&mut self.saved),
             notes: true,
-            annotations: winfiles_model::folder_notes::ANNOTATIONS,
+            legacy: true,
             busy,
         };
         self.folder_sync.flush(&mut holder);
@@ -2274,44 +2277,18 @@ impl WinFilesApp {
                 if on {
                     self.scale_bar.close();
                 } else {
+                    // La riga Annota resta aperta: torna lo strumento Scegli, così un clic
+                    // sceglie le miniature a cui mettere la scala.
                     self.scale_bar.on = true;
-                    self.annot.close();
+                    self.annot.tool = crate::annotate::Tool::Select;
                 }
             }
         }
-        // Annota apre e chiude la riga degli strumenti di disegno: solo nella griglia. La riga
-        // resta aperta (WinFiles lo ricorda) finché non la si chiude.
+        // Gli strumenti delle note sono sempre aperti nella griglia: non c'è un pulsante Annota
+        // (Michel, 0.2.42); la casella della riga mostra o nasconde le annotazioni.
         if self.project.print.view == View::Grid {
-            if self.annot_bar && !self.annot.on {
+            if !self.annot.on {
                 self.annot.on = true;
-            }
-            controls.add_space(10.0);
-            let on = self.annot.on;
-            let tint = if on { t.on_primary } else { t.text_strong };
-            let mut button = egui::Button::image_and_text(
-                icons::image("pencil", 16.0, tint),
-                egui::RichText::new("Annota").color(tint),
-            )
-            .min_size(vec2(0.0, 30.0));
-            if on {
-                button = button.fill(t.primary);
-            }
-            if controls
-                .add(button)
-                .on_hover_text(
-                    "Mostra o nasconde la riga di testo, frecce, forme ed evidenziatore sopra le \
-                     miniature; le annotazioni si salvano da sé nella cartella dei file",
-                )
-                .clicked()
-            {
-                self.annot_bar = !on;
-                if on {
-                    self.annot.close();
-                } else {
-                    self.annot.on = true;
-                    self.project.print.show_annotations = true;
-                    self.scale_bar.close();
-                }
             }
         } else if self.annot.on {
             self.annot.close();
@@ -2407,6 +2384,7 @@ impl WinFilesApp {
             );
             let current = crate::scale::common(&self.project, self.marked.iter().copied());
             let marked = self.marked.len();
+            let had_stamp = self.scale_bar.stamp.is_some();
             let action = row
                 .horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.y = 6.0;
@@ -2416,6 +2394,10 @@ impl WinFilesApp {
                 .inner;
             if let Some(crate::scale::BarAction::Apply(n)) = action {
                 self.set_scale_marked(n);
+            }
+            // Acceso il Timbro, i clic vanno alle miniature: torna lo strumento Scegli.
+            if !had_stamp && self.scale_bar.stamp.is_some() {
+                self.annot.tool = crate::annotate::Tool::Select;
             }
             top = row.min_rect().bottom() + 6.0;
             if self.scale_bar.stamp.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -2558,13 +2540,18 @@ impl WinFilesApp {
         // strumento Scegli, fuori dalle annotazioni, la miniatura si sceglie come sempre.
         let took = annotating && self.annot.took_click();
         // Con il timbro acceso un clic mette la scala alla pagina della miniatura.
-        let stamp = self.scale_bar.stamp.filter(|_| self.scale_bar.on && !annotating);
+        // Gli strumenti delle note sono sempre aperti: il timbro vale con lo strumento Scegli e
+        // non sui clic presi da un'annotazione.
+        let stamp = self
+            .scale_bar
+            .stamp
+            .filter(|_| self.scale_bar.on && !(annotating && self.annot.armed()));
         if let Some(n) = stamp {
             if out.response.as_ref().is_some_and(egui::Response::hovered) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Cell);
             }
             // Gli indici dell'anteprima sono quelli del lavoro (la ricerca toglie solo dalla stampa).
-            if let Some((file, page)) = out.clicked
+            if let Some((file, page)) = out.clicked.filter(|_| !took)
                 && let Some(entry) = self.project.files.get_mut(file)
             {
                 entry.set_scale(page, n);
@@ -2642,6 +2629,11 @@ impl WinFilesApp {
     /// Quello che la riga Annota chiede di fare nel lavoro.
     fn annot_bar(&mut self, out: crate::annotate::BarOutput) {
         self.annot.apply(&out, &mut self.project);
+        // Uno strumento da disegno e il Timbro della scala vorrebbero lo stesso clic: vince
+        // l'ultimo scelto, quindi lo strumento spegne il Timbro.
+        if self.annot.armed() {
+            self.scale_bar.stamp = None;
+        }
     }
 
     /// I tasti delle annotazioni, prima di quelli dell'elenco dei file: Canc toglie
@@ -3223,8 +3215,49 @@ impl WinFilesApp {
             Ok(Sheets { summary, grid })
         });
         let pages = std::rc::Rc::new(pages);
-        self.layout_cache = Some((self.project.clone(), self.filter.clone(), pages.clone()));
+        // Le annotazioni vecchie passano nel campo unico: il lavoro cambia, si reimpagina al
+        // prossimo disegno (il riepilogo conta le annotazioni).
+        if self.convert_annotations(&pages) {
+            self.layout_cache = None;
+        } else {
+            self.layout_cache = Some((self.project.clone(), self.filter.clone(), pages.clone()));
+        }
         pages
+    }
+
+    /// Porta le annotazioni di Miniature della 0.2.41–0.2.42 (spessori e corpi in mm della
+    /// carta) nel campo unico, in proporzione alla pagina, usando la grandezza della loro
+    /// miniatura nella griglia (ADR 0040). `true` se ne ha portata qualcuna.
+    fn convert_annotations(&mut self, pages: &Pages) -> bool {
+        if self.project.print.view != View::Grid
+            || self.project.files.iter().all(|f| f.legacy_annotations.is_empty())
+        {
+            return false;
+        }
+        let Ok(sheets) = pages else { return false };
+        let mut done = false;
+        for item in sheets.grid.iter().flat_map(|s| s.items.iter()) {
+            let Some(slot) = self.slots.get(item.id) else {
+                continue;
+            };
+            let Some(f) = self.project.files.get_mut(slot.file) else {
+                continue;
+            };
+            let Some(old) = f.legacy_annotations.remove(&slot.page) else {
+                continue;
+            };
+            let list = crate::annotate::from_paper(&old, item.image);
+            let path = f.path.clone();
+            crate::annotate::add_missing(f.annotations.entry(slot.page).or_default(), list.clone());
+            // Anche nella copia dell'ultimo salvataggio, così il lavoro non risulta modificato.
+            if let Some(s) = self.saved.files.iter_mut().find(|s| s.path == path)
+                && s.legacy_annotations.remove(&slot.page).is_some()
+            {
+                crate::annotate::add_missing(s.annotations.entry(slot.page).or_default(), list);
+            }
+            done = true;
+        }
+        done
     }
 }
 
@@ -3564,6 +3597,19 @@ impl eframe::App for WinFilesApp {
         }
         self.sync_theme(ui.ctx());
         self.receive_scans();
+        if self.module != self.last_module {
+            match self.last_module {
+                Module::Viewer => self.viewer.notes.flush(),
+                Module::Thumbnails => self.flush_folder_notes(),
+                _ => {}
+            }
+            match self.module {
+                Module::Viewer => self.viewer.notes.refresh(),
+                Module::Thumbnails => self.folder_sync.refresh(),
+                _ => {}
+            }
+            self.last_module = self.module;
+        }
         self.sync_folder_notes(&ctx);
         self.receive_measures();
         self.thumbs.receive(ui.ctx());

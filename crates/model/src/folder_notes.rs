@@ -29,9 +29,14 @@ pub const NOTES_FORMAT: u32 = 1;
 
 /// Campo della nota scritta di una pagina.
 pub const NOTE: &str = "nota";
-/// Campo delle annotazioni di Miniature.
+/// Campo delle annotazioni di una pagina, le stesse in Miniature e in Visualizza (dalla
+/// 0.2.43, ADR 0040): spessori e corpi in proporzione alla pagina.
+pub const PAGE_ANNOTATIONS: &str = "annotazioni_pagina";
+/// Campo delle annotazioni di Miniature della 0.2.41 e 0.2.42, in mm della carta alla grandezza
+/// della miniatura: Miniature le porta in [`PAGE_ANNOTATIONS`] e lo svuota.
 pub const ANNOTATIONS: &str = "annotazioni";
-/// Campo delle annotazioni di Visualizza.
+/// Campo delle annotazioni di Visualizza della 0.2.41 e 0.2.42, già in proporzione alla
+/// pagina: passano in [`PAGE_ANNOTATIONS`] e il campo si svuota.
 pub const VIEWER_ANNOTATIONS: &str = "annotazioni_visualizza";
 
 /// Campo della scala di una pagina: il numero N di 1:N.
