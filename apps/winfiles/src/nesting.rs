@@ -1233,6 +1233,7 @@ impl NestingModule {
         let mut remove: Option<Vec<usize>> = None;
         let mut split: Option<Vec<usize>> = None;
         let mut merge: Option<Vec<usize>> = None;
+        let mut open_in: Option<(String, Vec<PathBuf>)> = None;
         let mut click = None;
         let unit = self.unit;
         let want = self.settings.bleed;
@@ -1380,8 +1381,23 @@ impl NestingModule {
                             ui.close();
                         }
                         if any_piece && ui.button("Riunisci i pezzi").clicked() {
-                            merge = Some(rows);
+                            merge = Some(rows.clone());
                             ui.close();
+                        }
+                        // Il file della sagoma (o quelli delle sagome scelte), una volta sola.
+                        let mut files: Vec<PathBuf> = Vec::new();
+                        for r in &rows {
+                            if let Some(e) = self.entries.get(*r)
+                                && !files.contains(&e.path)
+                            {
+                                files.push(e.path.clone());
+                            }
+                        }
+                        if !files.is_empty() {
+                            ui.separator();
+                            if let Some(k) = crate::external::menu(ui, &files) {
+                                open_in = Some((k, files));
+                            }
                         }
                     });
                 }
@@ -1397,6 +1413,9 @@ impl NestingModule {
         }
         if let Some(rows) = merge {
             self.merge(&rows);
+        }
+        if let Some((key, files)) = open_in {
+            self.status = crate::external::launch(&key, &files, None);
         }
     }
 

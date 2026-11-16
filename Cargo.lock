@@ -6682,6 +6682,7 @@ dependencies = [
  "serde",
  "serde_json",
  "winfiles-cad",
+ "winfiles-external",
  "winfiles-formats",
  "winfiles-geom",
  "winfiles-image-edit",
@@ -6707,6 +6708,18 @@ dependencies = [
  "thiserror 2.0.21",
  "usvg",
  "winfiles-thumbs",
+]
+
+[[package]]
+name = "winfiles-external"
+version = "0.2.39"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "windows",
+ "windows-core",
+ "windows-registry",
 ]
 
 [[package]]

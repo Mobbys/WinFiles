@@ -112,6 +112,8 @@ pub struct Prefs {
     pub annotate: crate::annotate::Style,
     /// Le scelte della scheda Visualizza.
     pub viewer: ViewerPrefs,
+    /// I programmi dei pulsanti «Apri in …», per tipo di file.
+    pub external: winfiles_external::Config,
 }
 
 /// Le scelte della scheda Visualizza da ricordare.
@@ -154,6 +156,7 @@ impl Prefs {
             .collect();
         self.presets = crate::presets::sanitized(std::mem::take(&mut self.presets));
         self.inks = crate::pdf::tracciati::sanitized(std::mem::take(&mut self.inks));
+        self.external = std::mem::take(&mut self.external).sanitized();
         self
     }
 }
@@ -275,6 +278,15 @@ mod tests {
                     ..crate::viewer::print::Choice::default()
                 },
                 cad_light: true,
+            },
+            external: {
+                let mut c = winfiles_external::Config::default();
+                c.add(
+                    winfiles_external::Program::from_exe(std::path::Path::new("C:/Adobe/Illustrator.exe")),
+                    &["pdf", "ai"],
+                );
+                c.rename("illustrator", "Ai");
+                c
             },
         };
         save_to(&file, &prefs).unwrap();
