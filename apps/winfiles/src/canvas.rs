@@ -100,16 +100,18 @@ pub(crate) fn one_line(text: String, size: f64, weight: Weight, width: f64) -> L
 /// Il grigio della riga con la misura del file in scala: più chiaro della misura vera.
 const FILE_INK: Color32 = Color32::from_rgb(110, 110, 110);
 
-/// Il bollino "1:20" nell'angolo in alto a destra della miniatura `image`, con il testo di corpo
+/// Il bollino "1:20" nell'angolo in basso a destra della miniatura `image`, con il testo di corpo
 /// `size` mm (lo stesso dell'etichetta delle pagine).
 pub(crate) fn scale_badge(sk: &mut Sketch<'_>, image: MmRect, scale: u32, size: f64) {
     let galley = sk.layout_line(&format!("1:{scale}"), size, Weight::SemiBold);
     let (w, h) = Sketch::size_mm(&galley);
     let (px, py) = (size * 0.45, size * 0.2);
     let (bw, bh) = (w + 2.0 * px, h + 2.0 * py);
-    // In una miniatura minuscola il bollino resta dentro il suo bordo sinistro.
+    // In basso a destra: in alto a sinistra c'è "Pag. 2/4". In una miniatura minuscola il bollino
+    // resta dentro i bordi sinistro e superiore.
     let x = (image.right() - 1.0 - bw).max(image.x);
-    let badge = MmRect::new(x, image.y + 1.0, bw, bh);
+    let y = (image.bottom() - 1.0 - bh).max(image.y);
+    let badge = MmRect::new(x, y, bw, bh);
     sk.rect(
         badge,
         size * 0.3,
@@ -284,7 +286,7 @@ pub fn compose(ctx: &egui::Context, sheet: &Sheet, project: &Project, slots: &[S
             sk.rect(grow(image, 0.12), 0.0, None, Some((FRAME, 0.12)));
         }
 
-        // Il bollino della scala, in alto a destra (a sinistra c'è "Pag. 2/4").
+        // Il bollino della scala, in basso a destra (in alto c'è "Pag. 2/4").
         let scale = file.scale(slot.page);
         if print.show_scale && scale > 1 && !unsupported {
             scale_badge(&mut sk, image, scale, em(name_pt));

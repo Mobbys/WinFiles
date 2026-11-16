@@ -21,7 +21,7 @@ di vedere **la misura vera in grande e quella del file sotto**.
 - Il modello dà le misure vere (`real_page`, `real_pages`, `PageInfo::scaled`): aree, `Totals`,
   riepilogo, tabella CSV/appunti, elenco dei file e proprietà le usano. Tetto 1:1000 (`MAX_SCALE`).
 - Didascalia: «Reale …  ·  m²», «Al vivo: …» (vero), poi «File 1:20: …» più chiara.
-- Bollino «1:20» in alto a destra della miniatura, ardesia scura con testo bianco: colori di
+- Bollino «1:20» in basso a destra della miniatura (in alto c'è «Pag. 2/4»; scelta di Michel), ardesia scura con testo bianco: colori di
   carta, uguali nei due temi, leggibili anche in bianco e nero; casella «Bollino della scala».
 - Le quote delle annotazioni misurano la lunghezza vera.
 - Nella vista Nesting delle Miniature il disegno sta alla sua misura vera fra gli altri.
