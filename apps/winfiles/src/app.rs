@@ -173,6 +173,8 @@ pub struct WinFilesApp {
     inbox: Option<crate::instance::Inbox>,
     /// Le annotazioni delle miniature: strumenti, stile e passi da annullare.
     pub(crate) annot: crate::annotate::Annotator,
+    /// La riga Scala dell'anteprima e il suo timbro.
+    pub(crate) scale_bar: crate::scale::ScaleBar,
 }
 
 /// I moduli di WinFiles, come le schede della 4.9.
@@ -302,6 +304,7 @@ impl WinFilesApp {
             defaults: None,
             inbox: None,
             annot: crate::annotate::Annotator::default(),
+            scale_bar: crate::scale::ScaleBar::default(),
         };
         app.annot = crate::annotate::Annotator::with_style(app.prefs.annotate.clone());
         // Le stampanti si cercano subito, così Stampa le trova già pronte.
@@ -1272,6 +1275,26 @@ impl WinFilesApp {
         }
     }
 
+    /// Mette la scala 1:`n` a tutte le pagine dei file scelti (o di quello in primo piano).
+    pub(crate) fn set_scale_marked(&mut self, n: u32) {
+        let files: BTreeSet<usize> = if self.marked.is_empty() {
+            self.selected.into_iter().collect()
+        } else {
+            self.marked.clone()
+        };
+        if files.is_empty() {
+            self.status = "Scegli prima le miniature o i file a cui mettere la scala".into();
+            return;
+        }
+        crate::scale::apply(&mut self.project, files.iter().copied(), n);
+        self.status = match (files.len(), n) {
+            (1, 1) => "Scala tolta: misure del file".into(),
+            (k, 1) => format!("Scala tolta da {k} file"),
+            (1, n) => format!("Scala 1:{n}: le misure sono quelle vere"),
+            (k, n) => format!("Scala 1:{n} a {k} file: le misure sono quelle vere"),
+        };
+    }
+
     /// Mette in stampa (o ne toglie) tutte le pagine dei file indicati: restano nell'elenco con
     /// le loro note.
     pub(crate) fn set_printed(&mut self, files: &BTreeSet<usize>, on: bool) {
@@ -2177,6 +2200,34 @@ impl WinFilesApp {
                 .layout(egui::Layout::right_to_left(Align::Center)),
         );
         self.sheet_controls(&mut controls, count, &t);
+        // Scala apre la riga delle scale dei disegni (1:10, 1:20…), in tutte le viste.
+        controls.add_space(10.0);
+        {
+            let on = self.scale_bar.on;
+            let tint = if on { t.on_primary } else { t.text_strong };
+            let mut button = egui::Button::image_and_text(
+                icons::image("scaling", 16.0, tint),
+                egui::RichText::new("Scala").color(tint),
+            )
+            .min_size(vec2(0.0, 30.0));
+            if on {
+                button = button.fill(t.primary);
+            }
+            if controls
+                .add(button)
+                .on_hover_text(
+                    "Segna i file disegnati in scala (1:10, 1:20…): le misure diventano quelle vere",
+                )
+                .clicked()
+            {
+                if on {
+                    self.scale_bar.close();
+                } else {
+                    self.scale_bar.on = true;
+                    self.annot.close();
+                }
+            }
+        }
         // Annota apre la riga degli strumenti di disegno: solo nella griglia.
         if self.project.print.view == View::Grid {
             controls.add_space(10.0);
@@ -2202,6 +2253,7 @@ impl WinFilesApp {
                 } else {
                     self.annot.on = true;
                     self.project.print.show_annotations = true;
+                    self.scale_bar.close();
                 }
             }
         } else if self.annot.on {
@@ -2284,6 +2336,34 @@ impl WinFilesApp {
             self.project.print.show_annotations = show;
             self.annot_bar(out);
             top = row.min_rect().bottom() + 6.0;
+        }
+        // La riga Scala: va a capo quando la finestra è stretta.
+        if self.scale_bar.on {
+            let area = Rect::from_min_max(
+                egui::pos2(full.left() + 12.0, top),
+                egui::pos2(full.right() - 12.0, full.bottom()),
+            );
+            let mut row = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(area)
+                    .layout(egui::Layout::top_down(Align::Min)),
+            );
+            let current = crate::scale::common(&self.project, self.marked.iter().copied());
+            let marked = self.marked.len();
+            let action = row
+                .horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    ui.spacing_mut().interact_size.y = 32.0;
+                    self.scale_bar.bar(ui, current, marked)
+                })
+                .inner;
+            if let Some(crate::scale::BarAction::Apply(n)) = action {
+                self.set_scale_marked(n);
+            }
+            top = row.min_rect().bottom() + 6.0;
+            if self.scale_bar.stamp.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.scale_bar.stamp = None;
+            }
         }
         // Con la ricerca attiva nell'elenco, una striscia lo ricorda: si stampa solo quello.
         if self.filter.is_active() && !self.project.files.is_empty() {
@@ -2413,8 +2493,21 @@ impl WinFilesApp {
             ui.ctx().request_repaint();
         }
         let out = scrolled.inner;
+        // Con il timbro acceso un clic mette la scala alla pagina della miniatura.
+        let stamp = self.scale_bar.stamp.filter(|_| self.scale_bar.on && !annotating);
+        if let Some(n) = stamp {
+            if out.response.as_ref().is_some_and(egui::Response::hovered) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Cell);
+            }
+            // Gli indici dell'anteprima sono quelli del lavoro (la ricerca toglie solo dalla stampa).
+            if let Some((file, page)) = out.clicked
+                && let Some(entry) = self.project.files.get_mut(file)
+            {
+                entry.set_scale(page, n);
+            }
+        }
         // Con Annota aperta un clic sceglie le annotazioni, non i file.
-        if let Some((file, page)) = out.clicked.filter(|_| !annotating) {
+        if let Some((file, page)) = out.clicked.filter(|_| !annotating && stamp.is_none()) {
             let mods = ui.input(|i| i.modifiers);
             self.pick(file, mods);
             self.selected_page = page;
@@ -2441,11 +2534,20 @@ impl WinFilesApp {
             let mut action = None;
             let page = self.selected_page;
             let mut clear = false;
+            let mut page_scale = None;
             if let Some(f) = self.project.files.get(i) {
                 let state = f.print_state();
                 let annotated = !f.annotations(page).is_empty();
                 resp.context_menu(|ui| {
                     action = crate::panels::file_menu(ui, f, count, state);
+                    // Un file con più pagine: la scala anche solo di questa.
+                    if f.sheet_pages() > 1 {
+                        ui.menu_button(format!("Scala solo della pagina {}", page + 1), |ui| {
+                            if let Some(n) = crate::panels::scale_items(ui, Some(f.scale(page))) {
+                                page_scale = Some(n);
+                            }
+                        });
+                    }
                     if annotated {
                         ui.separator();
                         if ui.button("Togli le annotazioni di questa pagina").clicked() {
@@ -2457,6 +2559,11 @@ impl WinFilesApp {
             }
             if clear {
                 self.annot.clear_page(&mut self.project, i, page);
+            }
+            if let Some(n) = page_scale
+                && let Some(f) = self.project.files.get_mut(i)
+            {
+                f.set_scale(page, n);
             }
             if let Some(a) = action {
                 self.file_action(ui.ctx(), a);

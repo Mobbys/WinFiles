@@ -6,7 +6,7 @@
 
 use egui::Color32;
 use egui::text::{LayoutJob, TextFormat};
-use winfiles_geom::{Size, Unit, area_m2, format_area, format_size};
+use winfiles_geom::{Size, Unit, area_m2, format_area, format_number, format_size};
 use winfiles_layout::{Item, caption_width};
 use winfiles_model::{FileKind, PageInfo, PrintSettings, Project};
 
@@ -180,43 +180,89 @@ pub fn note_rows(ctx: &egui::Context, text: &str, pt: f64, width_mm: f64) -> usi
 #[derive(Clone, Debug, PartialEq)]
 pub struct InfoLine {
     pub text: String,
-    /// Misura al vivo, scritta in rosso come nella 4.9.
-    pub trim: bool,
+    pub kind: LineKind,
+}
+
+/// Che misura dice una riga, e quindi di che colore si scrive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineKind {
+    /// Il formato pagina (alla misura vera, per i file in scala).
+    Size,
+    /// Il formato al vivo, in rosso come nella 4.9.
+    Trim,
+    /// La misura del file di un disegno in scala, sotto quella vera e più chiara.
+    File,
 }
 
 /// Le righe di misure di una pagina: il formato pagina (con abbondanza e crocini) e, se è
 /// diverso, il formato al vivo. Le due caselle dell'impaginazione decidono quali si vedono.
-pub fn info_lines(page: &PageInfo, unit: Unit, print: &PrintSettings) -> Vec<InfoLine> {
-    let mut out = Vec::with_capacity(2);
+/// Per una pagina in scala 1:`scale` le misure sono quelle vere, e una riga in più sotto dice
+/// la scala e la misura del file.
+pub fn info_lines(page: &PageInfo, scale: u32, unit: Unit, print: &PrintSettings) -> Vec<InfoLine> {
+    let real = page.scaled(scale);
+    let scaled = scale > 1;
+    let mut out = Vec::with_capacity(3);
     if print.show_sizes {
+        let (prefix, size) = if scaled {
+            ("Reale ", real_size_text(real.size, unit))
+        } else {
+            ("", format_size(real.size, unit))
+        };
         out.push(InfoLine {
-            text: format!(
-                "{}  ·  {}",
-                format_size(page.size, unit),
-                format_area(area_m2(page.size))
-            ),
-            trim: false,
+            text: format!("{prefix}{size}  ·  {}", format_area(area_m2(real.size))),
+            kind: LineKind::Size,
         });
     }
     if print.show_trim
-        && let Some(trim) = page.trim.filter(|t| *t != page.size)
+        && let Some(trim) = real.trim.filter(|t| *t != real.size)
     {
         out.push(InfoLine {
             text: format!(
                 "Al vivo: {}  ·  {}",
-                format_size(trim, unit),
+                if scaled {
+                    real_size_text(trim, unit)
+                } else {
+                    format_size(trim, unit)
+                },
                 format_area(area_m2(trim))
             ),
-            trim: true,
+            kind: LineKind::Trim,
+        });
+    }
+    if scaled && (print.show_sizes || print.show_trim) {
+        let file = if print.show_sizes {
+            page.size
+        } else {
+            page.finished()
+        };
+        out.push(InfoLine {
+            text: format!("File 1:{scale}: {}", format_size(file, unit)),
+            kind: LineKind::File,
         });
     }
     out
 }
 
+/// La misura vera di un disegno in scala: in metri quando passa il metro (11,88 × 8,4 m si legge
+/// meglio di 1.188 × 840 cm), altrimenti nell'unità scelta.
+pub fn real_size_text(size: Size, unit: Unit) -> String {
+    if size.w.max(size.h) >= 1000.0 {
+        format!(
+            "{} × {} m",
+            format_number(size.w / 1000.0, 2, true),
+            format_number(size.h / 1000.0, 2, true)
+        )
+    } else {
+        format_size(size, unit)
+    }
+}
+
 /// Quante righe di misure ha una pagina: come `info_lines(..).len()`, senza comporre i testi
 /// (con migliaia di file si conta a ogni fotogramma).
-pub fn info_count(page: &PageInfo, print: &PrintSettings) -> usize {
-    usize::from(print.show_sizes) + usize::from(print.show_trim && page.trim.is_some_and(|t| t != page.size))
+pub fn info_count(page: &PageInfo, scale: u32, print: &PrintSettings) -> usize {
+    usize::from(print.show_sizes)
+        + usize::from(print.show_trim && page.trim.is_some_and(|t| t != page.size))
+        + usize::from(scale > 1 && (print.show_sizes || print.show_trim))
 }
 
 /// L'area di un gruppo di file per le intestazioni: con abbondanza e, tra parentesi, al vivo
@@ -306,13 +352,15 @@ pub fn items(ctx: &egui::Context, project: &Project, slots: &[Slot]) -> Vec<Item
         let page = f.pages.get(slot.page);
         // Un file non ancora misurato tiene il posto di una riga; uno non supportato non ne ha.
         let lines = match page {
-            Some(p) => info_count(p, print),
+            Some(p) => info_count(p, f.scale(slot.page), print),
             None if f.kind == FileKind::Unsupported => 0,
             None => usize::from(print.show_sizes || print.show_trim),
         };
         out.push(Item {
             id,
-            content: page.map_or_else(|| placeholder_size(f.kind), |p| p.size),
+            // La misura vera: nella vista nesting un disegno 1:20 sta in proporzione con gli altri
+            // (nella griglia contano solo le proporzioni, uguali).
+            content: page.map_or_else(|| placeholder_size(f.kind), |p| p.scaled(f.scale(slot.page)).size),
             folder: label.clone(),
             caption: caption_height(
                 ctx,
@@ -395,22 +443,22 @@ mod tests {
             trim: Some(Size::new(210.0, 297.0)),
         };
         let mut print = PrintSettings::default();
-        let lines = info_lines(&page, Unit::Cm, &print);
+        let lines = info_lines(&page, 1, Unit::Cm, &print);
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].text.starts_with("21,6 × 30,3 cm") && !lines[0].trim);
-        assert!(lines[1].text.starts_with("Al vivo: 21 × 29,7 cm") && lines[1].trim);
+        assert!(lines[0].text.starts_with("21,6 × 30,3 cm") && lines[0].kind == LineKind::Size);
+        assert!(lines[1].text.starts_with("Al vivo: 21 × 29,7 cm") && lines[1].kind == LineKind::Trim);
         // Senza TrimBox (o uguale alla pagina) c'è solo la prima riga.
         let plain = PageInfo {
             size: Size::new(210.0, 297.0),
             trim: Some(Size::new(210.0, 297.0)),
         };
-        assert_eq!(info_lines(&plain, Unit::Cm, &print).len(), 1);
+        assert_eq!(info_lines(&plain, 1, Unit::Cm, &print).len(), 1);
         // Le caselle tolgono le righe.
         print.show_sizes = false;
-        assert_eq!(info_lines(&page, Unit::Cm, &print).len(), 1);
-        assert_eq!(info_count(&page, &print), 1);
+        assert_eq!(info_lines(&page, 1, Unit::Cm, &print).len(), 1);
+        assert_eq!(info_count(&page, 1, &print), 1);
         print.show_trim = false;
-        assert!(info_lines(&page, Unit::Cm, &print).is_empty());
+        assert!(info_lines(&page, 1, Unit::Cm, &print).is_empty());
 
         assert_eq!(
             area_text(0.0654, 0.0624, true, true).as_deref(),
@@ -422,6 +470,46 @@ mod tests {
             Some("al vivo 0,062 m²")
         );
         assert_eq!(area_text(0.0654, 0.0624, false, false), None);
+    }
+
+    #[test]
+    fn in_scala_la_misura_vera_prima_e_quella_del_file_sotto() {
+        let page = PageInfo {
+            size: Size::new(600.0, 426.0),
+            trim: Some(Size::new(594.0, 420.0)),
+        };
+        let mut print = PrintSettings::default();
+        let lines = info_lines(&page, 20, Unit::Cm, &print);
+        let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "Reale 12 × 8,52 m  ·  102,240 m²",
+                "Al vivo: 11,88 × 8,4 m  ·  99,792 m²",
+                "File 1:20: 60 × 42,6 cm",
+            ]
+        );
+        assert_eq!(lines[2].kind, LineKind::File);
+        assert_eq!(info_count(&page, 20, &print), 3);
+        // Sotto il metro la misura vera resta nell'unità scelta.
+        let small = PageInfo {
+            size: Size::new(100.0, 50.0),
+            trim: None,
+        };
+        assert_eq!(
+            info_lines(&small, 5, Unit::Cm, &print)[0].text,
+            "Reale 50 × 25 cm  ·  0,125 m²"
+        );
+        // Solo al vivo: la riga del file dice il formato al vivo del file.
+        print.show_sizes = false;
+        let lines = info_lines(&page, 20, Unit::Mm, &print);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[1].text, "File 1:20: 594 × 420 mm");
+        assert_eq!(info_count(&page, 20, &print), 2);
+        // Senza misure, niente riga del file.
+        print.show_trim = false;
+        assert!(info_lines(&page, 20, Unit::Mm, &print).is_empty());
+        assert_eq!(info_count(&page, 20, &print), 0);
     }
 
     #[test]

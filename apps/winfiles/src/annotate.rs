@@ -1567,7 +1567,9 @@ impl Annotator {
             && let Some(a @ Annotation::Quota { .. }) = annotation(shown, t)
         {
             // Doppio clic su una quota: si scrive la misura vera, e diventa la master.
-            let page = shown.files.get(t.file).and_then(|f| f.pages.get(t.page));
+            // La misura vera tiene conto della scala del disegno.
+            let real = shown.files.get(t.file).and_then(|f| f.real_page(t.page));
+            let page = real.as_ref();
             let list = shown
                 .files
                 .get(t.file)

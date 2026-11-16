@@ -37,6 +37,7 @@ mod quotes;
 mod recent;
 mod reorder;
 mod report;
+mod scale;
 mod scan;
 mod shell;
 mod sketch;

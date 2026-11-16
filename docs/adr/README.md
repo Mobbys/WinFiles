@@ -36,3 +36,4 @@ Una decisione si cambia con un nuovo ADR che sostituisce il precedente, mai risc
 | [0029](0029-segnalazioni-dall-app.md) | Segnalazioni dal menu Aiuto: finestra in WinFiles, invio alle Issues con una chiave di sole issue | Accettata |
 | [0030](0030-annotazioni-sulle-miniature.md) | Annotazioni sulle miniature, attaccate alla pagina e salvate nel lavoro | Accettata |
 | [0037](0037-programmi-esterni.md) | Programmi esterni: «Apri in …» con i programmi scelti per ogni tipo di file | Accettata |
+| [0038](0038-scala-dei-file.md) | Scala dei file: disegni 1:10, 1:20… segnati con un clic, misure vere ovunque | Accettata |
