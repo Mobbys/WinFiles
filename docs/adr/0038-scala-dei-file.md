@@ -32,6 +32,7 @@ di vedere **la misura vera in grande e quella del file sotto**.
   clic sulle pillole per il timbro: il primo clic metterebbe già la scala ai file scelti. Annota e Scala non stanno aperte insieme.
 
 ## Dopo (fasi successive)
-Visualizza e Quote dei moduli di modifica; «Manda al nesting» con la scala; scala dal nome del
-file (Windows non permette «:», quindi `1_20`, `1-20`, `scala 20`…); salvataggio nel file
-condiviso della cartella `_Note WinFiles.winfiles-note`, insieme alle annotazioni.
+Visualizza e Quote dei moduli di modifica; «Manda al nesting» con la scala; salvataggio nel
+file condiviso della cartella `_Note WinFiles.winfiles-note`, insieme alle annotazioni.
+La scala si mette solo a mano: niente riconoscimento dal nome del file (Michel, 2026-11-16: in
+ditta la scala non dipende dal nome).
