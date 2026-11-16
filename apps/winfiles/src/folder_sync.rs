@@ -1,4 +1,4 @@
-//! Il salvataggio automatico delle note nel file `_Note WinFiles.winfiles-note` di ogni cartella
+//! Il salvataggio automatico delle note nel file `note.winfiles` di ogni cartella
 //! (ADR 0038), comune a Miniature e Visualizza.
 //!
 //! Ogni scheda tiene le sue note come prima (un [`Holder`]); qui si guarda cosa è cambiato e lo si
@@ -544,7 +544,7 @@ fn local_file(local: &Path, dir: &Path) -> PathBuf {
         h ^= u64::from(b);
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
-    local.join(format!("{h:016x}.{}", folder_notes::NOTES_EXTENSION))
+    local.join(format!("{h:016x}.json"))
 }
 
 /// Il campo con cui la copia locale ricorda la sua cartella.

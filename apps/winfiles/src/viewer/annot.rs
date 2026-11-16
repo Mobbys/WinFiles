@@ -1,7 +1,7 @@
 //! Le annotazioni del Visualizza: la stessa riga Annota di Miniature (testi, frecce, forme,
 //! evidenziatore) sopra la pagina che si guarda. Il file non si tocca mai: le annotazioni si
 //! salvano da sé, per file e per pagina, nel file delle note della cartella del file
-//! (`_Note WinFiles.winfiles-note`, ADR 0038), dove le ritrova anche un collega. Fino alla 0.2.40
+//! (`note.winfiles`, ADR 0038), dove le ritrova anche un collega. Fino alla 0.2.40
 //! stavano in `annotazioni-visualizza.json` nella cartella delle impostazioni: al primo avvio
 //! passano nelle cartelle dei loro file.
 //!

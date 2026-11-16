@@ -15,9 +15,12 @@ salvataggio automatico unico, condiviso fra colleghi sui file in rete; il Salva 
 2. **Una cartella comune sul server**, scelta in Impostazioni: cartelle pulite, ma va configurata
    su ogni PC e le note si perdono se il file cambia percorso o se due PC vedono il server con
    percorsi diversi (`Z:` e `\\server\…`).
-3. **Scelta (Michel, 2026-11-16): un file per cartella, visibile**, `_Note WinFiles.winfiles-note`
-   (il trattino basso lo mette in cima), associato a WinFiles: il doppio clic apre la cartella in
-   Miniature con le note al loro posto. Michel ha preferito visibile a nascosto.
+3. **Scelta (Michel, 2026-11-16): un file per cartella, visibile**, `note.winfiles`. Ha
+   l'estensione dei lavori, già associata a WinFiles: WinFiles lo riconosce dal nome e il doppio
+   clic apre in Miniature solo i file della cartella con note o annotazioni (tutta la cartella se
+   c'è solo la nota di cartella). Un lavoro non si può salvare con quel nome. Michel ha preferito
+   visibile a nascosto e un nome semplice (il primo MSI di prova usava
+   `_Note WinFiles.winfiles-note`, che si rinomina alla prima lettura).
 
 ## Decisione
 - Formato (crate model, `folder_notes`): JSON compatto

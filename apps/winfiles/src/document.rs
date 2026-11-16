@@ -31,21 +31,34 @@ pub fn is_project(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case(EXTENSION))
 }
 
-/// Il file delle note di una cartella (`_Note WinFiles.winfiles-note`) apre tutta la sua
-/// cartella, con le note già al loro posto: al suo posto si mette la cartella.
+/// Il file delle note di una cartella (`note.winfiles`) apre i file della cartella che hanno note
+/// o annotazioni, già al loro posto; se nessun file ne ha (solo la nota di cartella), tutta la
+/// cartella.
 pub fn notes_to_folders(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    use winfiles_model::folder_notes::{FolderNotes, is_notes_file};
     let mut out: Vec<PathBuf> = Vec::with_capacity(paths.len());
     for p in paths {
-        let p = if winfiles_model::folder_notes::is_notes_file(&p) {
-            match p.parent() {
-                Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
-                _ => continue,
+        let found = if is_notes_file(&p) {
+            let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) else {
+                continue;
+            };
+            let files = FolderNotes::read(dir)
+                .ok()
+                .flatten()
+                .map(|n| n.annotated_files(dir))
+                .unwrap_or_default();
+            if files.is_empty() {
+                vec![dir.to_path_buf()]
+            } else {
+                files
             }
         } else {
-            p
+            vec![p]
         };
-        if !out.contains(&p) {
-            out.push(p);
+        for f in found {
+            if !out.contains(&f) {
+                out.push(f);
+            }
         }
     }
     out
@@ -178,6 +191,13 @@ impl WinFilesApp {
             path.with_extension(EXTENSION)
         };
         let path = std::path::absolute(&path).unwrap_or(path);
+        if winfiles_model::folder_notes::is_notes_file(&path) {
+            self.status = format!(
+                "Il nome {} è delle note della cartella: salva il lavoro con un altro nome",
+                winfiles_model::folder_notes::FILE_NAME
+            );
+            return false;
+        }
         if let Some(stem) = path.file_stem() {
             self.project.title = stem.to_string_lossy().into_owned();
         }

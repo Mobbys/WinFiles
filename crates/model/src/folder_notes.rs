@@ -1,5 +1,5 @@
-//! Le note di una cartella salvate da sé in un file della cartella stessa,
-//! `_Note WinFiles.winfiles-note` (ADR 0038): note per pagina, nota di cartella, annotazioni di
+//! Le note di una cartella salvate da sé in un file della cartella stessa, `note.winfiles`
+//! (ADR 0038): note per pagina, nota di cartella, annotazioni di
 //! Miniature e di Visualizza. Chi apre la stessa cartella in rete, da un altro PC, le ritrova.
 //!
 //! Il file è JSON: `{ versione, nota_cartella, file: { "<nome>": { pagine: { "<n>": { campo:
@@ -19,10 +19,11 @@ use serde_json::Value;
 
 use crate::{Annotation, MAX_PER_PAGE, ModelError};
 
-/// Il nome del file delle note in ogni cartella: il trattino basso lo mette in cima.
-pub const FILE_NAME: &str = "_Note WinFiles.winfiles-note";
-/// L'estensione del file delle note, associata a WinFiles dall'installazione.
-pub const NOTES_EXTENSION: &str = "winfiles-note";
+/// Il nome del file delle note in ogni cartella. Ha l'estensione dei lavori, già associata a
+/// WinFiles: il doppio clic apre i file della cartella che hanno note.
+pub const FILE_NAME: &str = "note.winfiles";
+/// Il nome delle prime prove (MSI di prova del 2026-11-16): si rinomina alla prima lettura.
+const OLD_FILE_NAME: &str = "_Note WinFiles.winfiles-note";
 /// La versione del formato scritta nel file.
 pub const NOTES_FORMAT: u32 = 1;
 
@@ -102,16 +103,41 @@ pub fn path_in(dir: &Path) -> PathBuf {
     dir.join(FILE_NAME)
 }
 
-/// Vero per un file delle note (si apre la sua cartella invece di aggiungerlo).
+/// Vero per un file delle note (si aprono i file annotati della sua cartella invece di
+/// aprirlo come un lavoro).
 pub fn is_notes_file(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case(NOTES_EXTENSION))
+    path.file_name().is_some_and(|n| {
+        let n = n.to_string_lossy();
+        n.eq_ignore_ascii_case(FILE_NAME) || n.eq_ignore_ascii_case(OLD_FILE_NAME)
+    })
 }
 
 impl FolderNotes {
     /// Legge il file delle note di `dir`; `Ok(None)` se non c'è.
     pub fn read(dir: &Path) -> Result<Option<Self>, ModelError> {
-        Self::read_file(&path_in(dir))
+        let path = path_in(dir);
+        let old = dir.join(OLD_FILE_NAME);
+        if !path.exists() && old.is_file() {
+            // Il nome delle prime prove: si passa a quello nuovo; se non si può, si legge com'è.
+            if std::fs::rename(&old, &path).is_err() {
+                return Self::read_file(&old);
+            }
+        }
+        Self::read_file(&path)
+    }
+
+    /// I file della cartella `dir` con qualche nota o annotazione, che ci sono ancora.
+    pub fn annotated_files(&self, dir: &Path) -> Vec<PathBuf> {
+        self.file
+            .iter()
+            .filter(|(_, f)| f.pagine.values().any(|p| p.values().any(|v| !v.is_null())))
+            .filter_map(|(name, _)| {
+                // Solo un nome, mai un percorso: il file è scritto da altri.
+                let p = Path::new(name);
+                (p.file_name() == Some(p.as_os_str())).then(|| dir.join(p))
+            })
+            .filter(|p| p.is_file())
+            .collect()
     }
 
     /// Legge un file delle note; `Ok(None)` se non c'è.
@@ -497,8 +523,36 @@ mod tests {
 
     #[test]
     fn riconosce_il_file_delle_note() {
+        assert!(is_notes_file(Path::new("x/note.winfiles")));
+        assert!(is_notes_file(Path::new("x/Note.WINFILES")));
         assert!(is_notes_file(Path::new("x/_Note WinFiles.winfiles-note")));
-        assert!(is_notes_file(Path::new("x/altro.WINFILES-NOTE")));
         assert!(!is_notes_file(Path::new("x/lavoro.winfiles")));
+        assert!(!is_notes_file(Path::new("x/note.pdf")));
+    }
+
+    #[test]
+    fn il_vecchio_nome_passa_a_quello_nuovo() {
+        let dir = temp("vecchionome");
+        std::fs::write(dir.join(OLD_FILE_NAME), r#"{"versione":1,"nota_cartella":"x"}"#).unwrap();
+        let n = FolderNotes::read(&dir).unwrap().unwrap();
+        assert_eq!(n.nota_cartella, "x");
+        assert!(path_in(&dir).is_file());
+        assert!(!dir.join(OLD_FILE_NAME).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn i_file_con_note_che_ci_sono_ancora() {
+        let dir = temp("annotati");
+        std::fs::write(dir.join("a.pdf"), "x").unwrap();
+        std::fs::write(dir.join("b.pdf"), "x").unwrap();
+        let text = r#"{"file":{
+            "a.pdf":{"pagine":{"0":{"nota":"si"}}},
+            "b.pdf":{"pagine":{}},
+            "sparito.pdf":{"pagine":{"0":{"nota":"si"}}},
+            "../fuori.pdf":{"pagine":{"0":{"nota":"si"}}}}}"#;
+        let n = FolderNotes::from_json(text).unwrap();
+        assert_eq!(n.annotated_files(&dir), vec![dir.join("a.pdf")]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
