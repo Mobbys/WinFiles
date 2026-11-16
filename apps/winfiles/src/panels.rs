@@ -148,7 +148,7 @@ fn two_lines(
 
 /// Le misure di un file per l'elenco: formato finito, m² e pagine.
 fn file_info(f: &FileEntry, unit: Unit, error: Option<&String>, assumed: bool) -> String {
-    let Some(first) = f.pages.first() else {
+    let Some(first) = f.real_page(0) else {
         return if error.is_some_and(|e| e == crate::document::MISSING) {
             "file non trovato".into()
         } else if f.kind == FileKind::Unsupported {
@@ -162,13 +162,25 @@ fn file_info(f: &FileEntry, unit: Unit, error: Option<&String>, assumed: bool) -
             "lettura delle misure…".into()
         };
     };
-    let mut out = format!(
+    // In scala la scala per prima (la riga si accorcia con "…") e la misura vera, in metri quando
+    // passa il metro.
+    let scale = f.common_scale();
+    let size = |s| match scale {
+        Some(1) => format_size(s, unit),
+        _ => crate::captions::real_size_text(s, unit),
+    };
+    let mut out = match scale {
+        Some(1) => String::new(),
+        Some(n) => format!("1:{n}  ·  "),
+        None => "scale diverse  ·  ".into(),
+    };
+    out.push_str(&format!(
         "{}  ·  {}",
-        format_size(first.size, unit),
+        size(first.size),
         format_area(f.area_full_m2())
-    );
+    ));
     if let Some(trim) = first.trim.filter(|t| *t != first.size) {
-        out.push_str(&format!("  ·  al vivo {}", format_size(trim, unit)));
+        out.push_str(&format!("  ·  al vivo {}", size(trim)));
     }
     if f.pages.len() > 1 {
         out.push_str(&format!("  ·  {} pagine", f.pages.len()));
@@ -333,6 +345,25 @@ pub(crate) enum FileAction {
     Nest(std::path::PathBuf),
     /// Apre il file (o i file scelti, se è tra quelli) con un programma esterno (la chiave).
     OpenIn(std::path::PathBuf, String),
+    /// Mette la scala 1:N a tutte le pagine dei file scelti.
+    ScaleMarked(u32),
+}
+
+/// Le voci delle scale in un menu: restituisce quella scelta. `current` ha il segno di spunta.
+pub(crate) fn scale_items(ui: &mut egui::Ui, current: Option<u32>) -> Option<u32> {
+    let mut out = None;
+    for n in [1, 2, 5, 10, 20, 25, 30, 50, 100] {
+        let label = if n == 1 {
+            "1:1 (misure del file)".to_string()
+        } else {
+            format!("1:{n}")
+        };
+        if crate::fluent::radio(ui, current == Some(n), label).clicked() {
+            out = Some(n);
+            ui.close();
+        }
+    }
+    out
 }
 
 /// Il menu del tasto destro su un file, nell'elenco e nell'anteprima del foglio: `count` file
@@ -405,6 +436,17 @@ pub(crate) fn file_menu(
         action = Some(FileAction::CopyMarked);
         ui.close();
     }
+    let label = match count {
+        1 => "Scala".to_string(),
+        n => format!("Scala dei {n} file scelti"),
+    };
+    ui.menu_button(label, |ui| {
+        if let Some(n) = scale_items(ui, f.common_scale()) {
+            action = Some(FileAction::ScaleMarked(n));
+        }
+    })
+    .response
+    .on_hover_text("Il disegno è in scala: le misure diventano quelle vere (1:20 = 20 volte più grande)");
     ui.separator();
     let on = state != PrintState::All;
     let label = match (count, on) {
@@ -1034,14 +1076,17 @@ impl WinFilesApp {
                                     if selected { t.text_strong } else { t.accent_text },
                                 );
                             }
-                            let mut info = match f.pages.get(*p) {
+                            let real = f.real_page(*p);
+                            let mut info = match &real {
                                 Some(page) => format_size(page.size, unit),
                                 None => "lettura delle misure…".to_string(),
                             };
-                            if let Some(trim) =
-                                f.pages.get(*p).and_then(|pg| pg.trim.filter(|t| *t != pg.size))
+                            if let Some(trim) = real.as_ref().and_then(|pg| pg.trim.filter(|t| *t != pg.size))
                             {
                                 info.push_str(&format!("  ·  al vivo {}", format_size(trim, unit)));
+                            }
+                            if f.scale(*p) > 1 {
+                                info.push_str(&format!("  ·  1:{}", f.scale(*p)));
                             }
                             if !on {
                                 info = format!("fuori stampa  ·  {info}");
@@ -1277,6 +1322,7 @@ impl WinFilesApp {
                     self.status = format!("Non riesco ad aprire {}: {e}", path.display());
                 }
             }
+            FileAction::ScaleMarked(n) => self.set_scale_marked(n),
             FileAction::CopyMarked => {
                 let marked = self.marked.clone();
                 self.copy_table(Some(&marked));
@@ -1353,16 +1399,28 @@ impl WinFilesApp {
                 if f.pages.is_empty() && !self.errors.contains_key(&f.path) {
                     prop(ui, "Misure", "in lettura…");
                 }
-                if let Some(first) = f.pages.first() {
-                    let same = f.pages.iter().all(|p| p == first);
+                if let Some(file_first) = f.pages.first() {
+                    let common = f.common_scale();
+                    let same = f.pages.iter().all(|p| p == file_first) && common.is_some();
+                    let first = file_first.scaled(common.unwrap_or(1));
+                    let first = &first;
                     if f.pages.len() > 1 {
                         prop(ui, "Pagine", f.pages.len().to_string());
                     }
+                    match common {
+                        Some(1) => {}
+                        Some(n) => prop(ui, "Scala", format!("1:{n} (misure vere qui sotto)")),
+                        None => prop(ui, "Scala", "diversa per pagina"),
+                    }
                     if same {
                         prop(ui, "Formato pagina", format_size(first.size, unit));
+                        if common.is_some_and(|n| n > 1) {
+                            prop(ui, "Formato del file", format_size(file_first.size, unit));
+                        }
                         if let Some(trim) = first.trim.filter(|t| *t != first.size) {
                             prop(ui, "Al vivo", format_size(trim, unit));
-                            let bleed = (first.size.w - trim.w) / 2.0;
+                            // L'abbondanza è quella del file, non moltiplicata.
+                            let bleed = (first.size.w - trim.w) / 2.0 / f64::from(common.unwrap_or(1));
                             if bleed > 0.05 {
                                 prop(ui, "Abbondanza", format!("{} per lato", format_length(bleed, unit)));
                             }
@@ -1391,16 +1449,19 @@ impl WinFilesApp {
                 }
             });
             if let Some(first) = f.pages.first()
-                && f.pages.iter().any(|p| p != first)
+                && (f.pages.iter().any(|p| p != first) || f.common_scale().is_none())
             {
                 section(ui, "Pagine");
                 egui::Grid::new("pagine").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                    for (n, p) in f.pages.iter().enumerate().take(500) {
+                    for (n, p) in f.real_pages().enumerate().take(500) {
                         dim_label(ui, &format!("{}", n + 1));
-                        let text = match p.trim {
+                        let mut text = match p.trim {
                             Some(trim) => format!("{} (al vivo {})", format_size(p.size, unit), format_size(trim, unit)),
                             None => format_size(p.size, unit),
                         };
+                        if f.scale(n) > 1 {
+                            text.push_str(&format!("  ·  1:{}", f.scale(n)));
+                        }
                         ui.label(text);
                         ui.end_row();
                     }
@@ -1763,6 +1824,8 @@ impl WinFilesApp {
             .on_hover_text("Il formato pagina del file e la sua area, sotto ogni miniatura");
             ui.add(fluent::checkbox(&mut print.show_trim, "Misure al vivo"))
                 .on_hover_text("In rosso, il formato finito (TrimBox) quando è diverso dalla pagina");
+            ui.add(fluent::checkbox(&mut print.show_scale, "Bollino della scala"))
+                .on_hover_text("Il bollino \"1:20\" sulle miniature dei file disegnati in scala");
             ui.add(fluent::checkbox(
                 &mut print.show_summary,
                 "Foglio di riepilogo in cima",

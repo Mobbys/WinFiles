@@ -63,15 +63,20 @@ struct Col {
 
 /// Le colonne della tabella, in mm dal bordo sinistro dell'area: il nome prende lo spazio che
 /// resta. Le caselle delle misure tolgono le loro colonne.
-fn columns(print: &PrintSettings, width: f64) -> Vec<Col> {
+/// `scaled`: qualche file del lavoro è in scala, e c'è la colonna Scala.
+fn columns(print: &PrintSettings, scaled: bool, width: f64) -> Vec<Col> {
     let mut right: Vec<(&'static str, f64)> = vec![("Pagine", 14.0)];
+    if scaled {
+        right.push(("Scala", 13.0));
+    }
     if print.show_sizes {
         right.push(("Formato", 34.0));
-        right.push(("m²", 17.0));
+        // In scala le aree arrivano a centinaia di m²: colonne più larghe.
+        right.push(("m²", if scaled { 21.0 } else { 17.0 }));
     }
     if print.show_trim {
         right.push(("Al vivo", 34.0));
-        right.push(("m² al vivo", 19.0));
+        right.push(("m² al vivo", if scaled { 21.0 } else { 19.0 }));
     }
     // Le colonne crescono con il testo, ma lasciano almeno il 30% al nome.
     let mut k = body_pt(print) / 8.5;
@@ -97,18 +102,45 @@ fn same_pages(f: &FileEntry) -> bool {
     f.pages
         .first()
         .is_none_or(|first| f.pages.iter().all(|p| p == first))
+        && f.common_scale().is_some()
 }
 
-/// I testi delle colonne dopo il nome, nello stesso ordine di [`columns`].
-fn cells(f: &FileEntry, page: Option<usize>, print: &PrintSettings, unit: Unit) -> Vec<String> {
+/// Vero se qualche file in stampa è disegnato in scala: il riepilogo ha la colonna Scala.
+fn any_scale(project: &Project) -> bool {
+    project
+        .files
+        .iter()
+        .any(|f| f.printed_pages().any(|p| f.scale(p) > 1))
+}
+
+/// I testi delle colonne dopo il nome, nello stesso ordine di [`columns`]. Le misure sono quelle
+/// vere, moltiplicate per la scala dei disegni.
+fn cells(f: &FileEntry, page: Option<usize>, print: &PrintSettings, scaled: bool, unit: Unit) -> Vec<String> {
     let pages: Vec<_> = match page {
-        Some(p) => f.pages.get(p).into_iter().collect(),
-        None => f.pages.iter().collect(),
+        Some(p) => f.real_page(p).into_iter().collect(),
+        None => f.real_pages().collect(),
     };
     let mut out = vec![match page {
         Some(p) => format!("pag. {}", p + 1),
         None => f.pages.len().max(1).to_string(),
     }];
+    if scaled {
+        let scale = f.scale(page.unwrap_or(0));
+        out.push(if scale > 1 {
+            format!("1:{scale}")
+        } else {
+            "—".into()
+        });
+    }
+    // Le misure vere dei disegni in scala in metri quando passano il metro, come sotto le miniature.
+    let real = f.scale(page.unwrap_or(0)) > 1;
+    let size_text = |s| {
+        if real {
+            crate::captions::real_size_text(s, unit)
+        } else {
+            format_size(s, unit)
+        }
+    };
     let Some(first) = pages.first() else {
         let none = "—".to_string();
         out.extend(std::iter::repeat_n(
@@ -118,12 +150,12 @@ fn cells(f: &FileEntry, page: Option<usize>, print: &PrintSettings, unit: Unit) 
         return out;
     };
     if print.show_sizes {
-        out.push(format_size(first.size, unit));
+        out.push(size_text(first.size));
         out.push(format_area(pages.iter().map(|p| area_m2(p.size)).sum()));
     }
     if print.show_trim {
         out.push(match first.trim.filter(|t| *t != first.size) {
-            Some(t) => format_size(t, unit),
+            Some(t) => size_text(t),
             None => "—".into(),
         });
         out.push(format_area(pages.iter().map(|p| area_m2(p.finished())).sum()));
@@ -225,7 +257,10 @@ pub fn layout(ctx: &egui::Context, project: &Project, title: f64) -> Result<Summ
         - print.margins.right;
     let rows = rows(project);
     let labels = project.folder_labels();
-    let name_w = columns(print, width).first().map_or(width, |c| c.w) - 1.5 * INDENT;
+    let name_w = columns(print, any_scale(project), width)
+        .first()
+        .map_or(width, |c| c.w)
+        - 1.5 * INDENT;
     let lines = rows
         .iter()
         .map(|row| match &row.kind {
@@ -338,7 +373,8 @@ pub fn compose(ctx: &egui::Context, sheet: &SummarySheet, summary: &Summary, pro
     let unit = project.unit;
     let pt = body_pt(print);
     let em = |pt: f64| pt * MM_PER_PT;
-    let cols = columns(print, sheet.area.w);
+    let scaled = any_scale(project);
+    let cols = columns(print, scaled, sheet.area.w);
 
     if let Some(title) = sheet.title {
         draw_title(&mut sk, title, print);
@@ -454,7 +490,7 @@ pub fn compose(ctx: &egui::Context, sheet: &SummarySheet, summary: &Summary, pro
                 let y = r.y + ROW_PAD;
                 let name = row_name(f, *page);
                 let mut name_lines = 1;
-                let values = cells(f, *page, print, unit);
+                let values = cells(f, *page, print, scaled, unit);
                 for (i, col) in cols.iter().enumerate() {
                     let text = if i == 0 {
                         name.as_str()
@@ -581,7 +617,7 @@ mod tests {
         assert_eq!(r[1].notes, ["Pag. 2: Seconda pagina più scura"]);
 
         let print = PrintSettings::default();
-        let c = cells(&p.files[0], None, &print, Unit::Mm);
+        let c = cells(&p.files[0], None, &print, false, Unit::Mm);
         assert_eq!(c[0], "2");
         assert_eq!(c[1], "216 × 303 mm");
         assert_eq!(c[3], "210 × 297 mm");
@@ -589,11 +625,24 @@ mod tests {
         assert_eq!(c[2], format_area(2.0 * 0.216 * 0.303));
         let mut solo_vivo = print.clone();
         solo_vivo.show_sizes = false;
-        assert_eq!(cells(&p.files[0], Some(1), &solo_vivo, Unit::Mm).len(), 3);
-        assert_eq!(columns(&solo_vivo, 190.0).len(), 4);
+        assert_eq!(cells(&p.files[0], Some(1), &solo_vivo, false, Unit::Mm).len(), 3);
+        assert_eq!(columns(&solo_vivo, false, 190.0).len(), 4);
         // Un file non ancora misurato ha comunque tutte le celle.
         let vuoto = FileEntry::new(PathBuf::from("/c/x.jpg"), FileKind::Image);
-        assert_eq!(cells(&vuoto, None, &print, Unit::Mm).len(), 5);
+        assert_eq!(cells(&vuoto, None, &print, false, Unit::Mm).len(), 5);
+
+        // In scala: la colonna Scala e le misure vere.
+        let mut f = p.files[0].clone();
+        f.set_all_scales(10);
+        assert!(same_pages(&f));
+        let c = cells(&f, None, &print, true, Unit::Mm);
+        assert_eq!(c[1], "1:10");
+        assert_eq!(c[2], "2,16 × 3,03 m");
+        assert_eq!(c[3], format_area(2.0 * 2.16 * 3.03));
+        assert_eq!(columns(&print, true, 190.0).len(), 7);
+        // Pagine in scale diverse: una riga per pagina.
+        f.set_scale(1, 20);
+        assert!(!same_pages(&f));
     }
 
     #[test]
@@ -626,7 +675,7 @@ mod tests {
             header_text: 24.0,
             ..Default::default()
         };
-        let cols = columns(&print, 190.0);
+        let cols = columns(&print, true, 190.0);
         assert!(cols[0].w >= 190.0 * 0.3 - 1e-9);
         let last = cols.last().unwrap();
         assert!((last.x + last.w - 190.0).abs() < 1e-9);
