@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use winfiles_geom::{Margins, Orientation, Paper, Size, Unit, area_m2};
 
 mod annotation;
+pub mod folder_notes;
 pub use annotation::{Anchor, Annotation, MAX_PER_PAGE, Point, QUOTE_SIZE, Rgba, ShapeStyle};
 
 /// Versione del formato del file di progetto. Si alza a ogni modifica incompatibile.

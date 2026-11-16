@@ -60,14 +60,19 @@ fn visit(path: &Path, depth: usize, out: &mut Vec<FileEntry>, progress: &Progres
 }
 
 /// I file che nessuno vuole stampare: nascosti (il punto davanti, o l'attributo di Windows), le
-/// miniature e le impostazioni di cartella di Windows e macOS, i file di blocco di Office (`~$`).
+/// miniature e le impostazioni di cartella di Windows e macOS, i file di blocco di Office (`~$`),
+/// il file delle note di WinFiles.
 fn is_system_file(path: &Path) -> bool {
     const SYSTEM: [&str; 4] = ["thumbs.db", "ehthumbs.db", "desktop.ini", ".ds_store"];
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    name.starts_with('.') || name.starts_with("~$") || SYSTEM.contains(&name.as_str()) || hidden(path)
+    name.starts_with('.')
+        || name.starts_with("~$")
+        || SYSTEM.contains(&name.as_str())
+        || winfiles_model::folder_notes::is_notes_file(path)
+        || hidden(path)
 }
 
 #[cfg(windows)]

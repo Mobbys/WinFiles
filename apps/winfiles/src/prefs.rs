@@ -110,6 +110,8 @@ pub struct Prefs {
     pub reporter: String,
     /// L'ultimo stile delle annotazioni delle miniature.
     pub annotate: crate::annotate::Style,
+    /// La riga Annota di Miniature è chiusa (di partenza è aperta).
+    pub annotate_hidden: bool,
     /// Le scelte della scheda Visualizza.
     pub viewer: ViewerPrefs,
     /// I programmi dei pulsanti «Apri in …», per tipo di file.
@@ -123,6 +125,8 @@ pub struct ViewerPrefs {
     pub print: crate::viewer::print::Choice,
     /// I disegni CAD su fondo bianco invece che nero.
     pub cad_light: bool,
+    /// La riga Annota del Visualizza è chiusa (di partenza è aperta).
+    pub annotate_hidden: bool,
 }
 
 impl Prefs {
@@ -270,6 +274,7 @@ mod tests {
             },
             reporter: "Mario".into(),
             annotate: crate::annotate::Style::default(),
+            annotate_hidden: true,
             viewer: ViewerPrefs {
                 print: crate::viewer::print::Choice {
                     paper: winfiles_geom::Paper::A3,
@@ -278,6 +283,7 @@ mod tests {
                     ..crate::viewer::print::Choice::default()
                 },
                 cad_light: true,
+                annotate_hidden: true,
             },
             external: {
                 let mut c = winfiles_external::Config::default();

@@ -859,6 +859,10 @@ pub struct Annotator {
     placed: Vec<(Spot, PathBuf)>,
     /// Senza lo strumento Quota (il Visualizza ha già le sue quote con la misura vera).
     pub no_quote: bool,
+    /// L'ultimo clic sull'anteprima è servito alle annotazioni (ne ha presa una, ne ha creata
+    /// una): la scheda non lo usa per sé. Con lo strumento Scegli un clic fuori dalle
+    /// annotazioni sceglie la miniatura come sempre.
+    took: bool,
 }
 
 /// Il riquadro di un'annotazione a schermo, per sceglierla e per le maniglie.
@@ -1147,12 +1151,30 @@ impl Annotator {
         self.drag.is_some() || self.editing.is_some() || self.typing_value.is_some()
     }
 
+    /// Uno strumento di disegno è scelto: i clic e i trascinamenti sull'anteprima tracciano.
+    pub fn armed(&self) -> bool {
+        self.tool != Tool::Select
+    }
+
+    /// L'ultimo clic sull'anteprima è servito alle annotazioni.
+    pub fn took_click(&self) -> bool {
+        self.took
+    }
+
+    /// Si sta facendo qualcosa con le annotazioni: l'anteprima va ridisegnata di continuo.
+    pub fn lively(&self) -> bool {
+        self.armed() || self.selected.is_some() || self.busy()
+    }
+
     /// I tasti delle annotazioni: Esc, Canc, Ctrl+Z/Y, copia e incolla. `project` è dove
     /// vanno le modifiche, `shown` la copia mostrata. Da chiamare prima degli altri tasti della
     /// scheda, perché Canc e Ctrl+C valgano per l'annotazione scelta.
     pub fn keys(&mut self, ctx: &egui::Context, project: &mut Project, shown: &mut Project) {
         use egui::{Key, KeyboardShortcut, Modifiers};
-        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        // Esc serve alle annotazioni solo se c'è qualcosa da lasciare: con la riga sempre aperta
+        // deve restare alla scheda il resto del tempo.
+        let something = self.editing.is_some() || self.selected.is_some() || self.armed();
+        if something && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             self.escape(shown);
             for (file, page) in self.take_pending() {
                 self.commit(project, shown, file, page);
@@ -1549,6 +1571,9 @@ impl Annotator {
                     .map(|(h, _)| (t, h, a.clone(), s))
             };
 
+        if resp.clicked() || resp.double_clicked() {
+            self.took = self.armed();
+        }
         if resp.drag_started() || resp.clicked() {
             // Un testo in corso si chiude toccando l'anteprima.
             self.finish_text(shown);
@@ -1561,6 +1586,7 @@ impl Annotator {
             self.selected = Some(t);
             self.editing = Some((t, text));
             self.focus_text = true;
+            self.took = true;
         } else if resp.double_clicked()
             && let Some(q) = resp.interact_pointer_pos()
             && let Some(t) = hit(shown, q, self.selected)
@@ -1580,10 +1606,12 @@ impl Annotator {
             self.selected = Some(t);
             self.typing_value = Some((t, text));
             self.focus_text = true;
+            self.took = true;
         } else if resp.clicked()
             && let Some(q) = resp.interact_pointer_pos()
         {
             let found = hit(shown, q, self.selected);
+            self.took = self.armed() || found.is_some();
             if self.tool == Tool::Text && found.is_none() {
                 if let Some(s) = spot_at(to_mm_at(q)) {
                     self.new_text(shown, s, to_mm_at(q), None);

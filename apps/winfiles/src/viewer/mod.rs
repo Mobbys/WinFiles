@@ -178,6 +178,10 @@ pub struct ViewerModule {
     /// La tinta piatta evidenziata (nome com'è nel file).
     highlight: Option<Vec<u8>>,
     quoting: bool,
+    /// La riga Annota resta aperta (WinFiles lo ricorda) finché non la si chiude.
+    pub annot_bar: bool,
+    /// Lo strumento di Annota al giro prima: sceglierne uno da disegno chiude quote e selezione.
+    last_tool: crate::annotate::Tool,
     /// Lo strumento "Seleziona": trascinando si sceglie una zona da copiare.
     selecting: bool,
     selection: Option<Selection>,
@@ -223,6 +227,8 @@ impl ViewerModule {
             show_rulers: true,
             highlight: None,
             quoting: false,
+            annot_bar: true,
+            last_tool: crate::annotate::Tool::Select,
             selecting: false,
             selection: None,
             sel_anchor: None,
@@ -664,6 +670,10 @@ impl ViewerModule {
     }
 
     fn open_print(&mut self) {
+        // Nella stampa Annota si apre col suo tasto, sul foglio.
+        if self.doc().is_some_and(|d| d.opened().is_some()) {
+            self.notes.annot.close();
+        }
         let Some(d) = self.doc() else {
             return;
         };
@@ -914,9 +924,6 @@ impl ViewerModule {
                     .clicked()
                     {
                         self.toggle_side(SideTab::Quotes);
-                        if self.side_open && self.side_tab == SideTab::Quotes {
-                            self.notes.annot.close();
-                        }
                     }
                     separator(ui);
                     let on = self.notes.annot.on;
@@ -937,17 +944,12 @@ impl ViewerModule {
                         )
                         .clicked()
                     {
+                        self.annot_bar = !on;
                         if on {
                             self.notes.annot.close();
                         } else {
                             self.notes.annot.on = true;
                             self.notes.show = true;
-                            self.selecting = false;
-                            self.selection = None;
-                            if self.side_open && self.side_tab == SideTab::Quotes {
-                                self.side_open = false;
-                                self.quoting = false;
-                            }
                         }
                     }
                 }
@@ -1117,6 +1119,33 @@ impl ViewerModule {
 
     // --- Corpo -----------------------------------------------------------------------------
 
+    /// La riga Annota sempre aperta convive con quote e selezione del testo: scegliere uno
+    /// strumento da disegno le chiude, aprirle rimette lo strumento Scegli.
+    fn annot_modes(&mut self) {
+        use crate::annotate::Tool;
+        if self.annot_bar && !self.notes.annot.on && self.doc().is_some() {
+            self.notes.annot.on = true;
+        }
+        let tool = self.notes.annot.tool;
+        if tool != self.last_tool && tool != Tool::Select {
+            self.selecting = false;
+            self.selection = None;
+            if self.side_open && self.side_tab == SideTab::Quotes {
+                self.side_open = false;
+                self.quoting = false;
+            }
+        } else if (self.quoting || self.selecting) && tool != Tool::Select {
+            self.notes.annot.tool = Tool::Select;
+            self.notes.annot.selected = None;
+        }
+        self.last_tool = self.notes.annot.tool;
+    }
+
+    /// Le annotazioni prendono il trascinamento: uno strumento da disegno o un gesto a metà.
+    fn annot_grabs(&self) -> bool {
+        self.notes.annot.on && (self.notes.annot.armed() || self.notes.annot.busy())
+    }
+
     pub fn body(&mut self, ui: &mut egui::Ui, unit: Unit) {
         self.receive();
         if self.print.is_some() {
@@ -1124,6 +1153,7 @@ impl ViewerModule {
             return;
         }
         self.notes.paper = None;
+        self.annot_modes();
         let full = ui.max_rect();
         if self.docs.is_empty() {
             self.empty(ui, full);
@@ -1479,7 +1509,7 @@ impl ViewerModule {
         // Trascinare sposta la pagina (le quote, se attive, usano il trascinamento).
         if let Some(dv) = hand {
             self.pan += dv;
-        } else if !self.quoting && !self.selecting && !self.notes.annot.on && resp.dragged() {
+        } else if !self.quoting && !self.selecting && !self.annot_grabs() && resp.dragged() {
             self.pan += resp.drag_delta();
         }
         // La rotella scorre la pagina; arrivati in fondo (o in cima) passa alla pagina dopo.
@@ -1661,7 +1691,9 @@ impl ViewerModule {
         {
             let path = d.path.clone();
             let pages = d.page_count();
-            if hand.is_some() {
+            if hand.is_some() || self.quoting || self.selecting {
+                // Con la mano, le quote o la selezione del testo le annotazioni si vedono ma non
+                // si toccano.
                 let on = self.notes.annot.on;
                 self.notes.annot.on = false;
                 self.notes.view(
@@ -1909,7 +1941,7 @@ impl ViewerModule {
             );
         }
         // Il doppio clic rimette la pagina intera.
-        if resp.double_clicked() && !self.quoting && !self.notes.annot.on {
+        if resp.double_clicked() && !self.quoting && !(self.notes.annot.on && self.notes.annot.took_click()) {
             self.zoom = Zoom::Fit;
             self.pan = Vec2::ZERO;
         }

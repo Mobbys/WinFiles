@@ -31,6 +31,26 @@ pub fn is_project(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case(EXTENSION))
 }
 
+/// Il file delle note di una cartella (`_Note WinFiles.winfiles-note`) apre tutta la sua
+/// cartella, con le note già al loro posto: al suo posto si mette la cartella.
+pub fn notes_to_folders(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::with_capacity(paths.len());
+    for p in paths {
+        let p = if winfiles_model::folder_notes::is_notes_file(&p) {
+            match p.parent() {
+                Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+                _ => continue,
+            }
+        } else {
+            p
+        };
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
 impl WinFilesApp {
     /// Ci sono modifiche dall'ultimo salvataggio (o dall'apertura).
     pub(crate) fn is_dirty(&self) -> bool {
@@ -103,6 +123,8 @@ impl WinFilesApp {
     /// Sostituisce il lavoro: rilegge le misure di tutti i file (possono essere cambiati da
     /// quando il lavoro è stato salvato) e segna quelli che non ci sono più.
     fn reset(&mut self, project: Project, path: Option<PathBuf>) {
+        self.flush_folder_notes();
+        self.folder_sync.forget();
         self.cancel_scans();
         self.errors.clear();
         self.thumbs.clear();

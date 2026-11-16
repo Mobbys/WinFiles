@@ -19,6 +19,7 @@ mod export;
 mod external;
 mod filter;
 mod fluent;
+mod folder_sync;
 mod icons;
 mod images;
 mod instance;

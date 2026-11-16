@@ -90,6 +90,14 @@
               <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.Lavoro\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; &quot;%1&quot;" />
               <RegistryValue Root="HKCU" Key="Software\Classes\Applications\WinFiles.exe\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; &quot;%1&quot;" />
             </Component>
+            <!-- Il file delle note di una cartella (_Note WinFiles.winfiles-note, ADR 0038): il doppio
+                 clic apre in Miniature tutta la cartella con le sue note. -->
+            <Component Id="FileNoteCartella" Guid="3E9A6C12-7B4D-4E58-A1F3-6D2C8B0E9F47">
+              <RegistryValue Root="HKCU" Key="Software\Classes\.winfiles-note" Type="string" Value="WinFiles.Note" KeyPath="yes" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.Note" Type="string" Value="Note WinFiles della cartella" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.Note\DefaultIcon" Type="string" Value="[INSTALLDIR]WinFiles.exe,0" />
+              <RegistryValue Root="HKCU" Key="Software\Classes\WinFiles.Note\shell\open\command" Type="string" Value="&quot;[INSTALLDIR]WinFiles.exe&quot; &quot;%1&quot;" />
+            </Component>
             <!-- "Apri in WinFiles" nel tasto destro di Esplora file, su file, cartelle e sfondo della
                  cartella aperta. Esplora file avvia WinFiles una volta per file: con l'opzione aggiungi i
                  file finiscono tutti nella stessa finestra (instance.rs). Su Windows 11 la voce sta
@@ -416,6 +424,7 @@
     <Feature Id="Completa" Title="WinFiles" Level="1">
       <ComponentRef Id="Programma" />
       <ComponentRef Id="FileWinfiles" />
+      <ComponentRef Id="FileNoteCartella" />
       <ComponentRef Id="MenuTastoDestro" />
       <ComponentRef Id="MenuNesting" />
       <ComponentRef Id="Visualizza" />
