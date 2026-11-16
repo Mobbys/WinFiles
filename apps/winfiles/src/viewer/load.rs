@@ -54,7 +54,7 @@ impl ViewKind {
             FileKind::Ai => ViewKind::Ai,
             FileKind::Eps => ViewKind::Eps,
             FileKind::Image => ViewKind::Image,
-            FileKind::Unsupported => ViewKind::Unsupported,
+            FileKind::Drawing | FileKind::Unsupported => ViewKind::Unsupported,
         }
     }
 

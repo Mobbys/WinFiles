@@ -45,6 +45,8 @@ pub enum ProbeError {
     Encrypted,
     #[error("il file non dichiara le sue misure")]
     NoSize,
+    #[error("{0}")]
+    Drawing(String),
 }
 
 /// Le misure di un file.
@@ -57,6 +59,18 @@ pub struct Probe {
 /// Misura il file in `path`, che l'estensione dice essere di tipo `kind`. Il contenuto vince
 /// sull'estensione: un `.ai` salvato con compatibilità PDF si legge come PDF.
 pub fn probe(path: &Path, kind: FileKind) -> Result<Probe, ProbeError> {
+    // I disegni (DXF, DWG, PLT, SVG) non dichiarano le misure in un'intestazione: si leggono
+    // interi, con lo stesso lettore della scheda Visualizza.
+    if kind == FileKind::Drawing {
+        let (w, h) = winfiles_cad::size_mm(path).map_err(|e| ProbeError::Drawing(e.to_string()))?;
+        return Ok(Probe {
+            pages: vec![PageInfo {
+                size: winfiles_geom::Size::new(w, h),
+                trim: None,
+            }],
+            image: None,
+        });
+    }
     let mut src = source::FileSource::open(path)?;
     // I NEF, gli ARW, i DNG… hanno l'intestazione di un TIFF qualsiasi: li distingue il nome.
     if is_raw_path(path) {

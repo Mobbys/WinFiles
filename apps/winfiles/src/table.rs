@@ -61,6 +61,7 @@ fn kind(k: FileKind) -> &'static str {
         FileKind::Pdf => "PDF",
         FileKind::Ai => "AI",
         FileKind::Eps => "EPS",
+        FileKind::Drawing => "Disegno",
         FileKind::Unsupported => "Altro",
     }
 }

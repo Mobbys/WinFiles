@@ -58,6 +58,8 @@ pub enum ThumbError {
     Crashed,
     #[error("il file non ha la pagina {0}")]
     NoPage(usize),
+    #[error("{0}")]
+    Drawing(String),
 }
 
 /// Gli errori più comuni detti in italiano: quelli del sistema arrivano nella lingua di Windows.
@@ -96,6 +98,11 @@ pub fn render(path: &Path, kind: FileKind, page: usize, max_side: u32) -> Result
 }
 
 fn render_inner(path: &Path, kind: FileKind, page: usize, max_side: u32) -> Result<Thumb, ThumbError> {
+    // I disegni passano dalla loro pagina PDF, la stessa di misure e anteprime di Esplora file.
+    if kind == FileKind::Drawing {
+        let paper = winfiles_cad::paper(path, max_side).map_err(|e| ThumbError::Drawing(e.to_string()))?;
+        return pdf(paper.pdf.as_ref().clone(), page, max_side);
+    }
     let mut file = std::fs::File::open(path)?;
     let mut head = [0u8; 1024];
     let n = read_up_to(&mut file, &mut head)?;
