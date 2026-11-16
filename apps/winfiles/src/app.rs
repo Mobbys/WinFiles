@@ -329,6 +329,7 @@ impl WinFilesApp {
         app.viewer.print_choice = app.prefs.viewer.print.clone().sanitized();
         app.viewer.notes.annot.style = app.prefs.annotate.clone().sanitized();
         app.viewer.cad_dark = !app.prefs.viewer.cad_light;
+        crate::external::init(ctx, app.prefs.external.clone());
         // `--visualizza file`: il doppio clic in Esplora file, se WinFiles è il predefinito.
         if !view_files.is_empty() {
             app.module = Module::Viewer;
@@ -832,6 +833,18 @@ impl WinFilesApp {
         }
     }
 
+    /// Un messaggio nella barra di stato della scheda in uso.
+    pub(crate) fn show_status(&mut self, text: String) {
+        if text.is_empty() {
+            return;
+        }
+        if self.module == Module::Thumbnails {
+            self.status = text;
+        } else {
+            self.set_module_status(text);
+        }
+    }
+
     /// Scrive nella barra di stato del modulo aperto (Modifica PDF o Modifica immagini).
     fn set_module_status(&mut self, text: String) {
         match self.module {
@@ -1320,6 +1333,28 @@ impl WinFilesApp {
         };
     }
 
+    /// I file aperti con «Apri in …» e poi salvati nell'altro programma: si rileggono misure e
+    /// miniature, e Visualizza li riapre alla stessa pagina.
+    fn reread_changed(&mut self) {
+        let changed = crate::external::take_changed();
+        let Some(first) = changed.first() else {
+            return;
+        };
+        let name = crate::viewer::file_name(first);
+        for path in &changed {
+            if let Some(f) = self.project.files.iter().find(|f| f.path == *path) {
+                self.measurer.request(f.path.clone(), f.kind);
+                self.errors.remove(path);
+            }
+            self.thumbs.forget(path);
+            self.viewer.reload(path);
+        }
+        self.show_status(match changed.len() {
+            1 => format!("{name} è cambiato: l'ho riletto"),
+            n => format!("{n} file sono cambiati: li ho riletti"),
+        });
+    }
+
     /// Porta nel progetto le misure arrivate dal thread di lettura.
     fn receive_measures(&mut self) {
         let arrived = self.measurer.drain();
@@ -1633,6 +1668,14 @@ impl WinFilesApp {
                             {
                                 ui.close();
                                 self.defaults = Some(crate::defaults::DefaultsDialog::new());
+                            }
+                            if ui
+                                .button("Programmi esterni…")
+                                .on_hover_text("I programmi dei pulsanti «Apri in …» per ogni tipo di file")
+                                .clicked()
+                            {
+                                ui.close();
+                                crate::external::open_settings(None);
                             }
                             ui.separator();
                             for (kind, label) in [
@@ -3176,6 +3219,7 @@ impl WinFilesApp {
                 print: self.viewer.print_choice.clone(),
                 cad_light: !self.viewer.cad_dark,
             },
+            external: crate::external::config(),
         }
     }
 
@@ -3397,6 +3441,11 @@ impl eframe::App for WinFilesApp {
         // la finestra va disegnata qui, prima di scegliere la scheda, sennò in
         // Visualizza, Nesting e Modifica immagini il pulsante «Novità» non apriva niente.
         self.notes_window(&ctx);
+        // I programmi esterni: la loro finestra e l'esito degli «Apri in …», in ogni scheda.
+        if let Some(text) = crate::external::poll(&ctx) {
+            self.show_status(text);
+        }
+        self.reread_changed();
         self.app_bar(ui);
         let t = Tokens::get(ui.ctx());
         let frame = egui::Frame::NONE.fill(t.app_bar).inner_margin(egui::Margin {

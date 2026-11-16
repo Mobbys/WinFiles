@@ -331,6 +331,8 @@ pub(crate) enum FileAction {
     CopyMarked,
     /// Manda il file (o i file scelti, se è tra quelli) alla scheda Nesting.
     Nest(std::path::PathBuf),
+    /// Apre il file (o i file scelti, se è tra quelli) con un programma esterno (la chiave).
+    OpenIn(std::path::PathBuf, String),
 }
 
 /// Il menu del tasto destro su un file, nell'elenco e nell'anteprima del foglio: `count` file
@@ -379,6 +381,9 @@ pub(crate) fn file_menu(
             action = Some(FileAction::Nest(path.clone()));
             ui.close();
         }
+    }
+    if let Some(key) = crate::external::menu(ui, std::slice::from_ref(path)) {
+        action = Some(FileAction::OpenIn(path.clone(), key));
     }
     if ui.button("Apri con il programma predefinito").clicked() {
         action = Some(FileAction::Open(path.clone()));
@@ -1247,6 +1252,25 @@ impl WinFilesApp {
                 self.module = crate::app::Module::Nesting;
                 self.nesting.inks = self.pdf.inks.clone();
                 self.nesting.add(&paths);
+            }
+            FileAction::OpenIn(path, key) => {
+                // Con il file tra quelli scelti si aprono tutti quelli scelti dello stesso tipo
+                // di programma (quelli per cui il programma è fra i suoi).
+                let marked: Vec<std::path::PathBuf> = self
+                    .marked
+                    .iter()
+                    .filter_map(|i| self.project.files.get(*i))
+                    .map(|f| f.path.clone())
+                    .collect();
+                let paths: Vec<std::path::PathBuf> = if marked.contains(&path) {
+                    marked
+                        .into_iter()
+                        .filter(|p| crate::external::opens(&key, p))
+                        .collect()
+                } else {
+                    vec![path]
+                };
+                self.status = crate::external::launch(&key, &paths, None);
             }
             FileAction::Open(path) => {
                 if let Err(e) = crate::shell::open(&path) {

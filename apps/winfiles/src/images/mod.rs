@@ -95,6 +95,10 @@ pub struct ImagesModule {
     pub output: Option<crate::quotes::Output>,
     /// I file da mandare alla scheda Nesting, che l'app prende e svuota.
     pub to_nesting: Vec<PathBuf>,
+    /// «Apri in …» premuto con modifiche non salvate: il programma, in attesa della risposta.
+    external: Option<String>,
+    /// Il programma da aprire appena finito il salvataggio («Salva e apri»).
+    external_after_save: Option<String>,
     /// Fustella e abbondanza, con il loro pannello a destra.
     pub die: die::DieTool,
     /// I nomi delle tinte e il loro ruolo, gli stessi di Modifica PDF (il taglio).
@@ -149,6 +153,8 @@ impl ImagesModule {
             quit_confirmed: false,
             output: None,
             to_nesting: Vec::new(),
+            external: None,
+            external_after_save: None,
             die: die::DieTool::default(),
             inks: crate::pdf::tracciati::default_inks(),
         }
@@ -156,6 +162,48 @@ impl ImagesModule {
 
     pub fn is_modified(&self) -> bool {
         self.docs.iter().any(|d| d.editor.is_modified())
+    }
+
+    /// L'immagine `i` com'è su disco: l'ultima salvata, o quella di partenza.
+    fn saved_path(&self, i: usize) -> Option<PathBuf> {
+        let d = self.docs.get(i)?;
+        Some(d.target.clone().unwrap_or_else(|| d.editor.path().to_path_buf()))
+    }
+
+    /// «Apri in …» sull'immagine scelta: con modifiche non salvate prima si chiede.
+    fn open_in(&mut self, key: String) {
+        if self
+            .docs
+            .get(self.current)
+            .is_some_and(|d| d.editor.is_modified())
+        {
+            self.external = Some(key);
+        } else if let Some(path) = self.saved_path(self.current) {
+            self.status = crate::external::launch(&key, &[path], None);
+        }
+    }
+
+    fn external_dialog(&mut self, ctx: &egui::Context) {
+        let Some(key) = self.external.clone() else {
+            return;
+        };
+        use crate::external::SaveChoice;
+        match crate::external::ask_save(ctx, &key, "l'immagine") {
+            Some(SaveChoice::Save) => {
+                // Si apre la finestra Salva; a salvataggio fatto parte il programma.
+                self.external = None;
+                self.external_after_save = Some(key);
+                self.save(false);
+            }
+            Some(SaveChoice::AsIs) => {
+                self.external = None;
+                if let Some(path) = self.saved_path(self.current) {
+                    self.status = crate::external::launch(&key, &[path], None);
+                }
+            }
+            Some(SaveChoice::Cancel) => self.external = None,
+            None => {}
+        }
     }
 
     /// Il titolo della finestra quando è aperto questo modulo.
@@ -424,6 +472,9 @@ impl ImagesModule {
         match d.editor.save(&target, options) {
             Ok(()) => {
                 self.status = format!("Salvata in {}", file_name(&target));
+                if let Some(key) = self.external_after_save.take() {
+                    self.status = crate::external::launch(&key, std::slice::from_ref(&target), None);
+                }
                 if let Some(d) = self.docs.get_mut(self.current) {
                     d.target = Some(target);
                 }
@@ -746,6 +797,13 @@ impl ImagesModule {
                             self.quoting = false;
                         }
                     }
+                    if let Some(path) = self.saved_path(self.current) {
+                        separator(ui);
+                        let compact = ui.ctx().content_rect().width() < 1500.0;
+                        if let Some(key) = crate::external::buttons(ui, &[path], compact) {
+                            self.open_in(key);
+                        }
+                    }
                 }
                 let height = left.min_rect().height().max(BAR_ROW) + 8.0;
                 if (height - self.bar_height).abs() > 0.5 {
@@ -794,11 +852,13 @@ impl ImagesModule {
 
     pub fn windows(&mut self, ctx: &egui::Context) {
         self.unsaved_dialog(ctx);
+        self.external_dialog(ctx);
         if let Some(mut d) = self.dialog.take() {
             match d.show(ctx) {
                 None => self.dialog = Some(d),
                 Some(Some(action)) => self.act(action),
-                Some(None) => {}
+                // Salvataggio annullato: niente «Apri in …» dopo.
+                Some(None) => self.external_after_save = None,
             }
         }
     }
@@ -970,6 +1030,7 @@ impl ImagesModule {
         let mut close = None;
         let mut nest = None;
         let mut choose = None;
+        let mut open_in: Option<(usize, String)> = None;
         egui::ScrollArea::vertical()
             .id_salt("elenco-immagini")
             .auto_shrink([false, false])
@@ -1030,7 +1091,13 @@ impl ImagesModule {
                     if resp.clicked() {
                         choose = Some(i);
                     }
+                    let saved = self.saved_path(i);
                     resp.context_menu(|ui| {
+                        if let Some(p) = &saved
+                            && let Some(k) = crate::external::menu(ui, std::slice::from_ref(p))
+                        {
+                            open_in = Some((i, k));
+                        }
                         if ui
                             .button("Manda al nesting")
                             .on_hover_text("Apre la scheda Nesting con l'immagine com'è salvata")
@@ -1048,6 +1115,10 @@ impl ImagesModule {
             });
         if let Some(i) = choose {
             self.choose(i);
+        }
+        if let Some((i, key)) = open_in {
+            self.choose(i);
+            self.open_in(key);
         }
         if let Some(i) = close {
             self.guard(Then::Close(i));

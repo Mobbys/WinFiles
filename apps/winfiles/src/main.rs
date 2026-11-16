@@ -16,6 +16,7 @@ mod defaults;
 mod dock;
 mod document;
 mod export;
+mod external;
 mod filter;
 mod fluent;
 mod icons;

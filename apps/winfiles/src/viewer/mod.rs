@@ -488,6 +488,18 @@ impl ViewerModule {
         }
     }
 
+    /// Riapre il file se è aperto (è cambiato fuori da WinFiles), restando alla stessa pagina.
+    pub fn reload(&mut self, path: &Path) {
+        let wake = self.ctx.clone();
+        for d in self.docs.iter_mut().filter(|d| d.path == path) {
+            let w = wake.clone();
+            d.state = State::Loading(Opening::start(d.path.clone(), d.kind, d.cad.clone(), move || {
+                w.request_repaint()
+            }));
+            d.renderer = None;
+        }
+    }
+
     /// Rifà la pagina di un disegno CAD con le scelte nuove (layer, fondo, unità).
     fn redo_cad(&mut self) {
         let wake = self.ctx.clone();
@@ -515,6 +527,11 @@ impl ViewerModule {
                 self.print = None;
             }
             return;
+        }
+        // Ctrl+Maiusc+1…9 prima di Ctrl+1…9 («Passa a»), che altrimenti li prenderebbe.
+        let current: Vec<PathBuf> = self.current_path().map(Path::to_path_buf).into_iter().collect();
+        if let Some(key) = crate::external::shortcut(ctx, &current) {
+            self.open_in(&key);
         }
         let k = |m: egui::Modifiers, key: egui::Key| ctx.input_mut(|i| i.consume_key(m, key));
         use egui::{Key, Modifiers as M};
@@ -594,7 +611,22 @@ impl ViewerModule {
                 ui.close();
                 self.open_external();
             }
+            if let Some(p) = self.current_path().map(Path::to_path_buf)
+                && let Some(k) = crate::external::menu(ui, &[p])
+            {
+                self.open_in(&k);
+            }
         });
+    }
+
+    /// Apre il file con un programma esterno, alla pagina che si sta guardando (se il programma
+    /// lo sa fare: Acrobat).
+    fn open_in(&mut self, key: &str) {
+        let Some(d) = self.doc() else {
+            return;
+        };
+        let page = u32::try_from(d.page).ok().map(|p| p.saturating_add(1));
+        self.status = crate::external::launch(key, std::slice::from_ref(&d.path), page);
     }
 
     fn pick_and_open(&mut self) {
@@ -762,7 +794,10 @@ impl ViewerModule {
                 let right_w = right.min_rect().width();
                 let mut left = ui.new_child(
                     egui::UiBuilder::new()
-                        .max_rect(area.with_max_x((area.max.x - right_w - 16.0).max(area.min.x)))
+                        // Alto una riga: se i pulsanti vanno a capo, le righe in più crescono sotto e
+                        // l'altezza della barra si misura da quelle. Con tutta l'altezza della barra
+                        // la riga centrata la riempiva e la barra raddoppiava a ogni fotogramma.
+                        .max_rect(row.with_max_x((area.max.x - right_w - 16.0).max(area.min.x)))
                         .layout(egui::Layout::left_to_right(Align::Center).with_main_wrap(true)),
                 );
                 {
@@ -787,6 +822,17 @@ impl ViewerModule {
                     self.zoom_group(ui);
                     separator(ui);
                     self.send_menu(ui);
+                    let current: Vec<PathBuf> =
+                        self.current_path().map(Path::to_path_buf).into_iter().collect();
+                    if !current.is_empty() {
+                        separator(ui);
+                        // Con la finestra stretta i pulsanti restano con la sola icona.
+                        let compact = ui.ctx().content_rect().width() < 1600.0;
+                        if let Some(key) = crate::external::buttons(ui, &current, compact) {
+                            self.open_in(&key);
+                        }
+                        separator(ui);
+                    }
                     let has = self.doc().is_some();
                     if text_button(ui, "external-link", "Apri con…", has)
                         .on_hover_text("Apri il file con il programma che lo apriva prima di WinFiles")
@@ -1737,7 +1783,13 @@ impl ViewerModule {
             }
             _ => None,
         };
+        let menu_path = d.path.clone();
+        let mut open_in: Option<String> = None;
         resp.context_menu(|ui| {
+            if let Some(k) = crate::external::menu(ui, std::slice::from_ref(&menu_path)) {
+                open_in = Some(k);
+            }
+            ui.separator();
             if pdf_content {
                 if let Some(rend) = &mut d.renderer {
                     rend.want_text(page_no);
@@ -1792,6 +1844,9 @@ impl ViewerModule {
                 ui.close();
             }
         });
+        if let Some(k) = open_in {
+            self.status = crate::external::launch(&k, &[menu_path], Some(page_no as u32 + 1));
+        }
         // Ctrl+C con una selezione: il testo, o l'immagine della zona se non c'è testo.
         let ctrl_c = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)))
             && !ui.ctx().egui_wants_keyboard_input();

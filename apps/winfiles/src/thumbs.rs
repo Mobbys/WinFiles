@@ -133,6 +133,12 @@ impl Thumbnails {
     pub fn clear(&mut self) {
         self.cache.clear();
     }
+
+    /// Dimentica le miniature di un file (cambiato fuori da WinFiles): si rifanno al prossimo
+    /// disegno.
+    pub fn forget(&mut self, path: &Path) {
+        self.cache.retain(|k, _| k.0 != path);
+    }
 }
 
 fn image_of(t: &Thumb) -> Option<egui::ColorImage> {

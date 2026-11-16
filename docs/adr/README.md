@@ -35,3 +35,4 @@ Una decisione si cambia con un nuovo ADR che sostituisce il precedente, mai risc
 | [0028](0028-fustella-e-abbondanza-sulle-immagini.md) | Fustella e abbondanza sulle immagini: abbondanza con i pixel, PDF con fustella e TrimBox | Accettata |
 | [0029](0029-segnalazioni-dall-app.md) | Segnalazioni dal menu Aiuto: finestra in WinFiles, invio alle Issues con una chiave di sole issue | Accettata |
 | [0030](0030-annotazioni-sulle-miniature.md) | Annotazioni sulle miniature, attaccate alla pagina e salvate nel lavoro | Accettata |
+| [0037](0037-programmi-esterni.md) | Programmi esterni: «Apri in …» con i programmi scelti per ogni tipo di file | Accettata |

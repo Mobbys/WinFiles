@@ -111,6 +111,8 @@ pub struct PdfModule {
     pub inks: Vec<tracciati::InkName>,
     /// I file da mandare alla scheda Nesting, che l'app prende e svuota.
     pub to_nesting: Vec<PathBuf>,
+    /// «Apri in …» premuto con modifiche non salvate: il programma, in attesa della risposta.
+    external: Option<String>,
 }
 
 impl PdfModule {
@@ -151,6 +153,7 @@ impl PdfModule {
             paths: tracciati::PathTool::default(),
             inks: tracciati::default_inks(),
             to_nesting: Vec::new(),
+            external: None,
         }
     }
 
@@ -167,6 +170,53 @@ impl PdfModule {
 
     pub fn is_modified(&self) -> bool {
         self.editor.as_ref().is_some_and(Editor::is_modified)
+    }
+
+    /// Il PDF aperto com'è su disco: l'ultimo salvato, o quello di partenza.
+    fn saved_path(&self) -> Option<PathBuf> {
+        let e = self.editor.as_ref()?;
+        Some(self.target.clone().unwrap_or_else(|| e.path().to_path_buf()))
+    }
+
+    /// «Apri in …»: con modifiche non salvate prima si chiede.
+    fn open_in(&mut self, key: String) {
+        if self.is_modified() {
+            self.external = Some(key);
+        } else {
+            self.launch_external(&key);
+        }
+    }
+
+    fn launch_external(&mut self, key: &str) {
+        if let Some(path) = self.saved_path() {
+            let page = u32::try_from(self.current).ok().map(|p| p.saturating_add(1));
+            self.status = crate::external::launch(key, &[path], page);
+        }
+    }
+
+    fn external_dialog(&mut self, ctx: &egui::Context) {
+        let Some(key) = self.external.clone() else {
+            return;
+        };
+        use crate::external::SaveChoice;
+        match crate::external::ask_save(ctx, &key, "il PDF") {
+            Some(SaveChoice::Save) => {
+                self.external = None;
+                if self.save(false) {
+                    self.launch_external(&key);
+                } else if self.illustrator_ask.is_some() {
+                    self.status =
+                        "Rispondi alla domanda sulla copia di Illustrator, poi premi di nuovo il pulsante"
+                            .into();
+                }
+            }
+            Some(SaveChoice::AsIs) => {
+                self.external = None;
+                self.launch_external(&key);
+            }
+            Some(SaveChoice::Cancel) => self.external = None,
+            None => {}
+        }
     }
 
     /// Il nome del PDF aperto, per il titolo della finestra.
@@ -1089,6 +1139,14 @@ impl PdfModule {
                             before: String::new(),
                         });
                     }
+                    if let Some(path) = self.saved_path() {
+                        separator(ui);
+                        // La barra è piena: con la finestra non larghissima, solo le icone.
+                        let compact = ui.ctx().content_rect().width() < 1700.0;
+                        if let Some(key) = crate::external::buttons(ui, &[path], compact) {
+                            self.open_in(key);
+                        }
+                    }
                 }
                 let height = left.min_rect().height().max(BAR_ROW) + 8.0;
                 if (height - self.bar_height).abs() > 0.5 {
@@ -1134,6 +1192,7 @@ impl PdfModule {
     pub fn windows(&mut self, ctx: &egui::Context) {
         self.unsaved_dialog(ctx);
         self.illustrator_dialog(ctx);
+        self.external_dialog(ctx);
         if let Some(mut d) = self.dialog.take() {
             let info = dialogs::Context {
                 chosen: self.chosen().len(),

@@ -1,0 +1,42 @@
+[package]
+name = "winfiles-external"
+description = "I programmi esterni per i pulsanti «Apri in …»: tipi di file, programmi trovati sul PC, valori consigliati, avvio (ADR 0037)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Per chiedere a Windows la lista «Apri con», le icone dei programmi e avviare le app dello Store
+# servono chiamate COM: `unsafe` è inevitabile, confinato in `win.rs` con un commento per blocco
+# (come i crate del menu di Windows 11 e delle anteprime, ADR 0022 e 0036). Gli altri lint del
+# workspace restano.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+# Le stesse versioni dei crate del menu e delle anteprime (MIT/Apache, già nel progetto).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+] }
+windows-core = "0.62"
+windows-registry = "0.6"
