@@ -58,8 +58,6 @@ pub fn fit_zoom(size: winfiles_geom::Size, avail: Vec2) -> f32 {
 pub struct Selection<'a> {
     pub marked: &'a std::collections::BTreeSet<usize>,
     pub focus: Option<(usize, usize)>,
-    /// Annota è aperta: il foglio sente anche il trascinamento, per tracciare.
-    pub annotating: bool,
 }
 
 /// Cosa è successo nell'anteprima in questo fotogramma.
@@ -75,6 +73,8 @@ pub struct CanvasOutput {
     pub response: Option<egui::Response>,
     /// L'angolo in alto a sinistra del foglio a schermo.
     pub origin: Pos2,
+    /// Le miniature del foglio a schermo (file, pagina, riquadro), per trascinarle.
+    pub cells: Vec<(usize, usize, Rect)>,
 }
 
 /// Una riga di testo che si tronca con "…" se non sta nella larghezza (`width` in mm), centrata.
@@ -413,13 +413,9 @@ pub fn draw(
 ) -> CanvasOutput {
     let t = Tokens::get(ui.ctx());
     let mut out = CanvasOutput::default();
-    // Con le annotazioni il foglio sente anche il trascinamento, per tracciare.
-    let sense = if selected.annotating {
-        Sense::click_and_drag()
-    } else {
-        Sense::click()
-    };
-    let (response, painter, origin) = paper_with(ui, sheet.size, scale, sense);
+    // Il foglio sente anche il trascinamento: per tracciare le annotazioni e per spostare le
+    // miniature. Un clic resta un clic finché il puntatore non si muove.
+    let (response, painter, origin) = paper_with(ui, sheet.size, scale, Sense::click_and_drag());
     out.origin = origin;
     crate::paint::page(&painter, origin, scale, scene, thumbs);
 
@@ -432,6 +428,7 @@ pub fn draw(
             continue;
         };
         let cell = to_screen(origin, item.cell, scale);
+        out.cells.push((slot.file, slot.page, cell));
         if selected.marked.contains(&slot.file) {
             // La pagina di cui si scrive la nota ha il bordo pieno, le altre scelte uno sottile.
             let width = if selected.focus == Some((slot.file, slot.page)) {
@@ -458,6 +455,48 @@ pub fn draw(
     }
     out.response = Some(response);
     out
+}
+
+/// Mentre si trascinano delle miniature: la linea di arrivo accanto alla miniatura `target`
+/// (a sinistra o, con `after`, a destra), le miniature trascinate velate e il cartellino sotto il
+/// puntatore. Senza un arrivo valido il cursore dice che lì non si può lasciare.
+pub(crate) fn paint_sheet_drag(
+    ui: &egui::Ui,
+    moving: &[Rect],
+    target: Option<(Rect, bool)>,
+    pointer: Option<Pos2>,
+    text: &str,
+) {
+    let t = Tokens::get(ui.ctx());
+    for r in moving {
+        ui.painter()
+            .rect_filled(r.expand(3.0), 3.0, t.pasteboard.gamma_multiply(0.6));
+    }
+    if let Some((r, after)) = target {
+        let x = if after { r.right() + 4.0 } else { r.left() - 4.0 };
+        let stroke = Stroke::new(3.0, t.primary);
+        ui.painter().vline(x, r.top()..=r.bottom(), stroke);
+        ui.painter().circle_filled(Pos2::new(x, r.top()), 4.0, t.primary);
+        ui.painter()
+            .circle_filled(Pos2::new(x, r.bottom()), 4.0, t.primary);
+    }
+    ui.ctx().set_cursor_icon(if target.is_some() {
+        egui::CursorIcon::Grabbing
+    } else {
+        egui::CursorIcon::NoDrop
+    });
+    ui.ctx().request_repaint();
+    let Some(p) = pointer else {
+        return;
+    };
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("trascina-miniature"),
+    ));
+    let galley = painter.layout_no_wrap(text.to_string(), egui::FontId::proportional(12.0), t.on_primary);
+    let r = Rect::from_min_size(p + Vec2::new(14.0, 10.0), galley.size() + Vec2::new(16.0, 8.0));
+    painter.rect_filled(r, t.radius, t.primary);
+    painter.galley(r.min + Vec2::new(8.0, 4.0), galley, t.on_primary);
 }
 
 /// Il posto di un file non supportato: un riquadro grigio chiaro con l'estensione in grande
