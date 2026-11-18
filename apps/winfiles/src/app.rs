@@ -69,6 +69,8 @@ pub struct WinFilesApp {
     pub(crate) renaming: Option<(PathBuf, String)>,
     /// Il file su cui si è aperto il menu del tasto destro nell'anteprima del foglio.
     pub(crate) sheet_menu: Option<usize>,
+    /// I file delle miniature che si stanno trascinando nell'anteprima, per cambiarne l'ordine.
+    pub(crate) sheet_drag: Option<BTreeSet<usize>>,
     /// Cosa mostra l'elenco dei file: cerca per nome e filtra per tipo.
     pub(crate) filter: crate::filter::FileFilter,
     /// Ctrl+F: il campo di ricerca prende il fuoco al prossimo disegno.
@@ -266,6 +268,7 @@ impl WinFilesApp {
             slots: Vec::new(),
             renaming: None,
             sheet_menu: None,
+            sheet_drag: None,
             filter: Default::default(),
             focus_search: false,
             drag: None,
@@ -2498,7 +2501,6 @@ impl WinFilesApp {
                         &self.marked
                     },
                     focus: self.selected.map(|f| (f, self.selected_page)),
-                    annotating,
                 },
                 scale,
             );
@@ -2557,6 +2559,7 @@ impl WinFilesApp {
                 entry.set_scale(page, n);
             }
         }
+        self.drag_thumbnails(ui, &out, stamp.is_none());
         if let Some((file, page)) = out.clicked.filter(|_| !took && stamp.is_none()) {
             let mods = ui.input(|i| i.modifiers);
             self.pick(file, mods);
@@ -2617,6 +2620,72 @@ impl WinFilesApp {
             }
             if let Some(a) = action {
                 self.file_action(ui.ctx(), a);
+            }
+        }
+    }
+}
+
+impl WinFilesApp {
+    /// Trascinare le miniature nell'anteprima cambia l'ordine dei file, come nell'elenco: i file
+    /// restano nella loro cartella e si trascina tutta la scelta se la miniatura ne fa parte.
+    /// Non vale con uno strumento da disegno, mentre si tira un'annotazione, con il Timbro della
+    /// scala (`free` falso) o con una ricerca attiva (l'anteprima ha dei buchi).
+    fn drag_thumbnails(&mut self, ui: &egui::Ui, out: &canvas::CanvasOutput, free: bool) {
+        let Some(resp) = &out.response else {
+            return;
+        };
+        let can =
+            free && !self.filter.is_active() && !(self.annot.on && (self.annot.armed() || self.annot.busy()));
+        if !can {
+            self.sheet_drag = None;
+            return;
+        }
+        if resp.drag_started() && self.sheet_drag.is_none() {
+            let start = ui.input(|i| i.pointer.press_origin());
+            if let Some(&(file, _, _)) = start.and_then(|p| out.cells.iter().find(|c| c.2.contains(p))) {
+                let folder = self.project.files.get(file).map(|f| f.folder().to_path_buf());
+                let same = self.marked.contains(&file)
+                    && self
+                        .marked
+                        .iter()
+                        .all(|m| self.project.files.get(*m).map(|f| f.folder().to_path_buf()) == folder);
+                if !same {
+                    self.pick(file, egui::Modifiers::NONE);
+                }
+                self.sheet_drag = Some(self.marked.clone());
+            }
+        }
+        let Some(moving) = self.sheet_drag.clone() else {
+            return;
+        };
+        let pointer = ui.ctx().pointer_latest_pos();
+        let folders: Vec<&std::path::Path> = self.project.files.iter().map(|f| f.folder()).collect();
+        let hit = pointer.and_then(|p| out.cells.iter().find(|c| c.2.contains(p)));
+        let drop = hit.and_then(|&(file, _, rect)| {
+            let after = pointer.is_some_and(|p| p.x > rect.center().x);
+            crate::reorder::sheet_drop(&folders, &moving, file, after).map(|before| (before, rect, after))
+        });
+        let text = match moving.iter().next() {
+            Some(i) if moving.len() == 1 => self
+                .project
+                .files
+                .get(*i)
+                .and_then(|f| f.path.file_name())
+                .map_or_else(|| "1 file".to_string(), |n| n.to_string_lossy().into_owned()),
+            _ => format!("{} file", moving.len()),
+        };
+        let veiled: Vec<Rect> = out
+            .cells
+            .iter()
+            .filter(|c| moving.contains(&c.0))
+            .map(|c| c.2)
+            .collect();
+        canvas::paint_sheet_drag(ui, &veiled, drop.map(|(_, r, a)| (r, a)), pointer, &text);
+        if !ui.input(|i| i.pointer.any_down()) {
+            self.sheet_drag = None;
+            // Lasciato fuori da una miniatura della cartella, non si sposta nulla.
+            if let Some((before, _, _)) = drop {
+                self.move_files(&moving, before);
             }
         }
     }

@@ -1,5 +1,6 @@
 //! Il contenuto dei pannelli: elenco dei file, proprietà del file scelto, note, impaginazione.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
@@ -294,6 +295,13 @@ fn paint_drag(
     let r = Rect::from_min_size(p + vec2(14.0, 10.0), galley.size() + vec2(16.0, 8.0));
     painter.rect_filled(r, t.radius, t.primary);
     painter.galley(r.min + vec2(8.0, 4.0), galley, t.on_primary);
+}
+
+/// La nota comune dei file `set` (la prima pagina di ciascuno), o None se sono diverse.
+pub(crate) fn shared_note(files: &[FileEntry], set: &BTreeSet<usize>) -> Option<String> {
+    let mut notes = set.iter().filter_map(|i| files.get(*i)).map(|f| f.note(0));
+    let first = notes.next()?;
+    notes.all(|n| n == first).then(|| first.to_string())
 }
 
 /// Una riga etichetta/valore nelle proprietà.
@@ -1542,6 +1550,11 @@ impl WinFilesApp {
     }
 
     pub(crate) fn notes_panel(&mut self, ui: &mut egui::Ui) {
+        // Più file scelti: una nota sola, scritta una volta, va su tutti (richiesta di Guido).
+        if self.marked.len() > 1 && self.selected.is_some_and(|i| self.marked.contains(&i)) {
+            self.shared_notes_panel(ui);
+            return;
+        }
         let Some(file) = self.selected.and_then(|i| self.project.files.get_mut(i)) else {
             dim_label(
                 ui,
@@ -1618,6 +1631,84 @@ impl WinFilesApp {
             }
         });
         self.selected_page = page;
+    }
+
+    /// Il pannello Note con più file scelti: la nota scritta qui va su tutti i file scelti (nei
+    /// file con più pagine, sulla prima). Se le note sono già uguali si vedono e si correggono;
+    /// se sono diverse il campo parte vuoto e ciò che si scrive le sostituisce.
+    fn shared_notes_panel(&mut self, ui: &mut egui::Ui) {
+        let marked = self.marked.clone();
+        let count = marked.len();
+        let common = shared_note(&self.project.files, &marked);
+        let mut folders: Vec<std::path::PathBuf> = marked
+            .iter()
+            .filter_map(|i| self.project.files.get(*i))
+            .map(|f| f.folder().to_path_buf())
+            .collect();
+        folders.dedup();
+        let t = Tokens::get(ui.ctx());
+        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            section(ui, &format!("Nota dei {count} file scelti"));
+            let mut text = common.clone().unwrap_or_default();
+            let hint = if common.is_some() {
+                "Scrivi la nota: va su tutti i file scelti"
+            } else {
+                "Le note sono diverse: ciò che scrivi le sostituisce tutte"
+            };
+            let edit = fluent::text_field(
+                ui,
+                egui::TextEdit::multiline(&mut text)
+                    .id_salt("nota-file-scelti")
+                    .desired_rows(3)
+                    .desired_width(ui.available_width() - 8.0)
+                    .margin(fluent::MARGIN)
+                    .hint_text(hint),
+            );
+            if edit.changed() {
+                for i in &marked {
+                    if let Some(f) = self.project.files.get_mut(*i) {
+                        f.set_note(0, text.clone());
+                    }
+                }
+            }
+            if common.is_none() {
+                ui.label(
+                    egui::RichText::new("Adesso i file scelti hanno note diverse.")
+                        .size(11.5)
+                        .color(t.warning),
+                );
+            }
+            dim_label(
+                ui,
+                "Nei file con più pagine la nota va sulla prima pagina. Per scrivere la nota di un file solo, sceglilo da solo.",
+            );
+            // Con tutti i file in una cartella, sotto resta la sua nota come sempre.
+            if let [folder] = folders.as_slice() {
+                section(ui, &format!("Nota della cartella {}", folder_name(folder)));
+                let mut note = self
+                    .project
+                    .folder_notes
+                    .get(folder)
+                    .cloned()
+                    .unwrap_or_default();
+                let edit = fluent::text_field(
+                    ui,
+                    egui::TextEdit::multiline(&mut note)
+                        .id_salt("nota-cartella")
+                        .desired_rows(3)
+                        .desired_width(ui.available_width() - 8.0)
+                        .margin(fluent::MARGIN)
+                        .hint_text("Vale per tutti i file della cartella"),
+                );
+                if edit.changed() {
+                    if note.trim().is_empty() {
+                        self.project.folder_notes.remove(folder);
+                    } else {
+                        self.project.folder_notes.insert(folder.clone(), note);
+                    }
+                }
+            }
+        });
     }
 
     /// In cima al pannello Impaginazione: il modello in uso, per sceglierne un altro, salvare le
@@ -1886,4 +1977,32 @@ pub(crate) fn text_slider(value: &mut f64, range: std::ops::RangeInclusive<f64>)
             let clean = text.trim().trim_end_matches("pt").trim().replace(',', ".");
             clean.parse::<f64>().ok()
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(name: &str, note: &str) -> FileEntry {
+        let mut f = FileEntry::new(name.into(), FileKind::Pdf);
+        f.set_note(0, note.to_string());
+        f
+    }
+
+    #[test]
+    fn nota_comune_dei_file_scelti() {
+        let files = vec![
+            file("A/0", "rifilare"),
+            file("A/1", "rifilare"),
+            file("A/2", "altro"),
+        ];
+        assert_eq!(
+            shared_note(&files, &BTreeSet::from([0, 1])).as_deref(),
+            Some("rifilare")
+        );
+        assert_eq!(shared_note(&files, &BTreeSet::from([0, 2])), None);
+        assert_eq!(shared_note(&files, &BTreeSet::new()), None);
+        let empty = vec![file("A/0", ""), file("A/1", "")];
+        assert_eq!(shared_note(&empty, &BTreeSet::from([0, 1])).as_deref(), Some(""));
+    }
 }

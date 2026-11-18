@@ -2,10 +2,33 @@
 //! cartella, le cartelle si spostano intere. Così ogni cartella resta un blocco solo, con una sola
 //! intestazione sul foglio.
 //!
+//! Lo stesso vale trascinando le miniature nell'anteprima (`sheet_drop`).
+//!
 //! Questo modulo decide soltanto dove cadrebbe ciò che si trascina; lo spostamento vero lo fa
 //! `Project::move_files`.
 
 use std::collections::BTreeSet;
+use std::path::Path;
+
+/// Trascinando delle miniature nell'anteprima: dove finiscono i file `moving` lasciati sulla
+/// miniatura del file `target`, prima (`after` falso) o dopo. `folders` è la cartella di ogni
+/// file del lavoro, nell'ordine del lavoro. Restituisce il file prima del quale vanno
+/// (`Project::move_files`), o None se lì non possono andare: su se stessi, in un'altra
+/// cartella, o se i file trascinati non stanno tutti nella stessa cartella.
+pub fn sheet_drop(folders: &[&Path], moving: &BTreeSet<usize>, target: usize, after: bool) -> Option<usize> {
+    if moving.contains(&target) {
+        return None;
+    }
+    let folder = *folders.get(target)?;
+    if moving.is_empty()
+        || !moving
+            .iter()
+            .all(|i| folders.get(*i).is_some_and(|f| *f == folder))
+    {
+        return None;
+    }
+    Some(if after { target + 1 } else { target })
+}
 
 /// Che cosa si sta trascinando.
 #[derive(Clone, Debug, PartialEq)]
@@ -150,6 +173,53 @@ impl Rows<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cartelle() -> Vec<&'static Path> {
+        // File 0, 1, 2 nella cartella A; 3 e 4 nella cartella B.
+        let a = Path::new("A");
+        let b = Path::new("B");
+        vec![a, a, a, b, b]
+    }
+
+    fn set(v: &[usize]) -> BTreeSet<usize> {
+        v.iter().copied().collect()
+    }
+
+    #[test]
+    fn miniatura_lasciata_prima_o_dopo_un_altra_della_cartella() {
+        let f = cartelle();
+        assert_eq!(sheet_drop(&f, &set(&[2]), 0, false), Some(0));
+        assert_eq!(sheet_drop(&f, &set(&[0]), 1, true), Some(2));
+        // Dopo l'ultima della cartella: in fondo alla cartella, prima della B.
+        assert_eq!(sheet_drop(&f, &set(&[0]), 2, true), Some(3));
+        assert_eq!(sheet_drop(&f, &set(&[3]), 4, true), Some(5));
+    }
+
+    #[test]
+    fn piu_miniature_scelte_si_spostano_insieme() {
+        let f = cartelle();
+        assert_eq!(sheet_drop(&f, &set(&[1, 2]), 0, false), Some(0));
+        let mut p = winfiles_model::Project::default();
+        for name in ["A/0", "A/1", "A/2", "B/3", "B/4"] {
+            p.files.push(winfiles_model::FileEntry::new(
+                name.into(),
+                winfiles_model::FileKind::Pdf,
+            ));
+        }
+        p.move_files(&set(&[1, 2]), 0);
+        let order: Vec<_> = p.files.iter().map(|f| f.path.display().to_string()).collect();
+        assert_eq!(order, ["A/1", "A/2", "A/0", "B/3", "B/4"]);
+    }
+
+    #[test]
+    fn niente_spostamento_fuori_dalla_cartella_o_su_se_stessi() {
+        let f = cartelle();
+        assert_eq!(sheet_drop(&f, &set(&[0]), 3, false), None);
+        assert_eq!(sheet_drop(&f, &set(&[0, 3]), 1, false), None);
+        assert_eq!(sheet_drop(&f, &set(&[1]), 1, true), None);
+        assert_eq!(sheet_drop(&f, &set(&[]), 1, true), None);
+        assert_eq!(sheet_drop(&f, &set(&[0]), 9, true), None);
+    }
 
     // Due cartelle: la prima con i file 0, 1, 2 (righe 1-3), la seconda con 3 e 4 (righe 5-6).
     fn groups() -> Vec<Vec<usize>> {
