@@ -232,9 +232,11 @@ impl FolderNotes {
             .collect()
     }
 
-    /// Mette `job` in cima ai lavori. Prende il posto di quelli con gli stessi file, o con una
-    /// parte dei suoi, o che li contengono tutti: è lo stesso lavoro riaperto e cambiato. I lavori
-    /// con altri file restano (due impaginati diversi della stessa cartella); al più
+    /// Mette `job` in cima ai lavori. Prende il posto di quelli con gli stessi file o con una
+    /// parte dei suoi: è lo stesso lavoro riaperto e cambiato. Se invece un lavoro già scritto ha
+    /// tutti i suoi file e altri ancora, resta quello (in cima, con la data nuova): chi ha aperto
+    /// solo una parte dei file e ci scrive una nota non deve far sparire gli altri dal lavoro.
+    /// I lavori con altri file restano (due impaginati diversi della stessa cartella); al più
     /// [`MAX_JOBS`], si dimenticano i più vecchi.
     pub fn put_job(&mut self, job: NotesJob) {
         let mine: BTreeSet<&String> = job.file.iter().collect();
@@ -242,6 +244,23 @@ impl FolderNotes {
             Some(Value::Array(items)) => items.clone(),
             _ => Vec::new(),
         };
+        let bigger = raw.iter().enumerate().find_map(|(i, v)| {
+            let other = serde_json::from_value::<NotesJob>(v.clone()).ok()?;
+            let theirs: BTreeSet<&String> = other.file.iter().collect();
+            (mine.is_subset(&theirs) && theirs.len() > mine.len()).then_some((i, other))
+        });
+        if let Some((i, mut other)) = bigger {
+            other.data = job.data;
+            let mut out = raw;
+            if i < out.len() {
+                out.remove(i);
+            }
+            if let Ok(v) = serde_json::to_value(&other) {
+                out.insert(0, v);
+            }
+            self.lavori = Some(Value::Array(out));
+            return;
+        }
         let mut out: Vec<Value> = Vec::with_capacity(raw.len() + 1);
         if let Ok(v) = serde_json::to_value(&job) {
             out.push(v);
@@ -816,6 +835,13 @@ mod tests {
         assert_eq!(n.jobs().len(), 2);
         // Lo stesso lavoro con un file in più prende il posto del vecchio, in cima.
         n.put_job(job(&["a.pdf", "b.pdf", "e.pdf"]));
+        let files: Vec<Vec<String>> = n.jobs().into_iter().map(|j| j.file).collect();
+        assert_eq!(files[0], vec!["a.pdf", "b.pdf", "e.pdf"]);
+        assert_eq!(files[1], vec!["c.pdf", "d.pdf"]);
+        assert_eq!(files.len(), 2);
+        // Riaperta solo una parte del lavoro e cambiata una nota: il lavoro intero resta, in cima.
+        n.put_job(job(&["c.pdf", "d.pdf"]));
+        n.put_job(job(&["a.pdf"]));
         let files: Vec<Vec<String>> = n.jobs().into_iter().map(|j| j.file).collect();
         assert_eq!(files[0], vec!["a.pdf", "b.pdf", "e.pdf"]);
         assert_eq!(files[1], vec!["c.pdf", "d.pdf"]);

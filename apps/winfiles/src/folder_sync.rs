@@ -283,9 +283,10 @@ impl FolderSync {
             let changed = mine != base_mine;
             // Un file appena aggiunto: si rilegge subito, per avere anche le note più fresche.
             if (changed && settled) || due || !joined.is_empty() {
-                let lavoro = (changed && settled)
-                    .then(|| lavoro_for(self.job.as_ref(), &dir))
-                    .flatten();
+                // Il lavoro va con ogni scrittura delle proprie note cambiate, anche quella della
+                // rilettura periodica che arriva prima che le note si fermino: altrimenti le note
+                // finivano nel file senza il lavoro, e il doppio clic riapriva solo i file annotati.
+                let lavoro = changed.then(|| lavoro_for(self.job.as_ref(), &dir)).flatten();
                 launch(
                     st,
                     &self.tx,

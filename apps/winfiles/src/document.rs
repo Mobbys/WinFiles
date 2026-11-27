@@ -76,6 +76,10 @@ pub fn job_choices(notes: &FolderNotes, dir: &Path) -> Vec<JobChoice> {
             continue;
         }
         let noted = files.iter().filter(|f| noted_files.contains(*f)).count();
+        // Un lavoro da cui sono state tolte tutte le note non si propone più.
+        if noted == 0 {
+            continue;
+        }
         covered.extend(files.iter().cloned());
         out.push(JobChoice {
             files,
@@ -648,6 +652,20 @@ mod tests {
             detail,
             "2 file, 1 con note · scritte 3 giorni fa · A4 orizzontale"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn un_lavoro_senza_piu_note_non_si_propone() {
+        // Michel: due lavori, poi tolte tutte le note da uno; chiedeva ancora quale aprire.
+        let (dir, mut n) = folder("lavoro-svuotato");
+        n.put_job(job(&["a.pdf", "c.pdf"], 1));
+        n.put_job(job(&["b.pdf", "d.pdf"], 2));
+        n.write(&dir).unwrap();
+        let o = notes_to_folders(vec![winfiles_model::folder_notes::path_in(&dir)]);
+        assert!(o.pick.is_none());
+        assert_eq!(o.paths, vec![dir.join("a.pdf"), dir.join("c.pdf")]);
+        assert!(o.restore.is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

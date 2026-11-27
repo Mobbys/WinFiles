@@ -21,8 +21,10 @@ pub enum Status {
     NeedCert,
     /// Non c'entra: Windows 10, copia portatile, pacchetto assente.
     Unavailable,
-    /// Windows ha la versione di prima in uso (Esplora file l'ha caricata): si riprova al
-    /// prossimo avvio, senza disturbare; intanto la voce di prima continua a funzionare.
+    /// Windows ha la versione di prima in uso (Esplora file l'ha caricata) e non l'ha potuta
+    /// aggiornare: la registrazione è rimandata al prossimo accesso a Windows. Intanto la voce
+    /// non funziona (i file nella cartella sono già quelli nuovi), quindi una barra propone di
+    /// riavviare Esplora file.
     Busy,
     /// La conferma dell'amministratore è stata annullata.
     Cancelled,
@@ -39,6 +41,9 @@ const MSIX: &str = "WinFilesMenu.msix";
 fn package_version() -> String {
     format!("{}.0", env!("CARGO_PKG_VERSION"))
 }
+
+/// Gli errori di Windows per "pacchetto in uso".
+const BUSY_CODES: &str = "0x80073D02|0x80073D05|0x80073D06|0x80073CF6";
 
 /// Un testo fra apici singoli di PowerShell.
 fn quoted(s: &str) -> String {
@@ -58,13 +63,49 @@ try {{
   if ($p -and $p.Version -eq {version}) {{ 'OK'; exit }}
   $t = (Get-AuthenticodeSignature -LiteralPath $pkg).SignerCertificate.Thumbprint
   if ($t -and -not (Test-Path ('Cert:\LocalMachine\TrustedPeople\' + $t))) {{ 'CERT'; exit }}
-  Add-AppxPackage -Path $pkg -ExternalLocation $dir -ForceUpdateFromAnyVersion
+  try {{
+    Add-AppxPackage -Path $pkg -ExternalLocation $dir -ForceUpdateFromAnyVersion
+  }} catch {{
+    $m = ($_.Exception.Message -replace '\s+', ' ').Trim()
+    if ($m -notmatch '{busy}') {{ throw }}
+    # In uso da Esplora file: Windows la registra da sé al prossimo accesso.
+    try {{ Add-AppxPackage -Path $pkg -ExternalLocation $dir -ForceUpdateFromAnyVersion -DeferRegistrationWhenPackagesAreInUse }} catch {{ }}
+    'BUSY'; exit
+  }}
   'OK'
 }} catch {{
   $m = ($_.Exception.Message -replace '\s+', ' ').Trim()
   if ($m -match '0x800B0109|0x800B010A|0x800B0100') {{ 'CERT' }}
-  elseif ($m -match '0x80073D02|0x80073D05|0x80073D06|0x80073CF6') {{ 'BUSY' }}
+  elseif ($m -match '{busy}') {{ 'BUSY' }}
   else {{ 'ERR ' + $m }}
+}}"#,
+        busy = BUSY_CODES,
+        dir = quoted(dir),
+        msix = quoted(MSIX),
+        name = quoted(PACKAGE),
+        version = quoted(version),
+    )
+}
+
+/// Lo script che chiude Esplora file (che tiene in uso il pacchetto di prima), toglie la versione
+/// di prima, registra quella di adesso e riapre Esplora file, anche se qualcosa va storto.
+pub fn restart_script(dir: &str, version: &str) -> String {
+    format!(
+        r#"$ErrorActionPreference = 'Stop'
+$dir = {dir}
+$pkg = Join-Path $dir {msix}
+try {{
+  Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Milliseconds 1500
+  # Una versione di prima rovinata o già tolta non deve fermare la registrazione.
+  try {{ Get-AppxPackage -Name {name} | Where-Object {{ $_.Version -ne {version} }} | Remove-AppxPackage }} catch {{ }}
+  Add-AppxPackage -Path $pkg -ExternalLocation $dir -ForceUpdateFromAnyVersion
+  'OK'
+}} catch {{
+  'ERR ' + (($_.Exception.Message -replace '\s+', ' ').Trim())
+}} finally {{
+  Start-Sleep -Milliseconds 500
+  if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) {{ Start-Process explorer.exe }}
 }}"#,
         dir = quoted(dir),
         msix = quoted(MSIX),
@@ -131,24 +172,36 @@ pub fn parse(out: &str) -> Status {
 
 /// Controlla e registra il pacchetto in un thread a parte.
 pub fn check() -> Receiver<Status> {
-    run(false)
+    run(Job::Check)
 }
 
 /// Installa il certificato (con la conferma dell'amministratore), poi registra il pacchetto.
 pub fn install_certificate() -> Receiver<Status> {
-    run(true)
+    run(Job::Certificate)
 }
 
-fn run(certificate: bool) -> Receiver<Status> {
+/// Riavvia Esplora file e registra il pacchetto (quando quello di prima è in uso).
+pub fn restart_explorer() -> Receiver<Status> {
+    run(Job::Restart)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Job {
+    Check,
+    Certificate,
+    Restart,
+}
+
+fn run(job: Job) -> Receiver<Status> {
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let _ = tx.send(work(certificate));
+        let _ = tx.send(work(job));
     });
     rx
 }
 
 #[cfg(windows)]
-fn work(certificate: bool) -> Status {
+fn work(job: Job) -> Status {
     if !crate::update::installed() {
         return Status::Unavailable;
     }
@@ -158,7 +211,10 @@ fn work(certificate: bool) -> Status {
     else {
         return Status::Unavailable;
     };
-    if certificate && parse(&powershell(&certificate_script(&dir))) == Status::Cancelled {
+    if job == Job::Restart {
+        return parse(&powershell(&restart_script(&dir, &package_version())));
+    }
+    if job == Job::Certificate && parse(&powershell(&certificate_script(&dir))) == Status::Cancelled {
         return Status::Cancelled;
     }
     parse(&powershell(&register_script(&dir, &package_version())))
@@ -196,9 +252,9 @@ pub fn unregister() {
 /// Fuori da Windows il menu corto non c'è; per provare la barra si mette la risposta dello
 /// script in `WINFILES_MENU11` (per esempio `CERT`).
 #[cfg(not(windows))]
-fn work(certificate: bool) -> Status {
+fn work(job: Job) -> Status {
     match std::env::var("WINFILES_MENU11") {
-        Ok(_) if certificate => Status::Ready,
+        Ok(_) if job != Job::Check => Status::Ready,
         Ok(answer) => parse(&answer),
         Err(_) => Status::Unavailable,
     }
@@ -250,6 +306,25 @@ mod tests {
             !c.contains("D'Amico"),
             "il percorso va solo nella parte codificata"
         );
+    }
+
+    #[test]
+    fn pacchetto_in_uso_si_rimanda_e_si_puo_riavviare_esplora() {
+        // 0.2.46 sul PC di Michel: Esplora file teneva in uso la 0.2.45, la registrazione è
+        // fallita e il menu non andava più. Ora si rimanda al prossimo accesso...
+        let s = register_script("C:\\W\\", "0.2.47.0");
+        assert!(s.contains("-DeferRegistrationWhenPackagesAreInUse"));
+        assert!(s.contains("'BUSY'; exit"));
+        // ...e la barra può riavviare Esplora file, che si riapre comunque alla fine.
+        let r = restart_script("C:\\Users\\D'Amico\\W\\", "0.2.47.0");
+        assert!(r.contains("Stop-Process -Name explorer"));
+        assert!(r.contains("$_.Version -ne '0.2.47.0'"));
+        // Sul PC di Michel il pacchetto vecchio risultava già tolto (0x80073CF1): non deve
+        // fermare Add-AppxPackage.
+        assert!(r.contains("try { Get-AppxPackage"));
+        assert!(r.contains("D''Amico"));
+        let finally = r.find("finally").unwrap();
+        assert!(r[finally..].contains("Start-Process explorer.exe"));
     }
 
     #[test]
