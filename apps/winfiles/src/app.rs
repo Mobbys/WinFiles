@@ -51,6 +51,8 @@ pub struct WinFilesApp {
     menu11_check: Option<std::sync::mpsc::Receiver<crate::menu11::Status>>,
     menu11: Option<crate::menu11::Status>,
     menu11_busy: bool,
+    /// Esplora file già riavviato da solo in questa sessione per aggiornare il menu.
+    menu11_restarted: bool,
     menu11_later: bool,
     /// La finestra di Aiuto › Segnala un problema / Chiedi una nuova funzione.
     report: Option<crate::report::ReportDialog>,
@@ -262,6 +264,7 @@ impl WinFilesApp {
             menu11_check: Some(crate::menu11::check()),
             menu11: None,
             menu11_busy: false,
+            menu11_restarted: false,
             menu11_later: prefs.menu11_later,
             report: None,
             reporter: prefs.reporter.clone(),
@@ -550,6 +553,17 @@ impl WinFilesApp {
                     self.menu11 = None;
                 }
                 Status::Ready | Status::Unavailable => self.menu11 = None,
+                // Dopo un aggiornamento Esplora file tiene in uso il menu di prima: lo si riavvia da
+                // solo, una volta (scelta di Michel, 2026-11-27), e il menu funziona subito.
+                Status::Busy if !self.menu11_restarted => {
+                    self.menu11_restarted = true;
+                    self.menu11_busy = true;
+                    self.menu11 = Some(Status::Busy);
+                    self.menu11_check = Some(crate::menu11::restart_explorer());
+                    self.status = "Aggiorno «Apri in WinFiles» nel menu di Windows 11: Esplora file si \
+                                   riavvia per qualche secondo"
+                        .into();
+                }
                 other if self.menu11_later && !asked => drop(other),
                 other => self.menu11 = Some(other),
             }

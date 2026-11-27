@@ -6,9 +6,10 @@
 
 use core::ffi::c_void;
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use windows::Win32::Foundation::{
-    CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_NOTIMPL, E_POINTER, S_FALSE,
+    CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_NOTIMPL, E_POINTER, S_FALSE, S_OK,
 };
 use windows::Win32::System::Com::{CoTaskMemFree, IBindCtx, IClassFactory, IClassFactory_Impl};
 use windows::Win32::UI::Shell::{
@@ -16,6 +17,26 @@ use windows::Win32::UI::Shell::{
     SHStrDupW, SIGDN_FILESYSPATH,
 };
 use windows_core::{BOOL, GUID, HRESULT, HSTRING, IUnknown, Interface, PWSTR, Ref, Result, implement};
+
+/// Oggetti della DLL ancora vivi in Esplora file, più i blocchi di `LockServer`. A zero la DLL
+/// si può staccare: così l'aggiornamento di WinFiles trova il pacchetto del menu libero.
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+
+/// Conta un oggetto della DLL finché vive.
+struct Alive;
+
+impl Alive {
+    fn new() -> Self {
+        LIVE.fetch_add(1, Ordering::SeqCst);
+        Alive
+    }
+}
+
+impl Drop for Alive {
+    fn drop(&mut self) {
+        LIVE.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 fn clsid(verb: crate::Verb) -> GUID {
     GUID::try_from(verb.clsid()).unwrap_or_default()
@@ -59,7 +80,7 @@ fn shell_string(s: &str) -> Result<PWSTR> {
 }
 
 #[implement(IExplorerCommand)]
-struct OpenCommand(crate::Verb);
+struct OpenCommand(crate::Verb, Alive);
 
 impl IExplorerCommand_Impl for OpenCommand_Impl {
     fn GetTitle(&self, _items: Ref<IShellItemArray>) -> Result<PWSTR> {
@@ -103,7 +124,7 @@ impl IExplorerCommand_Impl for OpenCommand_Impl {
 }
 
 #[implement(IClassFactory)]
-struct Factory(crate::Verb);
+struct Factory(crate::Verb, Alive);
 
 impl IClassFactory_Impl for Factory_Impl {
     fn CreateInstance(
@@ -120,12 +141,18 @@ impl IClassFactory_Impl for Factory_Impl {
         if !outer.is_null() {
             return Err(CLASS_E_NOAGGREGATION.into());
         }
-        let command: IExplorerCommand = OpenCommand(self.0).into();
+        let command: IExplorerCommand = OpenCommand(self.0, Alive::new()).into();
         // SAFETY: `riid` e `object` sono puntatori validi controllati sopra.
         unsafe { command.query(riid, object) }.ok()
     }
 
-    fn LockServer(&self, _lock: BOOL) -> Result<()> {
+    fn LockServer(&self, lock: BOOL) -> Result<()> {
+        if lock.as_bool() {
+            LIVE.fetch_add(1, Ordering::SeqCst);
+        } else {
+            // Mai sotto zero, anche con uno sblocco di troppo.
+            let _ = LIVE.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+        }
         Ok(())
     }
 }
@@ -152,13 +179,19 @@ pub unsafe extern "system" fn DllGetClassObject(
         else {
             return CLASS_E_CLASSNOTAVAILABLE;
         };
-        let factory: IClassFactory = Factory(verb).into();
+        let factory: IClassFactory = Factory(verb, Alive::new()).into();
         factory.query(riid, object)
     }
 }
 
-/// La DLL resta caricata finché Esplora file è aperto: costa pochi kB.
+/// Si può staccare quando nessun oggetto è più in uso. Prima rispondeva sempre di no: dopo il
+/// primo tasto destro la DLL restava in Esplora file fino alla sua chiusura, e un aggiornamento
+/// di WinFiles non poteva sostituire il pacchetto del menu (0.2.46, errore 0x80073D02).
 #[unsafe(no_mangle)]
 pub extern "system" fn DllCanUnloadNow() -> HRESULT {
-    S_FALSE
+    if LIVE.load(Ordering::SeqCst) == 0 {
+        S_OK
+    } else {
+        S_FALSE
+    }
 }
