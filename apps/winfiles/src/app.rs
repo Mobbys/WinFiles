@@ -549,7 +549,7 @@ impl WinFilesApp {
                         .into();
                     self.menu11 = None;
                 }
-                Status::Ready | Status::Unavailable | Status::Busy => self.menu11 = None,
+                Status::Ready | Status::Unavailable => self.menu11 = None,
                 other if self.menu11_later && !asked => drop(other),
                 other => self.menu11 = Some(other),
             }
@@ -566,6 +566,10 @@ impl WinFilesApp {
             Status::Cancelled => (
                 "Il certificato Winsport non è stato installato.".to_string(),
                 "Serve la conferma dell'amministratore del PC.".to_string(),
+            ),
+            Status::Busy => (
+                "«Apri in WinFiles» nel menu di Windows 11 va aggiornato.".to_string(),
+                "Esplora file usa ancora quello di prima: riavvialo o rientra in Windows.".to_string(),
             ),
             _ => (
                 "Per avere «Apri in WinFiles» nel menu corto di Windows 11 serve il certificato \
@@ -598,9 +602,14 @@ impl WinFilesApp {
                         );
                         ui.label(egui::RichText::new(detail).size(12.5).color(t.text_dim));
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            let restart = matches!(state, Status::Busy);
                             if self.menu11_busy {
                                 ui.label(
-                                    egui::RichText::new("Installo il certificato…")
+                                    egui::RichText::new(if restart {
+                                        "Riavvio Esplora file…"
+                                    } else {
+                                        "Installo il certificato…"
+                                    })
                                         .size(12.5)
                                         .color(t.text_dim),
                                 );
@@ -614,16 +623,28 @@ impl WinFilesApp {
                             if failed {
                                 return;
                             }
+                            let label = if restart {
+                                "Riavvia Esplora file"
+                            } else {
+                                "Installa il certificato"
+                            };
                             let install = egui::Button::new(
-                                egui::RichText::new("Installa il certificato")
-                                    .font(semibold(13.0))
-                                    .color(t.on_primary),
+                                egui::RichText::new(label).font(semibold(13.0)).color(t.on_primary),
                             )
                             .fill(t.primary)
                             .min_size(vec2(96.0, 26.0));
-                            if ui.add(install).clicked() {
+                            let hint = if restart {
+                                "Le finestre delle cartelle si chiudono e la barra di Windows sparisce per qualche secondo"
+                            } else {
+                                "Chiede la conferma dell'amministratore"
+                            };
+                            if ui.add(install).on_hover_text(hint).clicked() {
                                 self.menu11_busy = true;
-                                self.menu11_check = Some(crate::menu11::install_certificate());
+                                self.menu11_check = Some(if restart {
+                                    crate::menu11::restart_explorer()
+                                } else {
+                                    crate::menu11::install_certificate()
+                                });
                             }
                         });
                     });
