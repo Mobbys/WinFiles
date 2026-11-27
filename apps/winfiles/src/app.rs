@@ -12,7 +12,7 @@ use winfiles_model::{Project, Totals, View};
 
 use crate::captions::{self, Slot};
 use crate::dock::{self, PanelId};
-use crate::document::{self, Then};
+use crate::document::Then;
 use crate::icons;
 use crate::measure::Measurer;
 use crate::theme::{self, ThemeChoice, Tokens, semibold};
@@ -85,7 +85,7 @@ pub struct WinFilesApp {
     /// I lavori aperti di recente, il più recente per primo.
     pub(crate) recent: Vec<PathBuf>,
     /// Ricerche di file in corso.
-    scans: Vec<scan::Scan>,
+    pub(crate) scans: Vec<scan::Scan>,
     /// L'esportazione in PDF in corso.
     export: Option<crate::export::Export>,
     /// Esportare al prossimo fotogramma, quando i fogli sono pronti.
@@ -144,6 +144,10 @@ pub struct WinFilesApp {
     pub(crate) saved: Project,
     /// La domanda "salvare le modifiche?" aperta, con cosa fare dopo.
     pub(crate) asking: Option<Then>,
+    /// La domanda "quale lavoro apro?" del file delle note.
+    pub(crate) notes_pick: Option<crate::document::NotesPick>,
+    /// Il lavoro del file delle note da rimettere com'era quando arrivano i suoi file.
+    pub(crate) restoring: Option<(winfiles_model::folder_notes::NotesJob, Vec<PathBuf>)>,
     /// La chiusura è già stata confermata.
     pub(crate) closing: bool,
     /// L'ultimo titolo dato alla finestra.
@@ -237,6 +241,8 @@ impl WinFilesApp {
             saved: blank,
             path: None,
             asking: None,
+            notes_pick: None,
+            restoring: None,
             closing: false,
             shown_title: String::new(),
             selected: None,
@@ -362,15 +368,7 @@ impl WinFilesApp {
         }
         // Un file .winfiles sulla riga di comando (doppio clic in Esplora file) apre il lavoro;
         // gli altri file e cartelle si aggiungono all'elenco.
-        let (projects, files): (Vec<PathBuf>, Vec<PathBuf>) = document::notes_to_folders(paths)
-            .into_iter()
-            .partition(|p| document::is_project(p));
-        if let Some(p) = projects.first() {
-            app.open_path(p);
-        }
-        if !files.is_empty() {
-            app.add_paths(files);
-        }
+        app.open_paths(ctx, paths, false);
         app
     }
 
@@ -1063,7 +1061,7 @@ impl WinFilesApp {
     }
 
     /// Cerca i file nei percorsi dati in un thread a parte; arrivano con [`Self::receive_scans`].
-    fn add_paths(&mut self, paths: Vec<PathBuf>) {
+    pub(crate) fn add_paths(&mut self, paths: Vec<PathBuf>) {
         let wake = self.ctx.clone();
         match scan::Scan::start(paths.clone(), move || wake.request_repaint()) {
             Ok(s) => self.scans.push(s),
@@ -1134,7 +1132,11 @@ impl WinFilesApp {
                 .status
                 .push_str(&format!(", {n} non supportati lasciati fuori")),
         }
+        if self.scans.is_empty() && !cancelled {
+            self.restore_job();
+        }
         if cancelled {
+            self.restoring = None;
             self.status = "Ricerca annullata: nessun file aggiunto".into();
         } else if truncated {
             self.status = format!(
@@ -3284,6 +3286,7 @@ impl WinFilesApp {
             Ok(Sheets { summary, grid })
         });
         let pages = std::rc::Rc::new(pages);
+        self.folder_sync.job = self.notes_job();
         // Le annotazioni vecchie passano nel campo unico: il lavoro cambia, si reimpagina al
         // prossimo disegno (il riepilogo conta le annotazioni).
         if self.convert_annotations(&pages) {
@@ -3292,6 +3295,44 @@ impl WinFilesApp {
             self.layout_cache = Some((self.project.clone(), self.filter.clone(), pages.clone()));
         }
         pages
+    }
+
+    /// Il lavoro sui fogli adesso, da ricordare nel file delle note con le note che si scrivono:
+    /// i file con almeno una pagina in stampa, nel loro ordine, e foglio, verso e colonne davvero
+    /// usati (anche quelli scelti da "Su N fogli"). Solo nella griglia.
+    fn notes_job(&self) -> Option<(winfiles_model::folder_notes::NotesJob, Vec<PathBuf>)> {
+        let print = &self.shown.print;
+        if print.view != View::Grid {
+            return None;
+        }
+        let mut files: Vec<PathBuf> = Vec::new();
+        let mut last = None;
+        for slot in &self.slots {
+            if last != Some(slot.file) {
+                last = Some(slot.file);
+                if let Some(f) = self.shown.files.get(slot.file) {
+                    files.push(f.path.clone());
+                }
+            }
+        }
+        if files.is_empty() {
+            return None;
+        }
+        let (columns, orientation) = match self.fit_choice.filter(|_| fits(&self.shown, &self.slots)) {
+            Some(c) => c,
+            None => (print.columns, print.orientation),
+        };
+        let full = full_pages(&self.shown, &self.slots).is_some();
+        let job = winfiles_model::folder_notes::NotesJob {
+            file: Vec::new(),
+            data: 0,
+            foglio: print.paper,
+            verso: orientation,
+            colonne: columns,
+            una_per_foglio: print.one_per_sheet,
+            tutta_pagina: full && !print.one_per_sheet,
+        };
+        Some((job, files))
     }
 
     /// Porta le annotazioni di Miniature della 0.2.41–0.2.42 (spessori e corpi in mm della
@@ -3597,14 +3638,8 @@ impl eframe::App for WinFilesApp {
             }
             self.images.shortcuts(&ctx);
         } else {
-            let (projects, dropped): (Vec<PathBuf>, Vec<PathBuf>) = document::notes_to_folders(dropped)
-                .into_iter()
-                .partition(|p| document::is_project(p));
             if !dropped.is_empty() {
-                self.add_paths(dropped);
-            }
-            if let Some(p) = projects.into_iter().next() {
-                self.guard(&ctx, Then::Open(Some(p)));
+                self.open_paths(&ctx, dropped, true);
             }
             self.annotate_keys(&ctx);
             self.shortcuts(&ctx);
@@ -3859,6 +3894,7 @@ impl eframe::App for WinFilesApp {
             }
         });
         self.report_window(&ctx);
+        self.notes_pick_dialog(&ctx);
         self.unsaved_dialog(&ctx);
     }
 
