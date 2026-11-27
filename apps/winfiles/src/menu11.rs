@@ -97,7 +97,8 @@ $pkg = Join-Path $dir {msix}
 try {{
   Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
   Start-Sleep -Milliseconds 1500
-  Get-AppxPackage -Name {name} | Where-Object {{ $_.Version -ne {version} }} | Remove-AppxPackage
+  # Una versione di prima rovinata o già tolta non deve fermare la registrazione.
+  try {{ Get-AppxPackage -Name {name} | Where-Object {{ $_.Version -ne {version} }} | Remove-AppxPackage }} catch {{ }}
   Add-AppxPackage -Path $pkg -ExternalLocation $dir -ForceUpdateFromAnyVersion
   'OK'
 }} catch {{
@@ -318,6 +319,9 @@ mod tests {
         let r = restart_script("C:\\Users\\D'Amico\\W\\", "0.2.47.0");
         assert!(r.contains("Stop-Process -Name explorer"));
         assert!(r.contains("$_.Version -ne '0.2.47.0'"));
+        // Sul PC di Michel il pacchetto vecchio risultava già tolto (0x80073CF1): non deve
+        // fermare Add-AppxPackage.
+        assert!(r.contains("try { Get-AppxPackage"));
         assert!(r.contains("D''Amico"));
         let finally = r.find("finally").unwrap();
         assert!(r[finally..].contains("Start-Process explorer.exe"));
