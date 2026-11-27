@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant, SystemTime};
 
-use winfiles_model::folder_notes::{self, Cells, FolderNotes, Key};
+use winfiles_model::folder_notes::{self, Cells, FolderNotes, Key, NotesJob};
 use winfiles_model::{Annotation, ModelError, Project};
 
 /// Ogni quanto si guarda se le note sono cambiate.
@@ -106,6 +106,9 @@ impl State {
 
 struct Job {
     dir: PathBuf,
+    /// Il lavoro di Miniature da scrivere con le note ([`NotesJob`]): solo quando si scrive perché
+    /// le proprie note sono cambiate, mai per una rilettura (non si copre quello di un collega).
+    lavoro: Option<NotesJob>,
     base: Option<Cells>,
     mine: Cells,
     members: BTreeSet<String>,
@@ -138,6 +141,10 @@ pub struct FolderSync {
     tx: Sender<Done>,
     rx: Receiver<Done>,
     last_tick: Option<Instant>,
+    /// Il lavoro sui fogli adesso (impaginazione e file in ordine): si scrive nel file delle note
+    /// insieme alle proprie note cambiate, così il doppio clic sul file delle note lo riapre
+    /// uguale. Solo Miniature.
+    pub job: Option<(NotesJob, Vec<PathBuf>)>,
 }
 
 impl FolderSync {
@@ -156,6 +163,7 @@ impl FolderSync {
             tx,
             rx,
             last_tick: None,
+            job: None,
         }
     }
 
@@ -239,6 +247,7 @@ impl FolderSync {
                         self.owned,
                         &dir,
                         mine,
+                        None,
                         now,
                     );
                     running += 1;
@@ -274,6 +283,9 @@ impl FolderSync {
             let changed = mine != base_mine;
             // Un file appena aggiunto: si rilegge subito, per avere anche le note più fresche.
             if (changed && settled) || due || !joined.is_empty() {
+                let lavoro = (changed && settled)
+                    .then(|| lavoro_for(self.job.as_ref(), &dir))
+                    .flatten();
                 launch(
                     st,
                     &self.tx,
@@ -282,6 +294,7 @@ impl FolderSync {
                     self.owned,
                     &dir,
                     mine,
+                    lavoro,
                     now,
                 );
                 running += 1;
@@ -312,6 +325,7 @@ impl FolderSync {
                 continue;
             }
             let job = Job {
+                lavoro: lavoro_for(self.job.as_ref(), &dir),
                 dir: dir.clone(),
                 base: Some(base.clone()),
                 mine: mine.clone(),
@@ -563,9 +577,11 @@ fn launch(
     owned: Owned,
     dir: &Path,
     mine: Cells,
+    lavoro: Option<NotesJob>,
     now: Instant,
 ) {
     let job = Job {
+        lavoro,
         dir: dir.to_path_buf(),
         base: st.base.clone(),
         mine,
@@ -594,6 +610,17 @@ fn launch(
         // Senza thread si riprova al prossimo giro.
         st.busy = false;
     }
+}
+
+/// Il lavoro di Miniature come si scrive nel file delle note di `dir`, con i file relativi a
+/// quella cartella.
+fn lavoro_for(job: Option<&(NotesJob, Vec<PathBuf>)>, dir: &Path) -> Option<NotesJob> {
+    let (job, files) = job?;
+    let mut job = job.with_files(dir, files);
+    job.data = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    (!job.file.is_empty()).then_some(job)
 }
 
 /// La copia su questo PC delle note di `dir`.
@@ -677,7 +704,10 @@ fn run(job: &Job) -> Result<Synced, String> {
     };
     let mut mtime = mtime;
     if merged != disk_cells || local_notes.is_some() {
-        let out = disk.with_cells(&merged);
+        let mut out = disk.with_cells(&merged);
+        if let Some(j) = &job.lavoro {
+            out.put_job(j.clone());
+        }
         let written = readable && out.write(dir).is_ok();
         if written {
             place = Where::Folder;
@@ -835,6 +865,98 @@ mod tests {
             collega.notes[&(dir.clone(), "b.pdf".into())][&1],
             "manca la fustella"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&local);
+    }
+
+    fn job(files: &[&Path], columns: u32) -> (NotesJob, Vec<PathBuf>) {
+        let job = NotesJob {
+            file: Vec::new(),
+            data: 0,
+            foglio: winfiles_geom::Paper::A4,
+            verso: winfiles_geom::Orientation::Landscape,
+            colonne: columns,
+            una_per_foglio: false,
+            tutta_pagina: false,
+        };
+        (job, files.iter().map(|f| f.to_path_buf()).collect())
+    }
+
+    fn jobs_on_disk(dir: &Path) -> Vec<(Vec<String>, u32)> {
+        FolderNotes::read(dir)
+            .unwrap()
+            .unwrap()
+            .jobs()
+            .into_iter()
+            .map(|j| (j.file, j.colonne))
+            .collect()
+    }
+
+    #[test]
+    fn due_impaginati_della_stessa_cartella_restano_tutti_e_due() {
+        let dir = temp("due-lavori");
+        let local = temp("due-lavori-locale");
+        let s = |v: &[&str]| v.iter().map(|x| (*x).to_owned()).collect::<Vec<String>>();
+        // Primo impaginato: a e b, nota su a.
+        let mut first = Fake::default();
+        first.notes.insert((dir.clone(), "a.pdf".into()), BTreeMap::new());
+        first.notes.insert((dir.clone(), "b.pdf".into()), BTreeMap::new());
+        let mut sync = FolderSync::with_local(OWNED, Some(local.clone()));
+        sync.job = Some(job(&[&dir.join("a.pdf"), &dir.join("b.pdf")], 3));
+        settle(&mut sync, &mut first);
+        first.notes.insert(
+            (dir.clone(), "a.pdf".into()),
+            BTreeMap::from([(0, "più scuro".into())]),
+        );
+        settle(&mut sync, &mut first);
+        assert_eq!(jobs_on_disk(&dir), vec![(s(&["a.pdf", "b.pdf"]), 3)]);
+
+        // Secondo impaginato, altro elenco: c e d, nota su c. Il primo resta.
+        let mut second = Fake::default();
+        second
+            .notes
+            .insert((dir.clone(), "c.pdf".into()), BTreeMap::new());
+        second
+            .notes
+            .insert((dir.clone(), "d.pdf".into()), BTreeMap::new());
+        let mut sync2 = FolderSync::with_local(OWNED, Some(local.clone()));
+        sync2.job = Some(job(&[&dir.join("c.pdf"), &dir.join("d.pdf")], 2));
+        settle(&mut sync2, &mut second);
+        second.notes.insert(
+            (dir.clone(), "c.pdf".into()),
+            BTreeMap::from([(0, "fustella".into())]),
+        );
+        settle(&mut sync2, &mut second);
+        assert_eq!(
+            jobs_on_disk(&dir),
+            vec![(s(&["c.pdf", "d.pdf"]), 2), (s(&["a.pdf", "b.pdf"]), 3)]
+        );
+
+        // Il primo riaperto con un file in più e un'altra nota: si aggiorna, non si raddoppia.
+        first.notes.insert((dir.clone(), "e.pdf".into()), BTreeMap::new());
+        sync.job = Some(job(
+            &[&dir.join("a.pdf"), &dir.join("b.pdf"), &dir.join("e.pdf")],
+            4,
+        ));
+        settle(&mut sync, &mut first);
+        first.notes.insert(
+            (dir.clone(), "b.pdf".into()),
+            BTreeMap::from([(0, "girare".into())]),
+        );
+        settle(&mut sync, &mut first);
+        assert_eq!(
+            jobs_on_disk(&dir),
+            vec![(s(&["a.pdf", "b.pdf", "e.pdf"]), 4), (s(&["c.pdf", "d.pdf"]), 2)]
+        );
+
+        // Chi rilegge soltanto, senza cambiare note, non tocca i lavori.
+        sync2.job = Some(job(&[&dir.join("c.pdf")], 9));
+        for st in sync2.states.values_mut() {
+            st.last_sync = None;
+        }
+        settle(&mut sync2, &mut second);
+        assert_eq!(jobs_on_disk(&dir).len(), 2);
+        assert!(jobs_on_disk(&dir).iter().all(|(_, c)| *c != 9));
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&local);
     }

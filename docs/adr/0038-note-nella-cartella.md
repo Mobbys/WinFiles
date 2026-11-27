@@ -1,6 +1,6 @@
 # 0038. Note e annotazioni salvate da sé nel file della cartella
 
-**Stato:** accettata, 2026-11-16
+**Stato:** accettata, 2026-11-16; il doppio clic sul file delle note è cambiato con l'ADR 0042 (riapre il lavoro in cui sono state scritte)
 
 ## Contesto
 Fino alla 0.2.40 le annotazioni di Miniature (e le note per pagina e di cartella) si salvavano

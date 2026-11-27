@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use winfiles_geom::{Orientation, Paper};
+
 use crate::{Annotation, MAX_PER_PAGE, ModelError};
 
 /// Il nome del file delle note in ogni cartella. Ha l'estensione dei lavori, già associata a
@@ -46,6 +48,8 @@ pub const SCALE: &str = "scala";
 const MAX_BYTES: u64 = 32 << 20;
 /// File al più in una cartella: oltre il file è sicuramente rovinato.
 const MAX_FILES: usize = 50_000;
+/// Lavori ricordati al più in un file delle note.
+pub const MAX_JOBS: usize = 30;
 /// Pagine al più per file.
 const MAX_PAGES: usize = 100_000;
 /// Lettere al più di una nota.
@@ -60,9 +64,36 @@ pub struct FolderNotes {
     pub nota_cartella: String,
     #[serde(default)]
     pub file: BTreeMap<String, FileNotes>,
+    /// I lavori di Miniature in cui sono state scritte le note ([`NotesJob`]), dal più recente:
+    /// aprendo il file delle note se ne riapre uno com'era, sugli stessi fogli. Tenuti come valore
+    /// grezzo: un lavoro rovinato non deve far perdere le note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lavori: Option<Value>,
     /// Campi scritti da versioni più nuove: si rimettono come sono.
     #[serde(flatten)]
     pub altro: BTreeMap<String, Value>,
+}
+
+/// Il lavoro di Miniature quando si sono scritte le note: i file sui fogli, nel loro ordine, e
+/// foglio, verso e colonne davvero usati (anche quelli scelti da "Su N fogli").
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NotesJob {
+    /// I file, col percorso relativo alla cartella delle note (`a.pdf`, `sotto/b.pdf`,
+    /// `../altra/c.pdf`): così vale anche da un PC che vede la cartella con un altro percorso.
+    #[serde(default)]
+    pub file: Vec<String>,
+    /// Quando è stato scritto, in secondi dal 1970 (per scegliere fra più lavori).
+    #[serde(default)]
+    pub data: u64,
+    pub foglio: Paper,
+    pub verso: Orientation,
+    pub colonne: u32,
+    /// "1 per foglio".
+    #[serde(default)]
+    pub una_per_foglio: bool,
+    /// L'unico file del lavoro riempiva il foglio ("1 file a tutta pagina").
+    #[serde(default)]
+    pub tutta_pagina: bool,
 }
 
 /// Le note di un file, per pagina (da 0).
@@ -134,18 +165,98 @@ impl FolderNotes {
         Self::read_file(&path)
     }
 
-    /// I file della cartella `dir` con qualche nota o annotazione, che ci sono ancora.
+    /// I file della cartella `dir` con qualche nota o annotazione che ci sono ancora, più quelli
+    /// a cui arriva una freccia (senza, resterebbe appesa).
     pub fn annotated_files(&self, dir: &Path) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = Vec::new();
+        let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
+        let mut push = |p: PathBuf| {
+            if out.len() < MAX_FILES && !seen.contains(&p) && p.is_file() {
+                seen.insert(p.clone());
+                out.push(p);
+            }
+        };
+        let mut targets: Vec<String> = Vec::new();
+        for (name, f) in self.noted() {
+            if let Some(p) = name_in(dir, name) {
+                push(p);
+            }
+            for v in f.pagine.values().flat_map(BTreeMap::values) {
+                // I capi attaccati a un file della cartella sono scritti col solo nome.
+                for a in annotations_from(v, Path::new("")) {
+                    if let Annotation::Linea { end: Some(e), .. } = a
+                        && let Some(end) = e.path.to_str()
+                        && !targets.iter().any(|t| t == end)
+                    {
+                        targets.push(end.to_owned());
+                    }
+                }
+            }
+        }
+        for t in &targets {
+            if let Some(p) = name_in(dir, t) {
+                push(p);
+            }
+        }
+        out
+    }
+
+    /// I file (per nome) con qualche nota o annotazione loro.
+    fn noted(&self) -> impl Iterator<Item = (&String, &FileNotes)> {
         self.file
             .iter()
             .filter(|(_, f)| f.pagine.values().any(|p| p.values().any(|v| !v.is_null())))
-            .filter_map(|(name, _)| {
-                // Solo un nome, mai un percorso: il file è scritto da altri.
-                let p = Path::new(name);
-                (p.file_name() == Some(p.as_os_str())).then(|| dir.join(p))
+    }
+
+    /// I file della cartella `dir` con qualche nota o annotazione loro (senza quelli a cui arriva
+    /// solo una freccia).
+    pub fn noted_files(&self, dir: &Path) -> BTreeSet<PathBuf> {
+        self.noted().filter_map(|(name, _)| name_in(dir, name)).collect()
+    }
+
+    /// I lavori in cui sono state scritte le note, dal più recente; quelli che non si leggono
+    /// restano fuori.
+    pub fn jobs(&self) -> Vec<NotesJob> {
+        let Some(Value::Array(items)) = &self.lavori else {
+            return Vec::new();
+        };
+        items
+            .iter()
+            .take(MAX_JOBS)
+            .filter_map(|v| serde_json::from_value::<NotesJob>(v.clone()).ok())
+            .filter(|j| j.colonne >= 1 && !j.file.is_empty())
+            .map(|mut j| {
+                j.file.truncate(MAX_FILES);
+                j
             })
-            .filter(|p| p.is_file())
             .collect()
+    }
+
+    /// Mette `job` in cima ai lavori. Prende il posto di quelli con gli stessi file, o con una
+    /// parte dei suoi, o che li contengono tutti: è lo stesso lavoro riaperto e cambiato. I lavori
+    /// con altri file restano (due impaginati diversi della stessa cartella); al più
+    /// [`MAX_JOBS`], si dimenticano i più vecchi.
+    pub fn put_job(&mut self, job: NotesJob) {
+        let mine: BTreeSet<&String> = job.file.iter().collect();
+        let raw: Vec<Value> = match &self.lavori {
+            Some(Value::Array(items)) => items.clone(),
+            _ => Vec::new(),
+        };
+        let mut out: Vec<Value> = Vec::with_capacity(raw.len() + 1);
+        if let Ok(v) = serde_json::to_value(&job) {
+            out.push(v);
+        }
+        for v in raw {
+            // Uno che non si legge (scritto da una versione più nuova) si tiene com'è.
+            let same = serde_json::from_value::<NotesJob>(v.clone()).is_ok_and(|other| {
+                let theirs: BTreeSet<&String> = other.file.iter().collect();
+                theirs.is_subset(&mine) || mine.is_subset(&theirs)
+            });
+            if !same && out.len() < MAX_JOBS {
+                out.push(v);
+            }
+        }
+        self.lavori = Some(Value::Array(out));
     }
 
     /// Legge un file delle note; `Ok(None)` se non c'è.
@@ -225,6 +336,7 @@ impl FolderNotes {
             versione: NOTES_FORMAT.max(self.versione),
             nota_cartella: String::new(),
             file: BTreeMap::new(),
+            lavori: self.lavori.clone(),
             altro: self.altro.clone(),
         };
         for (name, f) in &self.file {
@@ -387,6 +499,73 @@ pub fn annotations_from(v: &Value, dir: &Path) -> Vec<Annotation> {
         }
     }
     list
+}
+
+impl NotesJob {
+    /// I file del lavoro, nel loro ordine, letti dalla cartella delle note `dir`.
+    pub fn paths(&self, dir: &Path) -> Vec<PathBuf> {
+        self.file
+            .iter()
+            .take(MAX_FILES)
+            .filter_map(|f| job_path(dir, f))
+            .collect()
+    }
+
+    /// Lo stesso lavoro con i file `files`, scritti relativi alla cartella delle note `dir`
+    /// (quelli su un'altra unità restano fuori).
+    pub fn with_files(&self, dir: &Path, files: &[PathBuf]) -> Self {
+        Self {
+            file: files
+                .iter()
+                .take(MAX_FILES)
+                .filter_map(|f| relative_to(dir, f))
+                .collect(),
+            ..self.clone()
+        }
+    }
+}
+
+/// Un file della cartella `dir` scritto col solo nome; `None` se è un percorso (il file delle
+/// note lo scrivono altri).
+fn name_in(dir: &Path, name: &str) -> Option<PathBuf> {
+    let p = Path::new(name);
+    (p.file_name() == Some(p.as_os_str())).then(|| dir.join(p))
+}
+
+/// Un file del lavoro, scritto relativo alla cartella delle note; `None` se è un percorso
+/// assoluto o di un'altra unità.
+fn job_path(dir: &Path, rel: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    // Scritto con "/" anche da Windows: si rimette il separatore di qui.
+    let p: PathBuf = rel.split(['/', '\\']).filter(|c| !c.is_empty()).collect();
+    // Assoluto (anche scritto con "\\" o con l'unità): non è del lavoro.
+    let ok = !rel.is_empty()
+        && !rel.starts_with(['/', '\\'])
+        && !rel.contains(':')
+        && p.components()
+            .all(|c| matches!(c, Component::Normal(_) | Component::ParentDir));
+    ok.then(|| dir.join(p))
+}
+
+/// Il percorso di `file` relativo alla cartella `dir`, con "/" come separatore, per
+/// [`NotesJob::file`]; `None` se è su un'altra unità.
+pub fn relative_to(dir: &Path, file: &Path) -> Option<String> {
+    use std::path::Component;
+    let d: Vec<Component> = dir.components().collect();
+    let f: Vec<Component> = file.components().collect();
+    let common = d.iter().zip(&f).take_while(|(a, b)| a == b).count();
+    // Niente in comune (altra unità, altro server): non si scrive.
+    if common == 0 {
+        return None;
+    }
+    let mut parts: Vec<String> = vec!["..".to_owned(); d.len() - common];
+    for c in f.iter().skip(common) {
+        match c {
+            Component::Normal(n) => parts.push(n.to_string_lossy().into_owned()),
+            _ => return None,
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 /// Il nome con cui un file sta nel file delle note della sua cartella.
@@ -580,5 +759,115 @@ mod tests {
         let n = FolderNotes::from_json(text).unwrap();
         assert_eq!(n.annotated_files(&dir), vec![dir.join("a.pdf")]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn la_freccia_porta_anche_il_file_senza_note() {
+        let dir = temp("freccia");
+        for f in ["a.pdf", "b.pdf", "c.pdf"] {
+            std::fs::write(dir.join(f), "x").unwrap();
+        }
+        let arrow = Annotation::Linea {
+            a: (0.1, 0.1),
+            b: (0.5, 0.5),
+            color: Rgba::rgb(220, 38, 38),
+            width: 0.5,
+            start_arrow: false,
+            end_arrow: true,
+            end: Some(Anchor {
+                path: dir.join("c.pdf"),
+                page: 0,
+                at: (0.2, 0.2),
+            }),
+        };
+        let v = annotations_value(&[arrow], &dir).unwrap();
+        let mut n = FolderNotes::default();
+        n.file
+            .entry("a.pdf".into())
+            .or_default()
+            .pagine
+            .entry(0)
+            .or_default()
+            .insert(PAGE_ANNOTATIONS.into(), v);
+        assert_eq!(
+            n.annotated_files(&dir),
+            vec![dir.join("a.pdf"), dir.join("c.pdf")]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn job(files: &[&str]) -> NotesJob {
+        NotesJob {
+            file: files.iter().map(|f| (*f).to_owned()).collect(),
+            data: 1,
+            foglio: Paper::A4,
+            verso: Orientation::Landscape,
+            colonne: 3,
+            una_per_foglio: false,
+            tutta_pagina: false,
+        }
+    }
+
+    #[test]
+    fn i_lavori_diversi_restano_lo_stesso_si_aggiorna() {
+        let mut n = FolderNotes::default();
+        n.put_job(job(&["a.pdf", "b.pdf"]));
+        n.put_job(job(&["c.pdf", "d.pdf"]));
+        assert_eq!(n.jobs().len(), 2);
+        // Lo stesso lavoro con un file in più prende il posto del vecchio, in cima.
+        n.put_job(job(&["a.pdf", "b.pdf", "e.pdf"]));
+        let files: Vec<Vec<String>> = n.jobs().into_iter().map(|j| j.file).collect();
+        assert_eq!(files[0], vec!["a.pdf", "b.pdf", "e.pdf"]);
+        assert_eq!(files[1], vec!["c.pdf", "d.pdf"]);
+        assert_eq!(files.len(), 2);
+        // Al più MAX_JOBS: i più vecchi si dimenticano.
+        for i in 0..MAX_JOBS + 5 {
+            n.put_job(job(&[&format!("f{i}.pdf")]));
+        }
+        assert_eq!(n.jobs().len(), MAX_JOBS);
+    }
+
+    #[test]
+    fn un_lavoro_rovinato_non_fa_perdere_le_note() {
+        let text = r#"{"nota_cartella":"x","lavori":[{"file":["a.pdf"],"foglio":"A9"},
+            {"file":["b.pdf"],"foglio":"A4","verso":"Portrait","colonne":2},
+            {"file":["c.pdf"],"foglio":"A4","verso":"Portrait","colonne":0}]}"#;
+        let n = FolderNotes::from_json(text).unwrap();
+        assert_eq!(n.nota_cartella, "x");
+        let jobs = n.jobs();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].file, vec!["b.pdf"]);
+        // Il lavoro rovinato (forse di una versione più nuova) si riscrive com'è.
+        let mut m = n.clone();
+        m.put_job(job(&["z.pdf"]));
+        assert!(serde_json::to_string(&m).unwrap().contains("A9"));
+        // Solo lavori, senza note: il file non serve più.
+        let mut only = FolderNotes::default();
+        only.put_job(job(&["a.pdf"]));
+        assert!(only.is_empty());
+    }
+
+    #[test]
+    fn i_file_del_lavoro_valgono_da_ogni_pc_e_restano_nelle_cartelle() {
+        let dir = Path::new("/lavori/rossi");
+        let files = [
+            dir.join("a.pdf"),
+            dir.join("sotto").join("b.pdf"),
+            Path::new("/lavori/bianchi/c.pdf").to_path_buf(),
+        ];
+        let j = job(&[]).with_files(dir, &files);
+        assert_eq!(j.file, vec!["a.pdf", "sotto/b.pdf", "../bianchi/c.pdf"]);
+        let other = Path::new("/server/lavori/rossi");
+        assert_eq!(
+            j.paths(other),
+            vec![
+                other.join("a.pdf"),
+                other.join("sotto").join("b.pdf"),
+                other.join("..").join("bianchi").join("c.pdf"),
+            ]
+        );
+        // Scritti da altri: niente percorsi assoluti né "." strani.
+        let bad = job(&["/etc/passwd", "./x.pdf", "", "a\\b.pdf"]);
+        assert_eq!(bad.paths(dir), vec![dir.join("a").join("b.pdf")]);
     }
 }
